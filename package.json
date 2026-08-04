@@ -1,0 +1,46 @@
+{
+  "name": "koi-recall-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Phase 1 KOI consumer recall API contract and service skeleton.",
+  "engines": {
+    "node": "24.x"
+  },
+  "packageManager": "pnpm@11.9.0",
+  "scripts": {
+    "dev": "vercel dev",
+    "build": "pnpm typecheck && pnpm openapi:check && pnpm db:check",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "openapi:generate": "tsx scripts/generate-openapi.ts",
+    "openapi:check": "tsx scripts/check-openapi.ts",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
+    "db:seed": "tsx src/db/seed.ts"
+  },
+  "dependencies": {
+    "@hono/zod-openapi": "^1.5.1",
+    "@neondatabase/serverless": "^1.1.0",
+    "dotenv": "^17.4.2",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.34",
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^24.13.3",
+    "drizzle-kit": "^0.31.10",
+    "eslint": "^10.8.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.0",
+    "vercel": "^58.4.4",
+    "vitest": "^4.1.10"
+  }
+}

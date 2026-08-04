@@ -1,0 +1,1009 @@
+components:
+  parameters: {}
+  schemas:
+    CampaignResponse:
+      properties:
+        campaign:
+          properties:
+            code:
+              type: string
+            defaultLocale:
+              type: string
+            evidenceRequirements:
+              items:
+                $ref: "#/components/schemas/EvidenceRequirement"
+              type: array
+            hazard:
+              type: string
+            immediateAction:
+              type: string
+            locale:
+              type: string
+            products:
+              items:
+                $ref: "#/components/schemas/PublicCampaignProduct"
+              type: array
+            remedies:
+              items:
+                properties:
+                  code:
+                    type: string
+                  displayName:
+                    type: string
+                required:
+                  - code
+                  - displayName
+                type: object
+              type: array
+            remedySummary:
+              type: string
+            slug:
+              type: string
+            summary:
+              type: string
+            support:
+              properties:
+                email:
+                  format: email
+                  type: string
+                hours:
+                  type: string
+                phone:
+                  type: string
+              required:
+                - email
+                - phone
+                - hours
+              type: object
+            title:
+              type: string
+            version:
+              exclusiveMinimum: true
+              minimum: 0
+              type: integer
+          required:
+            - slug
+            - code
+            - version
+            - locale
+            - defaultLocale
+            - title
+            - summary
+            - hazard
+            - immediateAction
+            - remedySummary
+            - support
+            - products
+            - remedies
+            - evidenceRequirements
+          type: object
+      required:
+        - campaign
+      type: object
+    ClaimDraftResponse:
+      properties:
+        draftId:
+          format: uuid
+          type: string
+        draftToken:
+          minLength: 32
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+      required:
+        - draftId
+        - draftToken
+        - expiresAt
+      type: object
+    ClaimSubmissionRequest:
+      properties:
+        consents:
+          items:
+            properties:
+              accepted:
+                enum:
+                  - true
+                type: boolean
+              textVersion:
+                maxLength: 80
+                minLength: 1
+                type: string
+              type:
+                enum:
+                  - privacy_notice
+                  - information_accuracy
+                type: string
+            required:
+              - type
+              - textVersion
+              - accepted
+            type: object
+          minItems: 2
+          type: array
+        consumer:
+          properties:
+            email:
+              format: email
+              maxLength: 254
+              type: string
+            firstName:
+              maxLength: 100
+              minLength: 1
+              type: string
+            lastName:
+              maxLength: 100
+              minLength: 1
+              type: string
+            mailingAddress:
+              $ref: "#/components/schemas/ConsumerAddress"
+            phone:
+              maxLength: 40
+              type: string
+          required:
+            - firstName
+            - lastName
+            - email
+            - mailingAddress
+          type: object
+        documentIds:
+          items:
+            format: uuid
+            type: string
+          maxItems: 20
+          minItems: 2
+          type: array
+        draftId:
+          format: uuid
+          type: string
+        draftToken:
+          minLength: 32
+          type: string
+        incidentAnswer:
+          enum:
+            - no
+            - yes
+            - unsure
+          type: string
+        incidentDetails:
+          $ref: "#/components/schemas/IncidentDetailsInput"
+        locale:
+          enum:
+            - en-US
+          type: string
+        products:
+          items:
+            $ref: "#/components/schemas/ClaimedProductInput"
+          maxItems: 20
+          minItems: 1
+          type: array
+        remedyCode:
+          maxLength: 60
+          minLength: 1
+          type: string
+      required:
+        - draftId
+        - draftToken
+        - locale
+        - consumer
+        - products
+        - remedyCode
+        - documentIds
+        - consents
+        - incidentAnswer
+      type: object
+    ClaimSubmissionResponse:
+      properties:
+        caseReference:
+          pattern: ^KOI-[A-Z0-9]{4}-[A-Z0-9]{8}$
+          type: string
+        emailStatus:
+          enum:
+            - queued
+          type: string
+        nextStep:
+          type: string
+        submittedAt:
+          format: date-time
+          type: string
+      required:
+        - caseReference
+        - submittedAt
+        - emailStatus
+        - nextStep
+      type: object
+    ClaimedProductInput:
+      properties:
+        campaignProductId:
+          format: uuid
+          type: string
+        dateCode:
+          maxLength: 40
+          minLength: 1
+          type: string
+        flavor:
+          maxLength: 80
+          minLength: 1
+          type: string
+        lotCode:
+          maxLength: 80
+          minLength: 1
+          type: string
+        orderNumber:
+          maxLength: 120
+          type: string
+        purchaseChannel:
+          enum:
+            - amazon
+            - tiktok
+            - koi
+            - retailer
+            - gift
+            - other
+          type: string
+        purchaseDate:
+          pattern: ^\d{4}-\d{2}-\d{2}$
+          type: string
+        quantity:
+          maximum: 100
+          minimum: 1
+          type: integer
+        shape:
+          maxLength: 80
+          minLength: 1
+          type: string
+      required:
+        - campaignProductId
+        - quantity
+        - shape
+        - flavor
+        - lotCode
+        - dateCode
+        - purchaseChannel
+      type: object
+    ConsumerAddress:
+      properties:
+        city:
+          maxLength: 100
+          minLength: 1
+          type: string
+        countryCode:
+          default: US
+          maxLength: 2
+          minLength: 2
+          type: string
+        line1:
+          maxLength: 160
+          minLength: 1
+          type: string
+        line2:
+          maxLength: 160
+          type: string
+        postalCode:
+          maxLength: 20
+          minLength: 3
+          type: string
+        state:
+          maxLength: 80
+          minLength: 2
+          type: string
+      required:
+        - line1
+        - city
+        - state
+        - postalCode
+      type: object
+    EvidenceRequirement:
+      properties:
+        allowedMimeTypes:
+          items:
+            type: string
+          type: array
+        category:
+          enum:
+            - product_photo
+            - proof_of_purchase
+            - incident_evidence
+          type: string
+        instructions:
+          type: string
+        maximumFileSizeBytes:
+          exclusiveMinimum: true
+          minimum: 0
+          type: integer
+        maximumFiles:
+          minimum: 1
+          type: integer
+        minimumFiles:
+          minimum: 0
+          type: integer
+        required:
+          type: boolean
+      required:
+        - category
+        - required
+        - minimumFiles
+        - maximumFiles
+        - allowedMimeTypes
+        - maximumFileSizeBytes
+        - instructions
+      type: object
+    IncidentDetailsInput:
+      properties:
+        eventTypes:
+          items:
+            enum:
+              - injury
+              - illness
+              - choking
+              - ingestion
+              - fire
+              - overheating
+              - property_damage
+              - near_miss
+              - other
+              - unknown
+            type: string
+          minItems: 1
+          type: array
+        injurySeverity:
+          enum:
+            - none
+            - minor
+            - medical_attention
+            - hospitalized
+            - death
+            - unknown
+          type: string
+        medicalTreatment:
+          enum:
+            - none
+            - first_aid
+            - outpatient
+            - emergency
+            - hospitalized
+            - unknown
+          type: string
+        narrative:
+          maxLength: 4000
+          minLength: 10
+          type: string
+        occurredDate:
+          pattern: ^\d{4}-\d{2}-\d{2}$
+          type: string
+        occurredDateUnknown:
+          default: false
+          type: boolean
+        usedAsIntended:
+          enum:
+            - yes
+            - no
+            - unknown
+          type: string
+      required:
+        - narrative
+      type: object
+    ProblemDetails:
+      properties:
+        detail:
+          type: string
+        errors:
+          items:
+            properties:
+              message:
+                type: string
+              path:
+                type: string
+            required:
+              - path
+              - message
+            type: object
+          type: array
+        instance:
+          type: string
+        requestId:
+          type: string
+        status:
+          type: integer
+        title:
+          type: string
+        type:
+          format: uri
+          type: string
+      required:
+        - type
+        - title
+        - status
+        - detail
+      type: object
+    ProductCheckRequest:
+      properties:
+        dateCode:
+          maxLength: 40
+          minLength: 1
+          type: string
+        flavor:
+          maxLength: 80
+          minLength: 1
+          type: string
+        lotCode:
+          maxLength: 80
+          minLength: 1
+          type: string
+        shape:
+          maxLength: 80
+          minLength: 1
+          type: string
+      required:
+        - shape
+        - flavor
+        - lotCode
+        - dateCode
+      type: object
+    ProductCheckResponse:
+      properties:
+        checkedCampaignVersion:
+          exclusiveMinimum: true
+          minimum: 0
+          type: integer
+        disclaimer:
+          enum:
+            - This check is preliminary and is not a final eligibility decision.
+          type: string
+        message:
+          type: string
+        result:
+          enum:
+            - potential_match
+            - not_matched
+            - manual_review
+          type: string
+      required:
+        - result
+        - message
+        - checkedCampaignVersion
+        - disclaimer
+      type: object
+    PublicCampaignProduct:
+      properties:
+        affectedLots:
+          items:
+            properties:
+              attributes:
+                additionalProperties:
+                  nullable: true
+                type: object
+              dateCode:
+                type: string
+              lotCode:
+                type: string
+            required:
+              - lotCode
+              - dateCode
+              - attributes
+            type: object
+          type: array
+        brand:
+          type: string
+        flavors:
+          items:
+            type: string
+          type: array
+        name:
+          type: string
+        productId:
+          format: uuid
+          type: string
+        shapes:
+          items:
+            type: string
+          type: array
+        sku:
+          type: string
+      required:
+        - productId
+        - sku
+        - brand
+        - name
+        - flavors
+        - shapes
+        - affectedLots
+      type: object
+    UploadTokenRequest:
+      properties:
+        category:
+          enum:
+            - product_photo
+            - proof_of_purchase
+            - incident_evidence
+          type: string
+        fileName:
+          maxLength: 255
+          minLength: 1
+          type: string
+        mimeType:
+          maxLength: 120
+          minLength: 3
+          type: string
+        sizeBytes:
+          exclusiveMinimum: true
+          minimum: 0
+          type: integer
+      required:
+        - category
+        - fileName
+        - mimeType
+        - sizeBytes
+      type: object
+    UploadTokenResponse:
+      properties:
+        clientToken:
+          type: string
+        documentId:
+          format: uuid
+          type: string
+        expiresAt:
+          format: date-time
+          type: string
+        uploadUrl:
+          format: uri
+          type: string
+      required:
+        - documentId
+        - uploadUrl
+        - clientToken
+        - expiresAt
+      type: object
+info:
+  description: Phase 1 contract for public campaign content, product checks, evidence uploads, and recall claim submission.
+  title: KOI Recall Consumer API
+  version: 1.0.0
+openapi: 3.1.0
+paths:
+  /v1/claim-drafts/{draftId}/documents/{documentId}:
+    delete:
+      parameters:
+        - in: path
+          name: draftId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Draft-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+      responses:
+        "204":
+          description: Document scheduled for deletion.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "410":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Draft expired.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Remove an unsubmitted draft document
+      tags:
+        - Documents
+  /v1/claim-drafts/{draftId}/upload-tokens:
+    post:
+      parameters:
+        - in: path
+          name: draftId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Draft-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadTokenRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadTokenResponse"
+          description: Upload authorization.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "410":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Draft expired.
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: File is too large.
+        "415":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: File media type is not allowed.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Evidence rules are not satisfied.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Authorize a direct upload to Vercel Private Blob
+      tags:
+        - Documents
+  /v1/recall-campaigns/{slug}:
+    get:
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            maxLength: 100
+            minLength: 3
+            pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+            type: string
+        - in: query
+          name: locale
+          required: false
+          schema:
+            default: en-US
+            enum:
+              - en-US
+            example: en-US
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CampaignResponse"
+          description: Published campaign content.
+          headers:
+            Content-Language:
+              schema:
+                type: string
+            ETag:
+              description: Published version entity tag.
+              schema:
+                type: string
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Get the currently published public campaign configuration
+      tags:
+        - Campaigns
+  /v1/recall-campaigns/{slug}/claim-drafts:
+    post:
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            maxLength: 100
+            minLength: 3
+            pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+            type: string
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimDraftResponse"
+          description: Draft created.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Create an expiring anonymous upload draft
+      tags:
+        - Claim drafts
+  /v1/recall-campaigns/{slug}/claims:
+    post:
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            maxLength: 100
+            minLength: 3
+            pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            maxLength: 128
+            minLength: 16
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimSubmissionRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClaimSubmissionResponse"
+          description: Claim submitted.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Idempotency conflict or draft already used.
+        "410":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Draft expired.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign, product, evidence, or conditional fields are invalid.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Submit a consumer recall claim
+      tags:
+        - Claims
+  /v1/recall-campaigns/{slug}/product-checks:
+    post:
+      parameters:
+        - in: path
+          name: slug
+          required: true
+          schema:
+            maxLength: 100
+            minLength: 3
+            pattern: ^[a-z0-9]+(?:-[a-z0-9]+)*$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProductCheckRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductCheckResponse"
+          description: Preliminary result.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Run a preliminary affected-product check
+      tags:
+        - Product checks
+servers:
+  - description: Local development
+    url: http://localhost:3000
+  - description: Placeholder production API domain
+    url: https://api.example.invalid
