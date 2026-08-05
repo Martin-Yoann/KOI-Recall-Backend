@@ -25,6 +25,18 @@ const CONNECTION_ERROR_CODES = new Set([
   'ENETUNREACH',
 ]);
 
+const POSTGRES_AVAILABILITY_ERROR_CODES = new Set(['57P01', '57P02', '57P03', '53300']);
+const MAX_ERROR_OBJECTS = 64;
+
+function isAvailabilityCode(code: unknown): boolean {
+  return (
+    typeof code === 'string' &&
+    (CONNECTION_ERROR_CODES.has(code) ||
+      /^08[A-Z0-9]{3}$/.test(code) ||
+      POSTGRES_AVAILABILITY_ERROR_CODES.has(code))
+  );
+}
+
 /**
  * Returns true when an error looks like a failed database connection rather
  * than a server-side bug, so the caller can map it to 503 instead of 500.
@@ -32,13 +44,21 @@ const CONNECTION_ERROR_CODES = new Set([
  */
 export function isConnectionError(error: unknown): boolean {
   const candidates: unknown[] = [error];
-  const cause = (error as { cause?: unknown } | null)?.cause;
-  if (cause) candidates.push(cause);
+  const visited = new Set<object>();
+  let examined = 0;
 
-  for (const candidate of candidates) {
+  while (candidates.length > 0 && examined < MAX_ERROR_OBJECTS) {
+    const candidate = candidates.shift();
     if (typeof candidate !== 'object' || candidate === null) continue;
-    const code = (candidate as { code?: unknown }).code;
-    if (typeof code === 'string' && CONNECTION_ERROR_CODES.has(code)) return true;
+    if (visited.has(candidate)) continue;
+    visited.add(candidate);
+    examined += 1;
+
+    const errorRecord = candidate as { code?: unknown; cause?: unknown; errors?: unknown };
+    if (isAvailabilityCode(errorRecord.code)) return true;
+    if (errorRecord.cause !== undefined) candidates.push(errorRecord.cause);
+    if (Array.isArray(errorRecord.errors)) candidates.push(...errorRecord.errors);
   }
+
   return false;
 }
