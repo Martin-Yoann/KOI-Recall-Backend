@@ -46,7 +46,7 @@
 **Interfaces:**
 
 - Consumes: `campaignVersions`, `recallCampaigns`, Drizzle `SQL` predicates.
-- Produces: `publishedVersionPredicate(campaignId: string, versionId: string): SQL<unknown>` and a composite database foreign key named `recall_campaigns_published_version_owner_fk`.
+- Produces: `buildPublishedVersionQuery(db: Database, campaignId: string, versionId: string)` and a composite database foreign key named `recall_campaigns_published_version_owner_fk`.
 
 - [ ] **Step 1: Write failing schema and query tests**
 
@@ -87,39 +87,46 @@ it('binds a published version to its owning campaign', async () => {
 Create `tests/campaign-service.test.ts`:
 
 ```ts
-import { readFile } from 'node:fs/promises';
-
-import { PgDialect, type SQL } from 'drizzle-orm/pg-core';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { describe, expect, it } from 'vitest';
 
+import type { Database } from '../src/db/client.js';
+import * as schema from '../src/db/schema/index.js';
 import * as campaignServiceModule from '../src/modules/campaigns/drizzle-campaign-service.js';
 
-describe('published campaign ownership predicate', () => {
-  it('requires the published version id and owning campaign id', async () => {
-    const predicate = (
+describe('published campaign version query', () => {
+  it('requires the published version id and owning campaign id', () => {
+    const buildQuery = (
       campaignServiceModule as typeof campaignServiceModule & {
-        publishedVersionPredicate?: (campaignId: string, versionId: string) => SQL<unknown>;
+        buildPublishedVersionQuery?: (
+          db: Database,
+          campaignId: string,
+          versionId: string,
+        ) => { toSQL(): { sql: string; params: unknown[] } };
       }
-    ).publishedVersionPredicate;
+    ).buildPublishedVersionQuery;
 
-    expect(predicate).toBeTypeOf('function');
-    if (!predicate) return;
+    expect(buildQuery).toBeTypeOf('function');
+    if (!buildQuery) return;
 
-    const query = new PgDialect().sqlToQuery(
-      predicate('2bdac8b0-73d8-4e38-a7e2-98fd5608788a', '85eafab1-a5bd-4d57-a697-38bce973deab'),
-    );
+    const db = drizzle.mock({ schema });
+    const query = buildQuery(
+      db,
+      '2bdac8b0-73d8-4e38-a7e2-98fd5608788a',
+      '85eafab1-a5bd-4d57-a697-38bce973deab',
+    ).toSQL();
     expect(query.sql).toContain('"campaign_versions"."campaign_id"');
     expect(query.params).toEqual([
       '85eafab1-a5bd-4d57-a697-38bce973deab',
       '2bdac8b0-73d8-4e38-a7e2-98fd5608788a',
       'published',
+      1,
     ]);
-
-    const source = await readFile('src/modules/campaigns/drizzle-campaign-service.ts', 'utf8');
-    expect(source).toContain('publishedVersionPredicate(campaign.id, versionId)');
   });
 });
 ```
+
+The mutation this test catches is removal of the Campaign ownership condition from the real Drizzle query emitted by the service.
 
 - [ ] **Step 2: Run the targeted tests and verify RED**
 
@@ -129,7 +136,7 @@ Run:
 pnpm test -- tests/schema.test.ts tests/campaign-service.test.ts
 ```
 
-Expected: failing assertions because the ownership index, composite foreign key, migration, and predicate are absent.
+Expected: failing assertions because the ownership index, composite foreign key, migration, and query builder are absent.
 
 - [ ] **Step 3: Add the schema constraints**
 
@@ -151,24 +158,30 @@ foreignKey({
 
 to `recallCampaigns`.
 
-- [ ] **Step 4: Add and use the ownership predicate**
+- [ ] **Step 4: Add and use the ownership query builder**
 
 In `src/modules/campaigns/drizzle-campaign-service.ts`, add:
 
 ```ts
-export function publishedVersionPredicate(campaignId: string, versionId: string) {
-  return and(
-    eq(campaignVersions.id, versionId),
-    eq(campaignVersions.campaignId, campaignId),
-    eq(campaignVersions.status, 'published'),
-  );
+export function buildPublishedVersionQuery(db: Database, campaignId: string, versionId: string) {
+  return db
+    .select({ versionNumber: campaignVersions.versionNumber })
+    .from(campaignVersions)
+    .where(
+      and(
+        eq(campaignVersions.id, versionId),
+        eq(campaignVersions.campaignId, campaignId),
+        eq(campaignVersions.status, 'published'),
+      ),
+    )
+    .limit(1);
 }
 ```
 
-Replace the version query condition with:
+Replace the inline version query with:
 
 ```ts
-.where(publishedVersionPredicate(campaign.id, versionId))
+const [version] = await buildPublishedVersionQuery(db, campaign.id, versionId);
 ```
 
 - [ ] **Step 5: Generate the new migration**
