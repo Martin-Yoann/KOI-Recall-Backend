@@ -6,6 +6,7 @@ import { secureHeaders } from 'hono/secure-headers';
 import { createDefaultRegistry, type ApplicationRegistry } from './composition.js';
 import { loadConfig, type AppConfig } from './config/env.js';
 import {
+  campaignResponseSchema,
   createClaimDraftRoute,
   createUploadTokenRoute,
   deleteDraftDocumentRoute,
@@ -134,9 +135,10 @@ export function createApp(dependencies: AppDependencies = {}) {
 
     if (!campaign) return notFound(context, 'Campaign');
 
-    return context.json({ campaign }, 200, {
-      'Content-Language': campaign.locale,
-      ETag: `"v${campaign.version}:${campaign.locale}"`,
+    const response = campaignResponseSchema.parse({ campaign });
+    return context.json(response, 200, {
+      'Content-Language': response.campaign.locale,
+      ETag: `"v${response.campaign.version}:${response.campaign.locale}"`,
     });
   });
   app.openapi(productCheckRoute, async (context) => {

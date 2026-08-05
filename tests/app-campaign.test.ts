@@ -99,4 +99,28 @@ describe('GET /v1/recall-campaigns/{slug}', () => {
     const body = (await response.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ title: 'Dependency Unavailable', status: 503 });
   });
+
+  it('returns 500 instead of a contract-invalid 200 response', async () => {
+    const invalidCampaign: CampaignView = {
+      ...campaign,
+      support: { ...campaign.support, email: 'not-an-email' },
+      evidenceRequirements: [
+        { ...campaign.evidenceRequirements[0]!, minimumFiles: 0, maximumFiles: 0 },
+      ],
+    };
+    const service: CampaignService = {
+      getPublishedCampaign: () => Promise.resolve(invalidCampaign),
+    };
+
+    const response = await appWith(service).request(
+      '/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US',
+    );
+
+    expect(response.status).toBe(500);
+    expect(response.headers.get('Content-Type')).toContain('application/problem+json');
+    await expect(response.json()).resolves.toMatchObject({
+      title: 'Internal Server Error',
+      status: 500,
+    });
+  });
 });
