@@ -14,6 +14,20 @@ import type { CampaignView } from '../../contracts/toc.js';
 import type { CampaignService, PublishedCampaignQuery } from './service.js';
 import { mapToCampaignView } from './mapper.js';
 
+export function buildPublishedVersionQuery(db: Database, campaignId: string, versionId: string) {
+  return db
+    .select({ versionNumber: campaignVersions.versionNumber })
+    .from(campaignVersions)
+    .where(
+      and(
+        eq(campaignVersions.id, versionId),
+        eq(campaignVersions.campaignId, campaignId),
+        eq(campaignVersions.status, 'published'),
+      ),
+    )
+    .limit(1);
+}
+
 /**
  * Reads published campaigns from Postgres via Drizzle. The injected {@link Database}
  * is the dual-adapter union, so the same code runs against Neon HTTP in production
@@ -40,11 +54,7 @@ export class DrizzleCampaignService implements CampaignService {
     if (!campaign || !campaign.publishedVersionId) return null;
     const versionId = campaign.publishedVersionId;
 
-    const [version] = await db
-      .select({ versionNumber: campaignVersions.versionNumber })
-      .from(campaignVersions)
-      .where(and(eq(campaignVersions.id, versionId), eq(campaignVersions.status, 'published')))
-      .limit(1);
+    const [version] = await buildPublishedVersionQuery(db, campaign.id, versionId);
     if (!version) return null;
 
     const [localization] = await db

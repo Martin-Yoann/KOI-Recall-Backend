@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 import { getTableName } from 'drizzle-orm';
+import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 
 import * as schema from '../src/db/schema/index.js';
@@ -71,6 +72,42 @@ describe('database design', () => {
     expect(migration).toContain('CONSTRAINT "document_uploads_owner_chk" CHECK');
     expect(migration).toContain('timestamp with time zone');
     expect(migration).not.toMatch(/timestamp without time zone/i);
+  });
+
+  it('binds a published version to its owning campaign', async () => {
+    const versionConfig = getTableConfig(schema.campaignVersions);
+    const campaignConfig = getTableConfig(schema.recallCampaigns);
+    const ownershipIndex = versionConfig.indexes.find(
+      (index) => index.config.name === 'campaign_versions_campaign_id_id_uidx',
+    );
+    const ownershipForeignKey = campaignConfig.foreignKeys.find(
+      (foreignKey) => foreignKey.getName() === 'recall_campaigns_published_version_owner_fk',
+    );
+
+    expect(
+      ownershipIndex?.config.columns.map((column) => ('name' in column ? column.name : undefined)),
+    ).toEqual(['campaign_id', 'id']);
+    expect(ownershipForeignKey?.reference().columns.map((column) => column.name)).toEqual([
+      'id',
+      'published_version_id',
+    ]);
+    expect(ownershipForeignKey?.reference().foreignColumns.map((column) => column.name)).toEqual([
+      'campaign_id',
+      'id',
+    ]);
+
+    const migration = await readFile('drizzle/0001_campaign_version_ownership.sql', 'utf8').catch(
+      () => '',
+    );
+    expect(migration).toContain('recall_campaigns_published_version_owner_fk');
+    const ownershipIndexPosition = migration.indexOf(
+      'CREATE UNIQUE INDEX "campaign_versions_campaign_id_id_uidx"',
+    );
+    const ownershipForeignKeyPosition = migration.indexOf(
+      'ADD CONSTRAINT "recall_campaigns_published_version_owner_fk"',
+    );
+    expect(ownershipIndexPosition).toBeGreaterThanOrEqual(0);
+    expect(ownershipForeignKeyPosition).toBeGreaterThan(ownershipIndexPosition);
   });
 
   it('keeps the synthetic seed English-only and protected from production use', async () => {

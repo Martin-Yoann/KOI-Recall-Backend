@@ -4,6 +4,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -130,6 +131,7 @@ export const campaignVersions = pgTable(
       table.campaignId,
       table.versionNumber,
     ),
+    uniqueIndex('campaign_versions_campaign_id_id_uidx').on(table.campaignId, table.id),
     index('campaign_versions_campaign_status_idx').on(table.campaignId, table.status),
     check('campaign_versions_positive_version_chk', sql`${table.versionNumber} > 0`),
   ],
@@ -143,9 +145,7 @@ export const recallCampaigns = pgTable(
     code: varchar('code', { length: 40 }).notNull(),
     status: campaignStatusEnum('status').notNull().default('draft'),
     defaultLocale: varchar('default_locale', { length: 16 }).notNull().default('en-US'),
-    publishedVersionId: uuid('published_version_id').references(() => campaignVersions.id, {
-      onDelete: 'set null',
-    }),
+    publishedVersionId: uuid('published_version_id'),
     isTestData: boolean('is_test_data').notNull().default(false),
     launchAt: timestamp('launch_at', { withTimezone: true, mode: 'date' }),
     closeAt: timestamp('close_at', { withTimezone: true, mode: 'date' }),
@@ -154,6 +154,11 @@ export const recallCampaigns = pgTable(
   (table) => [
     uniqueIndex('recall_campaigns_slug_uidx').on(table.slug),
     uniqueIndex('recall_campaigns_code_uidx').on(table.code),
+    foreignKey({
+      name: 'recall_campaigns_published_version_owner_fk',
+      columns: [table.id, table.publishedVersionId],
+      foreignColumns: [campaignVersions.campaignId, campaignVersions.id],
+    }),
     index('recall_campaigns_status_launch_idx').on(table.status, table.launchAt),
     check('recall_campaigns_slug_format_chk', sql`${table.slug} ~ '^[a-z0-9]+(-[a-z0-9]+)*$'`),
     check(
