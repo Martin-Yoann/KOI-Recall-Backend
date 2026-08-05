@@ -6,6 +6,7 @@ import type { ClaimDraftService } from './modules/claim-drafts/service.js';
 import type { CommunicationService } from './modules/communications/service.js';
 import type { DocumentService } from './modules/documents/service.js';
 import type { IncidentService } from './modules/incidents/service.js';
+import { DrizzleProductCheckService } from './modules/product-checks/drizzle-product-check-service.js';
 import type { ProductCheckService } from './modules/product-checks/service.js';
 import type { AppConfig } from './config/env.js';
 import { NotImplementedPrivateBlobAdapter } from './platform/blob/not-implemented.js';
@@ -77,8 +78,9 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
 }
 
 /**
- * Builds a registry where campaign retrieval reads from the database; every
- * other Phase 1 capability stays on the not-implemented placeholder.
+ * Builds a registry where campaign retrieval and product checks read from the
+ * database; every other Phase 1 capability stays on the not-implemented
+ * placeholder.
  */
 export function createApplicationRegistry(handle: DatabaseHandle): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
@@ -86,6 +88,7 @@ export function createApplicationRegistry(handle: DatabaseHandle): ApplicationRe
     services: {
       ...placeholder.services,
       campaigns: new DrizzleCampaignService(handle.db),
+      productChecks: new DrizzleProductCheckService(handle.db),
     },
     platform: placeholder.platform,
   };
