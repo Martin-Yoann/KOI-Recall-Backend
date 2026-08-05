@@ -4,14 +4,14 @@
 
 本项目是独立的消费者召回 API，不修改现有静态 Demo。第一阶段的可验收目标是把公开 Campaign、商品预筛、匿名附件上传、申请提交入库和确认邮件排队串成稳定契约。
 
-当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册；业务端点明确返回 `501 application/problem+json`。本次不创建或连接 Neon、Vercel Blob、Resend，不部署 Vercel，不写真实凭证，不发送邮件。
+当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册；业务端点明确返回 `501 application/problem+json`。其中 `GET /v1/recall-campaigns/{slug}` 在配置 `DATABASE_URL` 时读取真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）返回公开 Campaign；其余五个业务端点仍明确返回 `501 application/problem+json`。本次不接入 Vercel Blob、Resend，不部署 Vercel，不写真实凭证，不发送邮件。
 
 ## 2. 技术选型
 
 - Node.js 24.x、TypeScript strict、pnpm。
 - Hono 与 `@hono/zod-openapi`；`src/contracts/toc.ts` 是运行时校验、TypeScript 类型和 OpenAPI 的唯一契约源。
 - Vercel Functions Node Runtime，独立 API 域名；生产启用 Fluid Compute 的具体配置在部署阶段确认。
-- Drizzle ORM、Drizzle Kit 和 Neon Serverless Driver。
+- Drizzle ORM、Drizzle Kit；数据库客户端 `src/db/client.ts` 为双适配器，按 `DATABASE_URL` 主机名自动选择 Neon HTTP 驱动（生产）或 node-postgres（本地），不改代码、不手工切换。
 - Vercel Private Blob 浏览器直传；API 只签发短期上传权限、验证回调和关联附件。
 - Resend、PostgreSQL Outbox、Vercel Cron；确认邮件与主事务解耦。
 - Vitest、ESLint、Prettier。
@@ -149,6 +149,6 @@ Cron 领取到期的 `outbox_events`，使用短锁和有限重试调用 Resend�
 
 - 六个 ToC 路由和四个内部/回调入口完成注册。
 - 运行时请求校验、CORS、Request ID、安全头、Problem Details 和 OpenAPI 可测试。
-- Provider 与领域服务只定义端口，不进行真实 I/O。
+- 除公开 Campaign 读取已接入数据库外，其余 Provider 与领域服务只定义端口，不进行真实 I/O。
 - OpenAPI 和 Drizzle migration 均可生成和检查漂移。
 - 后续实现业务时保持契约优先，不在路由中直接拼装 SQL 或供应商调用。

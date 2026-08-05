@@ -108,6 +108,12 @@ export const campaignResponseSchema = z
   })
   .openapi('CampaignResponse');
 
+/**
+ * The public campaign object carried by CampaignResponse. Derived from the Zod
+ * contract so the service, mapper, and route handler all share one shape.
+ */
+export type CampaignView = z.infer<typeof campaignResponseSchema>['campaign'];
+
 export const productCheckRequestSchema = z
   .object({
     shape: z.string().min(1).max(80),

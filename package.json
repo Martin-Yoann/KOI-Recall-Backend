@@ -19,6 +19,7 @@
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "tsx scripts/check-openapi.ts",
     "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
     "db:check": "drizzle-kit check",
     "db:seed": "tsx src/db/seed.ts"
   },
@@ -28,12 +29,14 @@
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.34",
+    "pg": "^8.22.0",
     "yaml": "^2.9.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^24.13.3",
+    "@types/pg": "^8.20.3",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10.8.0",
     "prettier": "^3.9.6",

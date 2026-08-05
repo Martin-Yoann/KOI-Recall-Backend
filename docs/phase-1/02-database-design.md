@@ -3,6 +3,7 @@
 ## 1. 约定
 
 - PostgreSQL/Neon，Drizzle Schema 为 `src/db/schema/index.ts`，首个生成迁移为 `drizzle/0000_adorable_sue_storm.sql`。
+- 数据库客户端 `src/db/client.ts` 按连接串自动选择 Neon HTTP 或 node-postgres 驱动；`pnpm db:migrate`（`scripts/migrate.ts`）套用 `drizzle/` 迁移，本地缺失目标库时会自动创建。
 - 所有实体主键使用数据库生成 UUID；对消费者展示的是不可猜测 `public_reference`，不是内部 UUID 或序号。
 - 瞬时时间均为 UTC `timestamptz`；只有消费者提供的日历购买日期使用 `date`。
 - 状态和稳定类别使用 PostgreSQL enum 或 check constraint；金额字段若后续增加必须使用最小货币单位整数或 `numeric`，不能使用浮点数。

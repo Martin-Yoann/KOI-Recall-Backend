@@ -3,7 +3,7 @@ import type { Context } from 'hono';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 
-import { createPlaceholderRegistry, type ApplicationRegistry } from './composition.js';
+import { createDefaultRegistry, type ApplicationRegistry } from './composition.js';
 import { loadConfig, type AppConfig } from './config/env.js';
 import {
   createClaimDraftRoute,
@@ -20,7 +20,7 @@ import {
   type RateLimiter,
 } from './middleware/rate-limit.js';
 import { requestContext, type AppEnv } from './middleware/request-context.js';
-import { NotImplementedServiceError } from './shared/errors.js';
+import { isConnectionError, NotImplementedServiceError } from './shared/errors.js';
 
 export interface AppDependencies {
   config?: AppConfig;
@@ -44,9 +44,37 @@ function notImplemented(context: Context<AppEnv>, capability: string): never {
   }) as never;
 }
 
+function notFound(context: Context<AppEnv>, resource: string): never {
+  return context.json(
+    {
+      type: 'https://api.example.invalid/problems/not-found',
+      title: 'Not Found',
+      status: 404,
+      detail: `${resource} was not found or is not publicly available.`,
+      requestId: context.get('requestId'),
+    },
+    404,
+    { 'Content-Type': 'application/problem+json' },
+  ) as never;
+}
+
+function dependencyUnavailable(context: Context<AppEnv>, capability: string): never {
+  return context.json(
+    {
+      type: 'https://api.example.invalid/problems/dependency-unavailable',
+      title: 'Dependency Unavailable',
+      status: 503,
+      detail: `${capability} could not be completed because a required dependency is unavailable.`,
+      requestId: context.get('requestId'),
+    },
+    503,
+    { 'Content-Type': 'application/problem+json' },
+  ) as never;
+}
+
 export function createApp(dependencies: AppDependencies = {}) {
   const config = dependencies.config ?? loadConfig();
-  const registry = dependencies.registry ?? createPlaceholderRegistry();
+  const registry = dependencies.registry ?? createDefaultRegistry(config);
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, context) => {
       if (result.success) return;
@@ -93,11 +121,23 @@ export function createApp(dependencies: AppDependencies = {}) {
   );
 
   app.openapi(getCampaignRoute, async (context) => {
-    await registry.services.campaigns.getPublishedCampaign({
-      slug: context.req.valid('param').slug,
-      locale: context.req.valid('query').locale,
+    let campaign;
+    try {
+      campaign = await registry.services.campaigns.getPublishedCampaign({
+        slug: context.req.valid('param').slug,
+        locale: context.req.valid('query').locale,
+      });
+    } catch (error) {
+      if (isConnectionError(error)) return dependencyUnavailable(context, 'Campaign retrieval');
+      throw error;
+    }
+
+    if (!campaign) return notFound(context, 'Campaign');
+
+    return context.json({ campaign }, 200, {
+      'Content-Language': campaign.locale,
+      ETag: `"v${campaign.version}:${campaign.locale}"`,
     });
-    return notImplemented(context, 'Published campaign retrieval');
   });
   app.openapi(productCheckRoute, async (context) => {
     await registry.services.productChecks.check({
