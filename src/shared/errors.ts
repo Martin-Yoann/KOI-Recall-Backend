@@ -57,7 +57,9 @@ export function isConnectionError(error: unknown): boolean {
     const errorRecord = candidate as { code?: unknown; cause?: unknown; errors?: unknown };
     if (isAvailabilityCode(errorRecord.code)) return true;
     if (errorRecord.cause !== undefined) candidates.push(errorRecord.cause);
-    if (Array.isArray(errorRecord.errors)) candidates.push(...errorRecord.errors);
+    if (Array.isArray(errorRecord.errors)) {
+      for (const nestedError of errorRecord.errors as unknown[]) candidates.push(nestedError);
+    }
   }
 
   return false;
