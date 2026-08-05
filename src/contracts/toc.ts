@@ -132,6 +132,12 @@ export const productCheckResponseSchema = z
   })
   .openapi('ProductCheckResponse');
 
+/**
+ * The preliminary product-check result returned to consumers. Derived from the
+ * Zod contract so the service and route handler share one shape.
+ */
+export type ProductCheckResponse = z.infer<typeof productCheckResponseSchema>;
+
 export const claimDraftResponseSchema = z
   .object({
     draftId: uuid,

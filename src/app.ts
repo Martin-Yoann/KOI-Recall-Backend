@@ -12,6 +12,7 @@ import {
   deleteDraftDocumentRoute,
   getCampaignRoute,
   openApiConfig,
+  productCheckResponseSchema,
   productCheckRoute,
   submitClaimRoute,
 } from './contracts/toc.js';
@@ -142,11 +143,24 @@ export function createApp(dependencies: AppDependencies = {}) {
     });
   });
   app.openapi(productCheckRoute, async (context) => {
-    await registry.services.productChecks.check({
-      campaignSlug: context.req.valid('param').slug,
-      ...context.req.valid('json'),
+    let result;
+    try {
+      result = await registry.services.productChecks.check({
+        campaignSlug: context.req.valid('param').slug,
+        ...context.req.valid('json'),
+      });
+    } catch (error) {
+      if (isConnectionError(error)) return dependencyUnavailable(context, 'Product checking');
+      throw error;
+    }
+
+    if (!result) return notFound(context, 'Campaign');
+
+    const response = productCheckResponseSchema.parse({
+      ...result,
+      disclaimer: 'This check is preliminary and is not a final eligibility decision.',
     });
-    return notImplemented(context, 'Product checking');
+    return context.json(response, 200);
   });
   app.openapi(createClaimDraftRoute, async (context) => {
     await registry.services.claimDrafts.create(context.req.valid('param').slug);
