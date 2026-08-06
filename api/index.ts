@@ -4,7 +4,7 @@
 // ============================================================
 
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createApp } from '../src/app';
+import { createApp } from '../src/app.js';
 
 const app = createApp();
 
@@ -46,7 +46,7 @@ export default async function handler(
   const response = await app.fetch(webReq);
 
   res.statusCode = response.status;
-  response.headers.forEach((value, key) => {
+  response.headers.forEach((value: string, key: string) => {
     if (key.toLowerCase() !== 'content-length') {
       res.setHeader(key, value);
     }
