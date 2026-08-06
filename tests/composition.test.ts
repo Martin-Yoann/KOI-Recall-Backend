@@ -1,7 +1,77 @@
 import { describe, expect, it } from 'vitest';
 
-import { createPlaceholderRegistry } from '../src/composition.js';
+import {
+  createApplicationRegistry,
+  createDefaultRegistry,
+  createPlaceholderRegistry,
+} from '../src/composition.js';
+import { loadConfig } from '../src/config/env.js';
+import type { Database, DatabaseHandle } from '../src/db/client.js';
+import { DrizzleCaseService } from '../src/modules/cases/drizzle-case-service.js';
+import type { ClaimSubmissionCommand } from '../src/modules/cases/service.js';
+import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 import { NotImplementedServiceError } from '../src/shared/errors.js';
+
+const encryptionKey = Buffer.alloc(32, 1).toString('base64');
+const hashPepper = Buffer.alloc(32, 2).toString('base64');
+
+const fakeHandle: DatabaseHandle = {
+  db: {} as Database,
+  driver: 'node-postgres',
+  transaction: () =>
+    Promise.reject(new Error('The fake database must not be used by composition tests.')),
+  close: () => Promise.resolve(),
+};
+
+const validCommand: ClaimSubmissionCommand = {
+  campaignSlug: 'music-lollipop-demo-2026',
+  idempotencyKey: 'composition-test-key-0123456789',
+  body: {
+    draftId: '21326c9a-5dc2-430f-98a6-546729a1065f',
+    draftToken: 'one-time-secret-with-at-least-32-characters',
+    locale: 'en-US',
+    consumer: {
+      firstName: 'Taylor',
+      lastName: 'Example',
+      email: 'taylor@example.com',
+      mailingAddress: {
+        line1: '100 Example Street',
+        city: 'Austin',
+        state: 'TX',
+        postalCode: '78701',
+        countryCode: 'US',
+      },
+    },
+    products: [
+      {
+        campaignProductId: '5e41d8b9-03c4-46d4-9b87-80c40cdfbde5',
+        quantity: 1,
+        shape: 'Bear',
+        flavor: 'Peach',
+        lotCode: 'ML-2406-A',
+        dateCode: '06/2024',
+        purchaseChannel: 'amazon',
+      },
+    ],
+    remedyCode: 'replacement',
+    documentIds: [],
+    consents: [
+      { type: 'privacy_notice', textVersion: '2026-08-04', accepted: true },
+      { type: 'information_accuracy', textVersion: '2026-08-04', accepted: true },
+    ],
+    incidentAnswer: 'no',
+  },
+};
+
+function configuredConfig(overrides: Record<string, string | undefined> = {}) {
+  return loadConfig({
+    CORS_ALLOWED_ORIGINS: 'https://consumer.example.com',
+    DATABASE_URL: 'postgresql://user:password@127.0.0.1:5432/koi',
+    FIELD_ENCRYPTION_KEY: encryptionKey,
+    HASH_PEPPER: hashPepper,
+    ...overrides,
+  });
+}
 
 describe('application composition', () => {
   it('registers all Phase 1 domain services and provider adapters', () => {
@@ -34,5 +104,67 @@ describe('application composition', () => {
         text: 'Test',
       }),
     ).rejects.toBeInstanceOf(NotImplementedServiceError);
+  });
+
+  it('keeps Claim unavailable when crypto secrets are missing', async () => {
+    const registry = createApplicationRegistry(fakeHandle);
+
+    await expect(registry.services.cases.submit(validCommand)).rejects.toBeInstanceOf(
+      NotImplementedServiceError,
+    );
+  });
+
+  it('registers the Drizzle Case service when crypto is configured', () => {
+    const crypto = new NodeSensitiveDataCrypto(encryptionKey, hashPepper);
+    const registry = createApplicationRegistry(fakeHandle, undefined, crypto);
+
+    expect(registry.services.cases).toBeInstanceOf(DrizzleCaseService);
+    expect(registry.platform.crypto).toBe(crypto);
+  });
+
+  it.each([
+    ['FIELD_ENCRYPTION_KEY', { FIELD_ENCRYPTION_KEY: undefined }],
+    ['HASH_PEPPER', { HASH_PEPPER: undefined }],
+  ])(
+    'keeps Claim unavailable when %s is absent from default configuration',
+    async (_, overrides) => {
+      const registry = createDefaultRegistry(configuredConfig(overrides));
+
+      await expect(registry.services.cases.submit(validCommand)).rejects.toBeInstanceOf(
+        NotImplementedServiceError,
+      );
+    },
+  );
+
+  it('registers the Drizzle Case service from complete default configuration', () => {
+    const registry = createDefaultRegistry(configuredConfig());
+
+    expect(registry.services.cases).toBeInstanceOf(DrizzleCaseService);
+    expect(registry.platform.crypto).toBeInstanceOf(NodeSensitiveDataCrypto);
+  });
+
+  it.each([
+    ['empty encryption key', { FIELD_ENCRYPTION_KEY: '' }],
+    ['empty hash pepper', { HASH_PEPPER: '' }],
+    ['non-Base64 encryption key', { FIELD_ENCRYPTION_KEY: 'not:a:base64:key' }],
+    ['short encryption key', { FIELD_ENCRYPTION_KEY: Buffer.alloc(31, 3).toString('base64') }],
+    ['short hash pepper', { HASH_PEPPER: Buffer.alloc(31, 4).toString('base64') }],
+    ['identical encryption key and hash pepper', { HASH_PEPPER: encryptionKey }],
+  ])('fails safely for %s', (_, overrides) => {
+    const suppliedSecrets = Object.values(overrides).filter(
+      (value): value is string => value !== undefined && value.length > 0,
+    );
+
+    let thrown: unknown;
+    try {
+      createDefaultRegistry(configuredConfig(overrides));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    for (const secret of suppliedSecrets) {
+      expect((thrown as Error).message).not.toContain(secret);
+    }
   });
 });

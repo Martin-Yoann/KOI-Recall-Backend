@@ -1,6 +1,7 @@
 import { createDatabase, type DatabaseHandle } from './db/client.js';
 import { DrizzleCampaignService } from './modules/campaigns/drizzle-campaign-service.js';
 import type { CampaignService } from './modules/campaigns/service.js';
+import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
 import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-draft-service.js';
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
@@ -15,6 +16,7 @@ import { NotImplementedPrivateBlobAdapter } from './platform/blob/not-implemente
 import type { PrivateBlobPort } from './platform/blob/port.js';
 import { VercelBlobAdapter } from './platform/blob/vercel-blob.js';
 import { NotImplementedCryptoAdapter } from './platform/crypto/not-implemented.js';
+import { NodeSensitiveDataCrypto } from './platform/crypto/node-sensitive-data-crypto.js';
 import type { SensitiveDataCryptoPort } from './platform/crypto/port.js';
 import { NotImplementedEmailAdapter } from './platform/email/not-implemented.js';
 import type { TransactionalEmailPort } from './platform/email/port.js';
@@ -83,14 +85,16 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
 
 /**
  * Builds a registry where campaign retrieval, product checks, anonymous draft
- * creation, and draft document uploads read from the database; every other
- * Phase 1 capability stays on the not-implemented placeholder. The blob
- * adapter defaults to the not-implemented stub so callers without a configured
- * Private Blob store still get a usable (501-on-blob-ops) registry.
+ * creation, and draft document uploads read from the database. Claim submission
+ * additionally requires a configured crypto adapter; otherwise it remains a
+ * not-implemented capability. The blob adapter defaults to the not-implemented
+ * stub so callers without a configured Private Blob store still get a usable
+ * (501-on-blob-ops) registry.
  */
 export function createApplicationRegistry(
   handle: DatabaseHandle,
   blob: PrivateBlobPort = new NotImplementedPrivateBlobAdapter(),
+  crypto: SensitiveDataCryptoPort = new NotImplementedCryptoAdapter(),
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   return {
@@ -100,9 +104,19 @@ export function createApplicationRegistry(
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
       documents: new DrizzleDocumentService(handle.db, blob),
+      ...(crypto instanceof NotImplementedCryptoAdapter
+        ? {}
+        : { cases: new DrizzleCaseService(handle, crypto) }),
     },
-    platform: { ...placeholder.platform, blob },
+    platform: { ...placeholder.platform, blob, crypto },
   };
+}
+
+function createCryptoAdapter(config: AppConfig): SensitiveDataCryptoPort {
+  if (config.FIELD_ENCRYPTION_KEY === undefined || config.HASH_PEPPER === undefined) {
+    return new NotImplementedCryptoAdapter();
+  }
+  return new NodeSensitiveDataCrypto(config.FIELD_ENCRYPTION_KEY, config.HASH_PEPPER);
 }
 
 /**
@@ -127,6 +141,14 @@ function createBlobAdapter(config: AppConfig): PrivateBlobPort {
  * by the client), otherwise the all-placeholder skeleton registry.
  */
 export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
-  if (!config.DATABASE_URL) return createPlaceholderRegistry();
-  return createApplicationRegistry(createDatabase(config.DATABASE_URL), createBlobAdapter(config));
+  const crypto = createCryptoAdapter(config);
+  if (!config.DATABASE_URL) {
+    const placeholder = createPlaceholderRegistry();
+    return { ...placeholder, platform: { ...placeholder.platform, crypto } };
+  }
+  return createApplicationRegistry(
+    createDatabase(config.DATABASE_URL),
+    createBlobAdapter(config),
+    crypto,
+  );
 }
