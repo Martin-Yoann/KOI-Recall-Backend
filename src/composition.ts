@@ -2,6 +2,7 @@ import { createDatabase, type DatabaseHandle } from './db/client.js';
 import { DrizzleCampaignService } from './modules/campaigns/drizzle-campaign-service.js';
 import type { CampaignService } from './modules/campaigns/service.js';
 import type { CaseService } from './modules/cases/service.js';
+import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-draft-service.js';
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
 import type { CommunicationService } from './modules/communications/service.js';
 import type { DocumentService } from './modules/documents/service.js';
@@ -78,9 +79,9 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
 }
 
 /**
- * Builds a registry where campaign retrieval and product checks read from the
- * database; every other Phase 1 capability stays on the not-implemented
- * placeholder.
+ * Builds a registry where campaign retrieval, product checks, and anonymous
+ * draft creation read from the database; every other Phase 1 capability stays
+ * on the not-implemented placeholder.
  */
 export function createApplicationRegistry(handle: DatabaseHandle): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
@@ -89,6 +90,7 @@ export function createApplicationRegistry(handle: DatabaseHandle): ApplicationRe
       ...placeholder.services,
       campaigns: new DrizzleCampaignService(handle.db),
       productChecks: new DrizzleProductCheckService(handle.db),
+      claimDrafts: new DrizzleClaimDraftService(handle.db),
     },
     platform: placeholder.platform,
   };
