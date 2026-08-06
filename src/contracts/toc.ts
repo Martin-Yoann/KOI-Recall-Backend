@@ -320,6 +320,8 @@ export const claimSubmissionRequestSchema = z
   })
   .openapi('ClaimSubmissionRequest');
 
+export type ClaimSubmissionRequest = z.infer<typeof claimSubmissionRequestSchema>;
+
 export const claimSubmissionResponseSchema = z
   .object({
     caseReference: z.string().regex(/^KOI-[A-Z0-9]{4}-[A-Z0-9]{8}$/),
@@ -328,6 +330,8 @@ export const claimSubmissionResponseSchema = z
     nextStep: z.string(),
   })
   .openapi('ClaimSubmissionResponse');
+
+export type ClaimSubmissionResponse = z.infer<typeof claimSubmissionResponseSchema>;
 
 const idempotencyHeaderSchema = z.object({
   'Idempotency-Key': z

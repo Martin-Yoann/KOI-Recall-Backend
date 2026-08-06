@@ -77,6 +77,26 @@ export class ResourceNotFoundError extends HttpProblemError {
   readonly title = 'Not Found';
 }
 
+/**
+ * Thrown when a claim submission conflicts with a previous idempotency key or
+ * an already-consumed draft. Maps to 409 Conflict.
+ */
+export class ClaimConflictError extends HttpProblemError {
+  readonly status = 409;
+  readonly type = problemType('conflict');
+  readonly title = 'Conflict';
+}
+
+/**
+ * Thrown when a syntactically valid claim fails domain validation. Maps to
+ * 422 Unprocessable Entity.
+ */
+export class ClaimValidationError extends HttpProblemError {
+  readonly status = 422;
+  readonly type = problemType('unprocessable-entity');
+  readonly title = 'Unprocessable Entity';
+}
+
 export class NotImplementedServiceError extends Error {
   constructor(readonly capability: string) {
     super(`${capability} is defined by contract but is not implemented in the Phase 1 skeleton.`);

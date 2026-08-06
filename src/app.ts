@@ -10,6 +10,7 @@ import { loadConfig, type AppConfig } from './config/env.js';
 import {
   campaignResponseSchema,
   claimDraftResponseSchema,
+  claimSubmissionResponseSchema,
   createClaimDraftRoute,
   createUploadTokenRoute,
   deleteDraftDocumentRoute,
@@ -47,12 +48,6 @@ function problem(requestId: string, capability: string) {
     detail: `${capability} is contract-complete but not implemented in this Phase 1 skeleton.`,
     requestId,
   };
-}
-
-function notImplemented(context: Context<AppEnv>, capability: string): never {
-  return context.json(problem(context.get('requestId'), capability), 501, {
-    'Content-Type': 'application/problem+json',
-  }) as never;
 }
 
 function notFound(context: Context<AppEnv>, resource: string): never {
@@ -236,12 +231,19 @@ export function createApp(dependencies: AppDependencies = {}) {
     return context.body(null, 204);
   });
   app.openapi(submitClaimRoute, async (context) => {
-    await registry.services.cases.submit({
-      campaignSlug: context.req.valid('param').slug,
-      idempotencyKey: context.req.valid('header')['Idempotency-Key'],
-      body: context.req.valid('json'),
-    });
-    return notImplemented(context, 'Recall claim submission');
+    let submitted;
+    try {
+      submitted = await registry.services.cases.submit({
+        campaignSlug: context.req.valid('param').slug,
+        idempotencyKey: context.req.valid('header')['Idempotency-Key'],
+        body: context.req.valid('json'),
+      });
+    } catch (error) {
+      if (isConnectionError(error)) return dependencyUnavailable(context, 'Recall claim submission');
+      throw error;
+    }
+
+    return context.json(claimSubmissionResponseSchema.parse(submitted), 201);
   });
 
   app.get('/internal/jobs/outbox', (context) =>
