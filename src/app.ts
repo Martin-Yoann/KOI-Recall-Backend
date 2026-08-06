@@ -23,6 +23,7 @@ import {
   type RateLimiter,
 } from './middleware/rate-limit.js';
 import { requestContext, type AppEnv } from './middleware/request-context.js';
+import { consoleSafeLogger } from './platform/observability/logger.js';
 import { isConnectionError, NotImplementedServiceError } from './shared/errors.js';
 
 export interface AppDependencies {
@@ -251,7 +252,10 @@ export function createApp(dependencies: AppDependencies = {}) {
         'Content-Type': 'application/problem+json',
       });
     }
-    console.error('Unhandled API error', { requestId: context.get('requestId'), name: error.name });
+    consoleSafeLogger.error('Unhandled API error', {
+      requestId: context.get('requestId'),
+      errorCode: error.name,
+    });
     return context.json(
       {
         type: 'https://api.example.invalid/problems/internal-error',

@@ -3,17 +3,22 @@ import 'dotenv/config';
 import { serve } from '@hono/node-server';
 
 import { createApp } from './app.js';
+import { consoleSafeLogger } from './platform/observability/logger.js';
 
-const port = Number(process.env.PORT ?? 3000);
+const port = Number(process.env.PORT ?? 3002);
 
 const app = createApp();
 
 const server = serve({ fetch: app.fetch, port }, (info) => {
-  console.log(`[dev] KOI Recall API listening on http://localhost:${info.port}`);
+  consoleSafeLogger.info('KOI Recall API listening', {
+    path: `http://localhost:${info.port}`,
+  });
 });
 
 const shutdown = (signal: NodeJS.Signals) => {
-  console.log(`[dev] received ${signal}, closing server`);
+  consoleSafeLogger.info('Server shutting down', {
+    errorCode: signal,
+  });
   server.close(() => process.exit(0));
 };
 

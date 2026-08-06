@@ -12,9 +12,13 @@ const environmentSchema = z.object({
   HASH_PEPPER: z.string().optional(),
 });
 
-export type AppConfig = ReturnType<typeof loadConfig>;
+type EnvironmentVariables = z.infer<typeof environmentSchema>;
 
-export function loadConfig(source: NodeJS.ProcessEnv = process.env) {
+export interface AppConfig extends EnvironmentVariables {
+  readonly allowedOrigins: string[];
+}
+
+export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
   const parsed = environmentSchema.parse(source);
   const allowedOrigins = parsed.CORS_ALLOWED_ORIGINS.split(',')
     .map((origin) => origin.trim())

@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { eq } from 'drizzle-orm';
 
 import { createDatabase } from './client.js';
