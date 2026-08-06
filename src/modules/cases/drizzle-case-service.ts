@@ -23,9 +23,11 @@ import {
   communications,
   documentUploads,
   idempotencyRecords,
+  incidents,
   outboxEvents,
   recallCampaigns,
   recallCases,
+  reportabilityReviews,
   submissionSnapshots,
 } from '../../db/schema/index.js';
 import type { Ciphertext, SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
@@ -64,6 +66,7 @@ interface EncryptedSubmission {
   addressLookupHash: string;
   products: EncryptedProduct[];
   snapshot: Ciphertext;
+  incidentNarrative?: Ciphertext;
 }
 
 export class DrizzleCaseService implements CaseService {
@@ -227,11 +230,12 @@ export class DrizzleCaseService implements CaseService {
           productLots.filter((lot) => lot.campaignProductId === product.campaignProductId),
         ),
       }));
-      const caseStatus = productEvaluations.some(
-        ({ evaluation }) => evaluation.result === 'not_matched',
-      )
-        ? 'triage'
-        : 'submitted';
+      const hasIncident = command.body.incidentAnswer !== 'no';
+      const caseStatus =
+        command.body.incidentAnswer === 'unsure' ||
+        productEvaluations.some(({ evaluation }) => evaluation.result === 'not_matched')
+          ? 'triage'
+          : 'submitted';
 
       const caseId = randomUUID();
       const caseReference = generateCaseReference();
@@ -249,9 +253,9 @@ export class DrizzleCaseService implements CaseService {
         campaignId: locked.campaignId,
         campaignVersionId: locked.campaignVersionId,
         locale: command.body.locale,
-        subtype: 'standard',
+        subtype: hasIncident ? 'injury_hazard' : 'standard',
         status: caseStatus,
-        incidentFlag: false,
+        incidentFlag: hasIncident,
         submittedAt,
       });
       await tx.insert(caseConsumers).values({
@@ -298,6 +302,32 @@ export class DrizzleCaseService implements CaseService {
         encryptedPayload: encrypted.snapshot.value,
         payloadSha256: requestHash,
       });
+      if (hasIncident) {
+        const details = command.body.incidentDetails!;
+        const eventTypes = details.eventTypes?.length ? details.eventTypes : ['unknown'];
+        const occurredDateUnknown = details.occurredDateUnknown || !details.occurredDate;
+        const [incident] = await tx
+          .insert(incidents)
+          .values({
+            caseId,
+            answer: command.body.incidentAnswer,
+            eventTypes,
+            narrativeKeyVersion: encrypted.incidentNarrative!.keyVersion,
+            narrativeEncrypted: encrypted.incidentNarrative!.value,
+            occurredAt: details.occurredDate
+              ? new Date(`${details.occurredDate}T00:00:00.000Z`)
+              : null,
+            occurredDateUnknown,
+            injurySeverity: details.injurySeverity,
+            medicalTreatment: details.medicalTreatment,
+            usedAsIntended: details.usedAsIntended,
+            companyObtainedAt: submittedAt,
+          })
+          .returning({ id: incidents.id });
+        await tx
+          .insert(reportabilityReviews)
+          .values({ incidentId: incident!.id, status: 'pending' });
+      }
       await tx
         .update(documentUploads)
         .set({
@@ -451,6 +481,9 @@ export class DrizzleCaseService implements CaseService {
       addressLookupHash,
       snapshot,
       products,
+      ...(body.incidentDetails
+        ? { incidentNarrative: await this.crypto.encrypt(body.incidentDetails.narrative) }
+        : {}),
     };
   }
 }
