@@ -31,7 +31,8 @@ pnpm db:migrate
 APP_ENV=local ALLOW_SYNTHETIC_SEED=true pnpm db:seed
 ```
 
-不打算联调真实数据的前端同事可以**直接跳过数据库**，5 个 501 端点不影响前端骨架开发。
+不打算联调真实数据的前端同事可以**直接跳过数据库**；未配置数据库/Provider 的端点会返回 501，
+前端仍可用 mock 完成骨架开发。
 
 ## 3. 契约的来源与消费
 
@@ -91,10 +92,10 @@ CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
 在写前端代码前，建议先把 6 个端点都跑一遍，看清楚契约长什么样：
 
 ```bash
-# 唯一接 DB 的端点（需要先 seed）
+# Campaign 查询（需要先 seed）
 curl -i 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US'
 
-# 其余 5 个端点此时都会返回 501 application/problem+json
+# 未配置数据库或对应 Provider 的端点会返回 501 application/problem+json
 curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2026/claim-drafts'
 
 # 提交端点（带 Idempotency-Key 才能渲染完整的请求校验）
@@ -108,7 +109,8 @@ curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2
 
 ## 6. Phase 1 期间的 501 端点策略
 
-**现实**：Phase 1 后端只接了 1 个端点。剩下 5 个返回 `501 application/problem+json`（响应体符合 Problem Details 规范）。
+**现实**：Phase 1 后端按配置渐进启用数据库和 Provider。未配置的能力返回
+`501 application/problem+json`（响应体符合 Problem Details 规范）。
 
 前端有两条路：
 
@@ -116,7 +118,7 @@ curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2
 
 拿 `openapi-typescript` 生成的类型写代码。在前端进程里**拦截 501**，临时返回一组符合契约的成功 payload——这样 Phase 1 期间前端可以**完整跑完提交流程**，到 Phase 2 后端真接通时只删掉 mock 层。
 
-### 6.2 备选：前端只写 GET，前端 mock 5 端点
+### 6.2 备选：前端只写 GET，前端 mock 未启用端点
 
 通过 service worker / MSW / 直接在 fetch wrapper 里短路返回 stub。简单但 Phase 2 切换时容易漏改。
 
@@ -125,7 +127,7 @@ curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2
 ## 7. 明确边界
 
 - **不要 clone 后端仓库只为了读类型**——`src/generated/toc-v1.d.ts` 是 `.gitignore`，不会在仓库里出现。
-- **不要把 draftId / draftToken 写进 URL、Sentry、PostHog**——后端契约不允许丢日志。第三阶段补 draftToken 安全 playbook。
+- **不要把 draftId / draftToken / 上传 pathname 写进 URL、Sentry、PostHog**——后端契约不允许丢日志。第三阶段补 draftToken 安全 playbook。
 - **不要写死 `evidenceRequirements` 规则**——必须从 `GET /v1/recall-campaigns/{slug}` 响应里读 category / minimumFiles / mimeTypes，相应当前 Campaign 版本。
 - **不要假设 `emailStatus=queued` 等于邮件已送达**——这只是 Outbox 入队状态。Phase 1 不会真的发邮件。
 - **不要在提交后又改 `incidentAnswer` 又复用同一 `Idempotency-Key`**——后端会返回 409，要求"用户开始新申请"必须生成新 Key。

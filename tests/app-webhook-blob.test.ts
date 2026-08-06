@@ -106,7 +106,7 @@ describe('POST /webhooks/vercel-blob', () => {
     await expect(response.json()).resolves.toMatchObject({ status: 400 });
   });
 
-  it('still acks with 200 when reconciliation fails, so Vercel stops retrying', async () => {
+  it('returns 500 when reconciliation fails so Vercel can retry', async () => {
     const app = appWith(
       { handleUploadCallback: () => Promise.resolve(completion) },
       {
@@ -116,6 +116,6 @@ describe('POST /webhooks/vercel-blob', () => {
 
     const response = await postWebhook(app, completedEventBody);
 
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(500);
   });
 });

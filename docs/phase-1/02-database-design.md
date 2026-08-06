@@ -77,9 +77,9 @@ Campaign 主体。关键字段：唯一 `slug`、唯一内部 `code`、`status`�
 
 ### `document_uploads`
 
-Private Blob 元数据。保存内部 `storage_pathname`、原文件名、类别、声明/检测 MIME、大小、SHA-256、上传/扫描状态、上传/关联/过期时间。提交前由 `draft_id` 所有，提交后由 `case_id` 所有；至少一个 owner 必须存在。
+Private Blob 元数据。保存内部 `storage_pathname`、原文件名、类别、并发配额 `category_slot`、声明/检测 MIME、大小、SHA-256、上传/扫描状态、上传/关联/过期时间。提交前由 `draft_id` 所有，提交后由 `case_id` 所有；至少一个 owner 必须存在。
 
-重要索引与约束：pathname 唯一；`draft_id + upload_status` 支持提交校验；`case_id + category` 支持 Case 附件查询；`upload_status + expires_at` 支持孤立文件清理；大小为正；SHA-256 若存在必须是 64 位小写十六进制。
+重要索引与约束：pathname 唯一；`draft_id + category + category_slot` 唯一，原子限制并发授权数量；删除或拒绝时释放 slot；`draft_id + upload_status` 支持提交校验；`case_id + category` 支持 Case 附件查询；`upload_status + expires_at` 支持孤立文件清理；大小为正；SHA-256 若存在必须是 64 位小写十六进制。
 
 ## 5. Case、消费者和事故
 
@@ -131,7 +131,7 @@ Append-only 审计事件，保存 Case、事件类型、最小化 actor 信息�
 
 ### `webhook_events`
 
-按 `provider + provider_event_id` 唯一，适用于 Resend `svix-id` 和 Blob 事件 ID。保存事件类型、处理状态、原始 JSON payload、接收/完成时间和稳定错误码，支持至少一次投递下的去重处理。
+按 `provider + provider_event_id` 唯一，适用于 Resend `svix-id` 和 Blob 事件 ID。保存事件类型、处理状态、原始 JSON payload、接收/完成时间和稳定错误码。新事件原子领取为 `processing`；只有 `processed` 才跳过，`failed` 或因断线遗留的 `processing` 可被 Provider 重试重新领取。文档更新本身是幂等的，因此并发重复领取不会重复推进状态。
 
 ## 7. PostgreSQL enum
 

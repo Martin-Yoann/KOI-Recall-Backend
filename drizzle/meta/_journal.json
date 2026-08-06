@@ -15,6 +15,13 @@
       "when": 1785905512167,
       "tag": "0001_campaign_version_ownership",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785999599182,
+      "tag": "0002_dark_venus",
+      "breakpoints": true
     }
   ]
 }

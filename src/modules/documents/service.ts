@@ -9,7 +9,7 @@ import type { EvidenceCategory, UploadCompletion } from '../../platform/blob/por
  */
 export interface AuthorizedUpload {
   documentId: string;
-  uploadUrl: string;
+  pathname: string;
   clientToken: string;
   expiresAt: string;
 }

@@ -1,4 +1,4 @@
-import { handleUpload } from '@vercel/blob/client';
+import { generateClientTokenFromReadWriteToken, handleUpload } from '@vercel/blob/client';
 
 import type {
   PrivateBlobPort,
@@ -15,18 +15,14 @@ const CLIENT_TOKEN_TTL_MS = 60 * 60 * 1000;
  * exchange and completion callback behind {@link PrivateBlobPort} so domain
  * code never imports the SDK directly and stays testable without Vercel.
  *
- * The client-upload flow is a token exchange: the browser POSTs to the
- * `handleUploadUrl` (our `upload-tokens` route), the server mints a short-lived
- * token here, and the browser uploads directly to Blob with that token. When
- * the upload finishes, Vercel POSTs an `blob.upload-completed` event to the
- * `callbackUrl` (our `/webhooks/vercel-blob` route), processed via
+ * The client-upload flow returns a constrained token and pathname from our
+ * `upload-tokens` route. The browser passes both to `@vercel/blob/client`'s
+ * `put()` function and uploads directly to Blob. When the upload finishes,
+ * Vercel POSTs a `blob.upload-completed` event to the `callbackUrl`, processed via
  * {@link handleUploadCallback}.
  */
 export class VercelBlobAdapter implements PrivateBlobPort {
   /**
-   * @param handleUploadUrl The public route the browser calls to mint a token
-   *   (our `POST /v1/claim-drafts/{draftId}/upload-tokens`). Returned to the
-   *   client as `uploadUrl` so it knows where to request the token.
    * @param callbackUrl The route Vercel POSTs upload-completion events to
    *   (our `POST /webhooks/vercel-blob`). May be empty for local dev where
    *   Vercel cannot reach localhost; completion is then best-effort.
@@ -34,56 +30,34 @@ export class VercelBlobAdapter implements PrivateBlobPort {
    *   adapter works without explicit wiring on Vercel.
    */
   constructor(
-    private readonly handleUploadUrl: string,
     private readonly callbackUrl: string,
     private readonly token: string | undefined = process.env.BLOB_READ_WRITE_TOKEN,
   ) {}
 
   async authorizeClientUpload(request: UploadAuthorizationRequest): Promise<UploadAuthorization> {
     // The evidence-rule validation (size, MIME, counts) is performed by the
-    // domain DocumentService before this is called; `onBeforeGenerateToken`
-    // re-declares the accepted content type and size ceiling so Vercel Blob
-    // enforces them server-side as a second line of defense.
-    const options: Parameters<typeof handleUpload>[0] = {
-      body: {
-        type: 'blob.generate-client-token',
-        payload: {
-          pathname: blobPathname(request),
-          multipart: false,
-          clientPayload: JSON.stringify({ documentId: request.documentId }),
-        },
-      },
-      request: syntheticRequest(this.handleUploadUrl),
-      onBeforeGenerateToken: () => {
-        const base = {
-          allowedContentTypes: [request.mimeType],
-          maximumSizeInBytes: request.sizeBytes,
-          addRandomSuffix: true as const,
-          tokenPayload: JSON.stringify({ documentId: request.documentId }),
-        };
-        // `exactOptionalPropertyTypes` forbids `callbackUrl: undefined`, so only
-        // include the field when a real URL is configured.
-        const value = this.callbackUrl ? { ...base, callbackUrl: this.callbackUrl } : base;
-        return Promise.resolve(value);
-      },
-    };
-    if (this.token) options.token = this.token;
-
-    const response = await handleUpload(options);
-
-    if (response.type !== 'blob.generate-client-token') {
-      throw new Error(
-        `Vercel Blob returned an unexpected event type '${response.type}' during token generation.`,
-      );
-    }
+    // domain DocumentService before this is called; the signed token repeats
+    // the accepted content type and size ceiling so Vercel Blob enforces them
+    // server-side as a second line of defense.
+    const pathname = blobPathname(request);
+    const expiresAt = Date.now() + CLIENT_TOKEN_TTL_MS;
+    const tokenPayload = JSON.stringify({ documentId: request.documentId });
+    const clientToken = await generateClientTokenFromReadWriteToken({
+      pathname,
+      allowedContentTypes: [request.mimeType],
+      maximumSizeInBytes: request.sizeBytes,
+      addRandomSuffix: true,
+      validUntil: expiresAt,
+      ...(this.callbackUrl
+        ? { onUploadCompleted: { callbackUrl: this.callbackUrl, tokenPayload } }
+        : {}),
+      ...(this.token ? { token: this.token } : {}),
+    });
 
     return {
-      // The client uses the SDK's `upload()` with `handleUploadUrl` pointing
-      // here; we surface the route as uploadUrl so the contract field is a
-      // usable URL rather than an opaque token-only response.
-      uploadUrl: this.handleUploadUrl,
-      clientToken: response.clientToken,
-      expiresAt: new Date(Date.now() + CLIENT_TOKEN_TTL_MS).toISOString(),
+      pathname,
+      clientToken,
+      expiresAt: new Date(expiresAt).toISOString(),
     };
   }
 
@@ -147,11 +121,6 @@ function parseDocumentId(tokenPayload: string | null | undefined): string | unde
   } catch {
     return undefined;
   }
-}
-
-/** A minimal Request suitable for `handleUpload` signature verification. */
-function syntheticRequest(url: string): Request {
-  return new Request(url, { method: 'POST' });
 }
 
 /** Keeps the pathname component free of path separators and control chars. */

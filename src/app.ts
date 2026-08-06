@@ -327,14 +327,11 @@ export function createApp(dependencies: AppDependencies = {}) {
     } catch (error) {
       if (isConnectionError(error))
         return dependencyUnavailable(context, 'Private Blob upload callback');
-      consoleSafeLogger.error('Vercel Blob callback reconciliation failed', {
-        requestId: context.get('requestId'),
-        errorCode: error instanceof Error ? error.name : 'unknown',
-      });
+      throw error;
     }
 
-    // Always ack Vercel with 200 (even on internal reconciliation failure) so
-    // it stops retrying; the failure is recorded in webhook_events for review.
+    // Ack only after reconciliation succeeds (or identifies a fully processed
+    // duplicate). Failures surface as 5xx so Vercel can retry safely.
     return context.body(null, 200);
   });
   app.post('/webhooks/resend', (context) =>

@@ -16,7 +16,7 @@
 - 首期 locale 只接受 `en-US`。数据库允许未来加入 `es-US`；启用前端语言后更新 API enum。
 - `X-Request-Id`：可由客户端提供，也可由服务端生成；响应总会返回。
 - CORS：只允许配置的消费者站点 Origin，不允许 `*`。
-- 公开响应不会包含 Blob pathname、内部 Case UUID、密文、HMAC、Provider 错误正文或数据库顺序号。
+- 除一次性上传授权响应中的受限 `pathname` 外，公开响应不会包含 Blob 存储标识、内部 Case UUID、密文、HMAC、Provider 错误正文或数据库顺序号。
 
 Problem Details 示例：
 
@@ -176,13 +176,25 @@ X-Draft-Token: one-time-secret-with-at-least-32-characters
 ```json
 {
   "documentId": "a996d56a-da5e-49c3-bf76-665130bbb88a",
-  "uploadUrl": "https://blob-upload.example.invalid/client-upload",
+  "pathname": "drafts/21326c9a-5dc2-430f-98a6-546729a1065f/a996d56a-da5e-49c3-bf76-665130bbb88a/product-front.jpg",
   "clientToken": "short-lived-private-blob-token",
   "expiresAt": "2026-08-04T13:15:00.000Z"
 }
 ```
 
-前端用短期 `clientToken` 与 `uploadUrl` 调 `@vercel/blob/client` 的 `upload()` 直传 Private Blob。
+前端用短期 `clientToken` 与 `pathname` 调 `@vercel/blob/client` 的 `put()` 直传 Private Blob：
+
+```ts
+import { put } from '@vercel/blob/client';
+
+await put(authorization.pathname, file, {
+  access: 'private',
+  token: authorization.clientToken,
+  contentType: file.type,
+});
+```
+
+`pathname` 只用于这次上传，不得写入日志、分析事件或持久化到浏览器。
 申请提交前需等待上传回调/状态验证；`documentId` 是后续提交使用的唯一文件引用。服务端按 Draft
 绑定的 Campaign 版本校验类别、数量、MIME 和 `sizeBytes`（不满足分别返回 `413/415/422`），上传完成
 回调（`POST /webhooks/vercel-blob`）会用 `head()` 取到的实际元数据再次核对 MIME，不一致则置
@@ -327,4 +339,5 @@ Content-Type: application/json
 - `POST /webhooks/vercel-blob`
 - `POST /webhooks/resend`
 
-生产实现必须验证 Cron Secret、Blob callback token 和 Resend/Svix 签名，并使用 `webhook_events` 去重。
+生产实现必须验证 Cron Secret、Blob callback signature 和 Resend/Svix 签名，并使用 `webhook_events`
+的 `processing/processed/failed` 状态实现可重试去重；只有完成 reconciliation 后才确认 Blob 回调。

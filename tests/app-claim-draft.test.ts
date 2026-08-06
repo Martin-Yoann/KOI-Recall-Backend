@@ -141,7 +141,8 @@ const validUploadBody = {
 
 const authorized: AuthorizedUpload = {
   documentId: 'a996d56a-da5e-49c3-bf76-665130bbb88a',
-  uploadUrl: 'https://blob-upload.example.invalid/client-upload',
+  pathname:
+    'drafts/21326c9a-5dc2-430f-98a6-546729a1065f/a996d56a-da5e-49c3-bf76-665130bbb88a/product-front.jpg',
   clientToken: 'short-lived-private-blob-token',
   expiresAt: '2026-08-04T13:15:00.000Z',
 };
@@ -234,7 +235,7 @@ describe('POST /v1/claim-drafts/{draftId}/upload-tokens', () => {
   });
 
   it('returns 500 instead of a contract-invalid 201 response', async () => {
-    const invalid: AuthorizedUpload = { ...authorized, uploadUrl: 'not-a-url' };
+    const invalid: AuthorizedUpload = { ...authorized, pathname: '../not-safe' };
     const app = appWithDocuments({
       authorizeUpload: () => Promise.resolve(invalid),
       scheduleDraftDocumentDeletion: () => Promise.resolve(),

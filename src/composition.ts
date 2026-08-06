@@ -113,12 +113,9 @@ export function createApplicationRegistry(
  */
 function createBlobAdapter(config: AppConfig): PrivateBlobPort {
   if (!config.BLOB_READ_WRITE_TOKEN) return new NotImplementedPrivateBlobAdapter();
-  const handleUploadUrl =
-    config.BLOB_HANDLE_UPLOAD_URL || '/v1/claim-drafts/{draftId}/upload-tokens';
   // An empty callback URL signals local dev where Vercel cannot reach the host;
   // the adapter omits the callback option in that case.
   return new VercelBlobAdapter(
-    handleUploadUrl,
     config.BLOB_WEBHOOK_CALLBACK_URL ?? '',
     config.BLOB_READ_WRITE_TOKEN,
   );

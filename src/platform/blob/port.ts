@@ -11,7 +11,7 @@ export interface UploadAuthorizationRequest {
 }
 
 export interface UploadAuthorization {
-  uploadUrl: string;
+  pathname: string;
   clientToken: string;
   expiresAt: string;
 }

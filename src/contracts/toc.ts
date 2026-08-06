@@ -173,7 +173,11 @@ export const uploadTokenRequestSchema = z
 export const uploadTokenResponseSchema = z
   .object({
     documentId: uuid,
-    uploadUrl: z.string().url(),
+    pathname: z
+      .string()
+      .min(1)
+      .max(1024)
+      .regex(/^drafts\/[^/]+\/[^/]+\//),
     clientToken: z.string(),
     expiresAt: isoDateTime,
   })

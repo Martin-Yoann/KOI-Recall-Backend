@@ -545,12 +545,14 @@ components:
         expiresAt:
           format: date-time
           type: string
-        uploadUrl:
-          format: uri
+        pathname:
+          maxLength: 1024
+          minLength: 1
+          pattern: ^drafts\/[^/]+\/[^/]+\/
           type: string
       required:
         - documentId
-        - uploadUrl
+        - pathname
         - clientToken
         - expiresAt
       type: object

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, count, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 
 import type { Database } from '../../db/client.js';
 import {
@@ -21,12 +21,6 @@ import type { AuthorizeUploadInput, DocumentService, AuthorizedUpload } from './
 
 /** The full union of `document_uploads.upload_status` values. */
 type DocumentUploadStatus = (typeof documentUploadStatusEnum.enumValues)[number];
-
-/**
- * Statuses that represent a document still owned by an unsubmitted draft and
- * therefore still count toward the draft's per-category file limits.
- */
-const COUNTED_UPLOAD_STATUSES = ['authorized', 'uploaded', 'verified', 'linked'] as const;
 
 /**
  * Statuses eligible for soft deletion (advance to `deletion_pending`). Rows
@@ -93,49 +87,44 @@ export class DrizzleDocumentService implements DocumentService {
       );
     }
 
-    const countedStatuses = COUNTED_UPLOAD_STATUSES as unknown as DocumentUploadStatus[];
-    const [existing] = await db
-      .select({ counted: count() })
-      .from(documentUploads)
-      .where(
-        and(
-          eq(documentUploads.draftId, input.draftId),
-          eq(documentUploads.category, input.category),
-          inArray(documentUploads.uploadStatus, countedStatuses),
-        ),
-      );
-    if ((existing?.counted ?? 0) + 1 > rule.maximumFiles) {
+    const documentId = randomUUID();
+    // storagePathname is unique. This constrained upload target is returned
+    // once with the client token; the provider adds a random suffix and the
+    // callback replaces this provisional value with the final pathname.
+    const storagePathname = `drafts/${input.draftId}/${documentId}/${sanitizeFileName(input.fileName)}`;
+    const expiresAt = new Date(Date.now() + DOCUMENT_AUTHORIZATION_TTL_MS);
+
+    let inserted = false;
+    for (let categorySlot = 1; categorySlot <= rule.maximumFiles; categorySlot += 1) {
+      try {
+        const rows = await db
+          .insert(documentUploads)
+          .values({
+            id: documentId,
+            draftId: input.draftId,
+            category: input.category,
+            categorySlot,
+            storagePathname,
+            originalFileName: input.fileName,
+            declaredMimeType: input.mimeType,
+            sizeBytes: input.sizeBytes,
+            uploadStatus: 'authorized',
+            expiresAt,
+          })
+          .returning();
+        if (!rows[0]) throw new Error('Document upload insert returned no row.');
+        inserted = true;
+        break;
+      } catch (error) {
+        if (isUniqueViolation(error)) continue;
+        throw error;
+      }
+    }
+    if (!inserted) {
       throw new EvidenceRulesViolationError(
         `Category '${input.category}' accepts at most ${rule.maximumFiles} file(s) per draft.`,
       );
     }
-
-    const documentId = randomUUID();
-    // storagePathname is unique (uniqueIndex) and never exposed in any HTTP
-    // response; the random suffix on the blob object is added by the provider,
-    // but this deterministic prefix lets the callback reconcile the document.
-    const storagePathname = `drafts/${input.draftId}/${documentId}/${sanitizeFileName(input.fileName)}`;
-    const expiresAt = new Date(Date.now() + DOCUMENT_AUTHORIZATION_TTL_MS);
-
-    const inserted = await db
-      .insert(documentUploads)
-      .values({
-        id: documentId,
-        draftId: input.draftId,
-        category: input.category,
-        storagePathname,
-        originalFileName: input.fileName,
-        declaredMimeType: input.mimeType,
-        sizeBytes: input.sizeBytes,
-        uploadStatus: 'authorized',
-        expiresAt,
-      })
-      .returning();
-    // A missing row would indicate an unexpected driver/database state (e.g. a
-    // constraint we did not anticipate); surface it as a 500 rather than
-    // continuing to mint a blob token for an unpersisted document. We already
-    // generated `documentId`, so the row contents are not needed here.
-    if (!inserted[0]) throw new Error('Document upload insert returned no row.');
 
     let authorization;
     try {
@@ -168,7 +157,7 @@ export class DrizzleDocumentService implements DocumentService {
 
     return {
       documentId,
-      uploadUrl: authorization.uploadUrl,
+      pathname: authorization.pathname,
       clientToken: authorization.clientToken,
       expiresAt: authorization.expiresAt,
     };
@@ -191,7 +180,7 @@ export class DrizzleDocumentService implements DocumentService {
 
     await db
       .update(documentUploads)
-      .set({ uploadStatus: 'deletion_pending', updatedAt: sql`now()` })
+      .set({ uploadStatus: 'deletion_pending', categorySlot: null, updatedAt: sql`now()` })
       .where(eq(documentUploads.id, documentId))
       .execute();
   }
@@ -202,55 +191,111 @@ export class DrizzleDocumentService implements DocumentService {
   ): Promise<boolean> {
     const db = this.db;
 
-    // Deduplication: the (provider, providerEventId) unique index makes a
-    // duplicate insert fail with SQLSTATE 23505. Neon HTTP has no interactive
-    // transactions, so we insert first; a unique violation means Vercel
-    // redelivered an event we already handled.
-    try {
-      await db.insert(webhookEvents).values({
+    // Atomically claim a new or retryable event. An event already marked
+    // processed does not satisfy setWhere, so RETURNING is empty
+    // and the duplicate can be acknowledged without doing work twice. A stale
+    // processing row is reclaimable because recording a failure can itself be
+    // interrupted by a database outage.
+    const [claimedEvent] = await db
+      .insert(webhookEvents)
+      .values({
         provider: 'vercel-blob',
         providerEventId: event.providerEventId,
         eventType: event.eventType,
         payload: event.payload,
-      });
+        status: 'processing',
+      })
+      .onConflictDoUpdate({
+        target: [webhookEvents.provider, webhookEvents.providerEventId],
+        set: {
+          status: 'processing',
+          payload: event.payload,
+          lastErrorCode: null,
+        },
+        setWhere: inArray(webhookEvents.status, ['received', 'processing', 'failed']),
+      })
+      .returning();
+    if (!claimedEvent) return false;
+
+    try {
+      // Reconcile the document row. A divergence between the declared and
+      // detected media type rejects the upload rather than surfacing it to the
+      // claim submit transaction.
+      const [document] = await db
+        .select({
+          declaredMimeType: documentUploads.declaredMimeType,
+          status: documentUploads.uploadStatus,
+        })
+        .from(documentUploads)
+        .where(eq(documentUploads.id, completion.documentId))
+        .limit(1);
+
+      if (
+        document &&
+        (document.status === 'authorized' || document.status === 'deletion_pending')
+      ) {
+        const deletionRequested = document.status === 'deletion_pending';
+        const rejected =
+          !!document.declaredMimeType && document.declaredMimeType !== completion.detectedMimeType;
+        await db
+          .update(documentUploads)
+          .set({
+            uploadStatus: deletionRequested
+              ? 'deletion_pending'
+              : rejected
+                ? 'rejected'
+                : 'verified',
+            ...(deletionRequested || rejected ? { categorySlot: null } : {}),
+            storagePathname: completion.pathname,
+            detectedMimeType: completion.detectedMimeType,
+            sizeBytes: completion.sizeBytes,
+            uploadedAt: sql`now()`,
+            updatedAt: sql`now()`,
+          })
+          .where(eq(documentUploads.id, completion.documentId))
+          .execute();
+      }
+
+      await db
+        .update(webhookEvents)
+        .set({
+          status: 'processed',
+          processedAt: sql`now()`,
+          lastErrorCode: null,
+        })
+        .where(eq(webhookEvents.id, claimedEvent.id))
+        .execute();
+
+      return true;
     } catch (error) {
-      if (isUniqueViolation(error)) return false;
+      await db
+        .update(webhookEvents)
+        .set({
+          status: 'failed',
+          lastErrorCode: errorCode(error),
+        })
+        .where(eq(webhookEvents.id, claimedEvent.id))
+        .execute()
+        .catch((statusError) => {
+          console.error('Failed to record Vercel Blob webhook failure', {
+            providerEventId: event.providerEventId,
+            name: statusError instanceof Error ? statusError.name : 'unknown',
+          });
+        });
       throw error;
     }
-
-    // Reconcile the document row. A divergence between the declared and
-    // detected media type rejects the upload rather than surfacing it to the
-    // claim submit transaction.
-    const [document] = await db
-      .select({
-        declaredMimeType: documentUploads.declaredMimeType,
-        status: documentUploads.uploadStatus,
-      })
-      .from(documentUploads)
-      .where(eq(documentUploads.id, completion.documentId))
-      .limit(1);
-
-    if (document && document.status === 'authorized') {
-      const rejected =
-        !!document.declaredMimeType && document.declaredMimeType !== completion.detectedMimeType;
-      await db
-        .update(documentUploads)
-        .set({
-          uploadStatus: rejected ? 'rejected' : 'verified',
-          detectedMimeType: completion.detectedMimeType,
-          sizeBytes: completion.sizeBytes,
-          uploadedAt: sql`now()`,
-          updatedAt: sql`now()`,
-        })
-        .where(eq(documentUploads.id, completion.documentId))
-        .execute();
-    }
-
-    return true;
   }
 }
 
 /** Keeps the storage path component free of path separators and control chars. */
 function sanitizeFileName(fileName: string): string {
   return fileName.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, 120) || 'file';
+}
+
+function errorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code.slice(0, 100);
+  }
+  return (error instanceof Error ? error.name : 'unknown').slice(0, 100);
 }
