@@ -15,6 +15,7 @@ import {
   documentUploads,
   incidents,
   outboxEvents,
+  recallCases,
   reportabilityReviews,
 } from '../src/db/schema/index.js';
 import { DrizzleCaseService } from '../src/modules/cases/drizzle-case-service.js';
@@ -173,22 +174,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   });
 
   afterEach(async () => {
-    if (fixture) {
-      const incidentRows = await handle!.db
-        .select({ id: incidents.id })
-        .from(incidents)
-        .innerJoin(claimDrafts, eq(claimDrafts.submittedCaseId, incidents.caseId))
-        .where(eq(claimDrafts.id, fixture.draftId));
-      if (incidentRows.length > 0) {
-        await handle!.db.delete(reportabilityReviews).where(
-          inArray(
-            reportabilityReviews.incidentId,
-            incidentRows.map((incident) => incident.id),
-          ),
-        );
-      }
-      await cleanupClaimFixture(handle!, fixture);
-    }
+    if (fixture) await cleanupClaimFixture(handle!, fixture);
     fixture = undefined;
   });
 
@@ -222,12 +208,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(aggregate.outbox).toHaveLength(1);
     expect(aggregate.idempotency).toHaveLength(1);
     expect(aggregate.incidents).toHaveLength(0);
-    const reviews = await handle!.db
-      .select()
-      .from(reportabilityReviews)
-      .innerJoin(incidents, eq(incidents.id, reportabilityReviews.incidentId))
-      .where(eq(incidents.caseId, aggregate.case.id));
-    expect(reviews).toHaveLength(0);
+    expect(aggregate.reviews).toHaveLength(0);
     expect(aggregate.consumers[0]?.emailLookupHash).toBe(
       await crypto.lookupHash('taylor@example.com'),
     );
@@ -261,6 +242,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   });
 
   it('persists yes as an encrypted incident with pending review', async () => {
+    const narrative = 'A fictional minor injury occurred during use.';
     const result = await new DrizzleCaseService(handle!, crypto).submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
@@ -268,7 +250,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
         incidentAnswer: 'yes',
         incidentDetails: {
           eventTypes: ['injury'],
-          narrative: 'A fictional minor injury occurred during use.',
+          narrative,
           occurredDateUnknown: true,
           injurySeverity: 'minor',
           medicalTreatment: 'first_aid',
@@ -277,10 +259,6 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     });
 
     const aggregate = await loadAggregate(handle!, result.caseReference);
-    const reviews = await handle!.db
-      .select()
-      .from(reportabilityReviews)
-      .where(eq(reportabilityReviews.incidentId, aggregate.incidents[0]!.id));
     expect(aggregate.case.subtype).toBe('injury_hazard');
     expect(aggregate.case.incidentFlag).toBe(true);
     expect(aggregate.incidents[0]).toMatchObject({
@@ -288,43 +266,53 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       eventTypes: ['injury'],
       occurredDateUnknown: true,
     });
-    expect(reviews[0]).toMatchObject({
+    expect(aggregate.reviews[0]).toMatchObject({
       status: 'pending',
       decisionAt: null,
       cpscReference: null,
     });
-    expect(JSON.stringify(aggregate.incidents[0])).not.toContain('fictional minor injury');
+    await expect(
+      crypto.decrypt({
+        keyVersion: aggregate.incidents[0]!.narrativeKeyVersion,
+        value: aggregate.incidents[0]!.narrativeEncrypted,
+      }),
+    ).resolves.toBe(narrative);
+    expect(JSON.stringify(aggregate)).not.toContain(narrative);
   });
 
   it('normalizes unsure without event type or date and routes to triage', async () => {
+    const narrative = 'The consumer is unsure whether a safety incident occurred.';
     const result = await new DrizzleCaseService(handle!, crypto).submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
       body: fixture!.body({
         incidentAnswer: 'unsure',
         incidentDetails: {
-          narrative: 'The consumer is unsure whether a safety incident occurred.',
+          narrative,
           occurredDateUnknown: false,
         },
       }),
     });
 
     const aggregate = await loadAggregate(handle!, result.caseReference);
-    const reviews = await handle!.db
-      .select()
-      .from(reportabilityReviews)
-      .where(eq(reportabilityReviews.incidentId, aggregate.incidents[0]!.id));
     expect(aggregate.case.status).toBe('triage');
     expect(aggregate.incidents[0]).toMatchObject({
       answer: 'unsure',
       eventTypes: ['unknown'],
       occurredDateUnknown: true,
     });
-    expect(reviews[0]).toMatchObject({
+    expect(aggregate.reviews[0]).toMatchObject({
       status: 'pending',
       decisionAt: null,
       cpscReference: null,
     });
+    await expect(
+      crypto.decrypt({
+        keyVersion: aggregate.incidents[0]!.narrativeKeyVersion,
+        value: aggregate.incidents[0]!.narrativeEncrypted,
+      }),
+    ).resolves.toBe(narrative);
+    expect(JSON.stringify(aggregate)).not.toContain(narrative);
   });
 
   it.each(validationCases)('$name and leaves the Draft active', async ({ error, setup }) => {
@@ -445,7 +433,19 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
   it('rolls back the aggregate when the Outbox unique constraint rejects its event', async () => {
     const idempotencyKey = randomUUID();
-    const command = fixture!.command({ idempotencyKey });
+    const command = fixture!.command({
+      idempotencyKey,
+      body: fixture!.body({
+        incidentAnswer: 'yes',
+        incidentDetails: {
+          eventTypes: ['injury'],
+          narrative: 'An incident that must roll back after the Outbox failure.',
+          occurredDateUnknown: true,
+          injurySeverity: 'minor',
+          medicalTreatment: 'first_aid',
+        },
+      }),
+    });
     const keyHash = await crypto.lookupHash(idempotencyKey);
     const deduplicationKey = `claim-confirmation:${keyHash}`;
     await handle!.db.insert(outboxEvents).values({
@@ -462,6 +462,14 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       });
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
+      const rolledBackIncidentReviews = await handle!.db
+        .select({ incidentId: incidents.id, reviewId: reportabilityReviews.id })
+        .from(incidents)
+        .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
+        .innerJoin(claimDrafts, eq(claimDrafts.submittedCaseId, recallCases.id))
+        .leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id))
+        .where(eq(claimDrafts.id, fixture!.draftId));
+      expect(rolledBackIncidentReviews).toHaveLength(0);
 
       const documents = await handle!.db
         .select({

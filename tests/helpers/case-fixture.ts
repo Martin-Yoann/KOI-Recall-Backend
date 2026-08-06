@@ -16,6 +16,7 @@ import {
   incidents,
   outboxEvents,
   recallCases,
+  reportabilityReviews,
   submissionSnapshots,
 } from '../../src/db/schema/index.js';
 import { DrizzleClaimDraftService } from '../../src/modules/claim-drafts/drizzle-claim-draft-service.js';
@@ -169,6 +170,18 @@ export async function loadAggregate(handle: DatabaseHandle, caseReference: strin
     handle.db.select().from(outboxEvents).where(eq(outboxEvents.aggregateId, caseId)),
     handle.db.select().from(idempotencyRecords).where(eq(idempotencyRecords.caseId, caseId)),
   ]);
+  const reviews =
+    incidentRows.length > 0
+      ? await handle.db
+          .select()
+          .from(reportabilityReviews)
+          .where(
+            inArray(
+              reportabilityReviews.incidentId,
+              incidentRows.map((incident) => incident.id),
+            ),
+          )
+      : [];
 
   return {
     case: caseRow,
@@ -179,6 +192,7 @@ export async function loadAggregate(handle: DatabaseHandle, caseReference: strin
     consents,
     snapshots,
     incidents: incidentRows,
+    reviews,
     events,
     communications: communicationRows,
     outbox,
@@ -225,10 +239,22 @@ export async function cleanupClaimFixture(
   const caseIds = draft?.submittedCaseId ? [draft.submittedCaseId] : [];
 
   if (caseIds.length > 0) {
+    const incidentRows = await handle.db
+      .select({ id: incidents.id })
+      .from(incidents)
+      .where(inArray(incidents.caseId, caseIds));
     await handle.db.delete(idempotencyRecords).where(inArray(idempotencyRecords.caseId, caseIds));
     await handle.db.delete(outboxEvents).where(inArray(outboxEvents.aggregateId, caseIds));
     await handle.db.delete(communications).where(inArray(communications.caseId, caseIds));
     await handle.db.delete(caseEvents).where(inArray(caseEvents.caseId, caseIds));
+    if (incidentRows.length > 0) {
+      await handle.db.delete(reportabilityReviews).where(
+        inArray(
+          reportabilityReviews.incidentId,
+          incidentRows.map((incident) => incident.id),
+        ),
+      );
+    }
     await handle.db.delete(incidents).where(inArray(incidents.caseId, caseIds));
     await handle.db.delete(submissionSnapshots).where(inArray(submissionSnapshots.caseId, caseIds));
     await handle.db.delete(caseConsents).where(inArray(caseConsents.caseId, caseIds));
