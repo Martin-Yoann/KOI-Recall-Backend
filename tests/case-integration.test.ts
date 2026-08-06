@@ -14,6 +14,7 @@ import {
   caseConsumers,
   claimDrafts,
   documentUploads,
+  idempotencyRecords,
   incidents,
   outboxEvents,
   recallCases,
@@ -22,6 +23,7 @@ import {
 import { DrizzleCaseService } from '../src/modules/cases/drizzle-case-service.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 import {
+  ClaimConflictError,
   ClaimValidationError,
   DraftExpiredOrInvalidError,
   ResourceNotFoundError,
@@ -43,6 +45,59 @@ const crypto = new NodeSensitiveDataCrypto(
   Buffer.alloc(32, 1).toString('base64'),
   Buffer.alloc(32, 2).toString('base64'),
 );
+
+function withTransactionBarrier(base: DatabaseHandle, parties = 2): DatabaseHandle {
+  let arrivals = 0;
+  let release!: () => void;
+  const allArrived = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const transaction: DatabaseHandle['transaction'] = async (work) => {
+    arrivals += 1;
+    if (arrivals === parties) release();
+    await allArrived;
+    return base.transaction(work);
+  };
+  return { ...base, transaction };
+}
+
+async function countCasesForEmail(email: string): Promise<number> {
+  const emailLookupHash = await crypto.lookupHash(email);
+  const rows = await handle!.db
+    .select({ id: recallCases.id })
+    .from(recallCases)
+    .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+    .where(eq(caseConsumers.emailLookupHash, emailLookupHash));
+  return rows.length;
+}
+
+function uniqueCaseReference(): string {
+  const token = randomUUID().replaceAll('-', '').toUpperCase();
+  return `KOI-${token.slice(0, 4)}-${token.slice(4, 12)}`;
+}
+
+async function insertReferenceCollisions(draftId: string, references: string[]): Promise<string[]> {
+  const [draft] = await handle!.db
+    .select({
+      campaignId: claimDrafts.campaignId,
+      campaignVersionId: claimDrafts.campaignVersionId,
+    })
+    .from(claimDrafts)
+    .where(eq(claimDrafts.id, draftId));
+  if (!draft) throw new Error('Fixture Draft was not found.');
+
+  const caseIds = references.map(() => randomUUID());
+  await handle!.db.insert(recallCases).values(
+    references.map((publicReference, index) => ({
+      id: caseIds[index]!,
+      publicReference,
+      campaignId: draft.campaignId,
+      campaignVersionId: draft.campaignVersionId,
+      submittedAt: new Date(),
+    })),
+  );
+  return caseIds;
+}
 
 type ValidationSetup = (fixture: ClaimFixture) => Promise<{
   command: ReturnType<ClaimFixture['command']>;
@@ -240,6 +295,185 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(stored).not.toContain('100 Example Street');
     expect(stored).not.toContain('ORDER-10001');
     expect(stored).not.toContain(fixture!.draftToken);
+  });
+
+  it('replays the original response for the same key and canonical request', async () => {
+    const service = new DrizzleCaseService(handle!, crypto);
+    const idempotencyKey = randomUUID();
+    const command = fixture!.command({ idempotencyKey });
+
+    const first = await service.submit(command);
+    const replay = await service.submit({
+      ...command,
+      body: {
+        ...command.body,
+        consumer: {
+          ...command.body.consumer,
+          mailingAddress: { ...command.body.consumer.mailingAddress },
+        },
+      },
+    });
+
+    expect(replay).toEqual(first);
+    await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
+    const [stored] = await handle!.db
+      .select()
+      .from(idempotencyRecords)
+      .where(
+        eq(idempotencyRecords.caseId, (await loadAggregate(handle!, first.caseReference)).case.id),
+      );
+    expect(stored?.responseBody).toEqual(first);
+    const serialized = JSON.stringify(stored);
+    expect(serialized).not.toContain(idempotencyKey);
+    expect(serialized).not.toContain(fixture!.draftToken);
+    expect(serialized).not.toContain(command.body.consumer.email);
+    expect(serialized).not.toContain(command.body.consumer.mailingAddress.line1);
+    expect(serialized).not.toContain(command.body.products[0]!.orderNumber!);
+  });
+
+  it('returns 409 when a key is reused with a different request', async () => {
+    const service = new DrizzleCaseService(handle!, crypto);
+    const command = fixture!.command({ idempotencyKey: randomUUID() });
+    await service.submit(command);
+
+    await expect(
+      service.submit({
+        ...command,
+        body: { ...command.body, remedyCode: 'refund' },
+      }),
+    ).rejects.toBeInstanceOf(ClaimConflictError);
+    await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
+  });
+
+  it('creates exactly one aggregate for concurrent submission of one Draft', async () => {
+    const email = `same-draft-${randomUUID()}@example.com`;
+    const body = fixture!.body({
+      consumer: { ...fixture!.body().consumer, email },
+    });
+    const service = new DrizzleCaseService(withTransactionBarrier(handle!), crypto);
+
+    const results = await Promise.allSettled([
+      service.submit(fixture!.command({ idempotencyKey: randomUUID(), body })),
+      service.submit(fixture!.command({ idempotencyKey: randomUUID(), body })),
+    ]);
+
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result) => result.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.reason).toBeInstanceOf(DraftExpiredOrInvalidError);
+    await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
+    await expect(countCasesForEmail(email)).resolves.toBe(1);
+
+    const aggregate = await loadAggregate(handle!, fulfilled[0]!.value.caseReference);
+    expect(aggregate.consumers).toHaveLength(1);
+    expect(aggregate.products).toHaveLength(1);
+    expect(aggregate.documents).toHaveLength(2);
+    expect(aggregate.snapshots).toHaveLength(1);
+    expect(aggregate.events).toHaveLength(1);
+    expect(aggregate.communications).toHaveLength(1);
+    expect(aggregate.outbox).toHaveLength(1);
+    expect(aggregate.idempotency).toHaveLength(1);
+  });
+
+  it('replays one result for concurrent requests with the same key and body', async () => {
+    const email = `same-key-${randomUUID()}@example.com`;
+    const command = fixture!.command({
+      idempotencyKey: randomUUID(),
+      body: fixture!.body({ consumer: { ...fixture!.body().consumer, email } }),
+    });
+    const service = new DrizzleCaseService(withTransactionBarrier(handle!), crypto);
+
+    const [first, second] = await Promise.all([service.submit(command), service.submit(command)]);
+
+    expect(second).toEqual(first);
+    await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
+    await expect(countCasesForEmail(email)).resolves.toBe(1);
+    const aggregate = await loadAggregate(handle!, first.caseReference);
+    expect(aggregate.idempotency).toHaveLength(1);
+    expect(aggregate.outbox).toHaveLength(1);
+  });
+
+  it('allows only one winner when one key is used concurrently for different Drafts', async () => {
+    const secondFixture = await createClaimFixture(handle!);
+    const idempotencyKey = randomUUID();
+    const firstEmail = `first-${randomUUID()}@example.com`;
+    const secondEmail = `second-${randomUUID()}@example.com`;
+    const service = new DrizzleCaseService(withTransactionBarrier(handle!), crypto);
+
+    try {
+      const results = await Promise.allSettled([
+        service.submit(
+          fixture!.command({
+            idempotencyKey,
+            body: fixture!.body({ consumer: { ...fixture!.body().consumer, email: firstEmail } }),
+          }),
+        ),
+        service.submit(
+          secondFixture.command({
+            idempotencyKey,
+            body: secondFixture.body({
+              consumer: { ...secondFixture.body().consumer, email: secondEmail },
+            }),
+          }),
+        ),
+      ]);
+
+      const fulfilled = results.filter((result) => result.status === 'fulfilled');
+      const rejected = results.filter((result) => result.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.reason).toBeInstanceOf(ClaimConflictError);
+      expect((await countCasesForEmail(firstEmail)) + (await countCasesForEmail(secondEmail))).toBe(
+        1,
+      );
+    } finally {
+      await cleanupClaimFixture(handle!, secondFixture);
+    }
+  });
+
+  it('retries a public Case Reference collision before dependent writes', async () => {
+    const collisionReference = uniqueCaseReference();
+    const freshReference = uniqueCaseReference();
+    const collisionCaseIds = await insertReferenceCollisions(fixture!.draftId, [
+      collisionReference,
+    ]);
+    const generated = [collisionReference, freshReference];
+    const service = new DrizzleCaseService(handle!, crypto, () => generated.shift()!);
+
+    try {
+      const result = await service.submit(fixture!.command());
+
+      expect(result.caseReference).toBe(freshReference);
+      expect(generated).toHaveLength(0);
+      const aggregate = await loadAggregate(handle!, freshReference);
+      expect(aggregate.consumers).toHaveLength(1);
+      expect(aggregate.idempotency).toHaveLength(1);
+    } finally {
+      await handle!.db.delete(recallCases).where(inArray(recallCases.id, collisionCaseIds));
+    }
+  });
+
+  it('fails after three public Case Reference collisions and leaves the Draft active', async () => {
+    const collisionReferences = [
+      uniqueCaseReference(),
+      uniqueCaseReference(),
+      uniqueCaseReference(),
+    ];
+    const collisionCaseIds = await insertReferenceCollisions(fixture!.draftId, collisionReferences);
+    const generated = [...collisionReferences];
+    const service = new DrizzleCaseService(handle!, crypto, () => generated.shift()!);
+
+    try {
+      await expect(service.submit(fixture!.command())).rejects.toThrow(
+        'Unable to allocate a unique Case Reference.',
+      );
+      expect(generated).toHaveLength(0);
+      await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
+      await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
+    } finally {
+      await handle!.db.delete(recallCases).where(inArray(recallCases.id, collisionCaseIds));
+    }
   });
 
   it('persists yes as an encrypted incident with pending review', async () => {

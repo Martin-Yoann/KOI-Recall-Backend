@@ -7,7 +7,7 @@ import {
   type ClaimSubmissionRequest,
   type ClaimSubmissionResponse,
 } from '../../contracts/toc.js';
-import type { DatabaseHandle } from '../../db/client.js';
+import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
   campaignEvidenceRequirements,
   campaignMessageTemplates,
@@ -50,6 +50,36 @@ import {
 import type { CaseService, ClaimSubmissionCommand } from './service.js';
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+const IDEMPOTENCY_UNIQUE_CONSTRAINT = 'idempotency_records_endpoint_key_uidx';
+const CASE_REFERENCE_ATTEMPTS = 3;
+const MAX_ERROR_OBJECTS = 64;
+
+function isPostgresUniqueConstraint(error: unknown, constraint: string): boolean {
+  const candidates: unknown[] = [error];
+  const visited = new Set<object>();
+  let examined = 0;
+
+  while (candidates.length > 0 && examined < MAX_ERROR_OBJECTS) {
+    const candidate = candidates.shift();
+    if (typeof candidate !== 'object' || candidate === null || visited.has(candidate)) continue;
+    visited.add(candidate);
+    examined += 1;
+
+    const record = candidate as {
+      code?: unknown;
+      constraint?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    if (record.code === '23505' && record.constraint === constraint) return true;
+    if (record.cause !== undefined) candidates.push(record.cause);
+    if (Array.isArray(record.errors)) {
+      for (const nestedError of record.errors as unknown[]) candidates.push(nestedError);
+    }
+  }
+
+  return false;
+}
 
 interface EncryptedProduct {
   orderNumber?: Ciphertext;
@@ -73,6 +103,7 @@ export class DrizzleCaseService implements CaseService {
   constructor(
     private readonly handle: DatabaseHandle,
     private readonly crypto: SensitiveDataCryptoPort,
+    private readonly referenceGenerator: () => string = generateCaseReference,
   ) {}
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
@@ -85,7 +116,7 @@ export class DrizzleCaseService implements CaseService {
     const encrypted = await this.encryptSubmission(command.body);
     const submittedAt = new Date();
 
-    return this.handle.transaction(async (tx) => {
+    const transaction = this.handle.transaction(async (tx) => {
       const [locked] = await tx
         .select({
           draftId: claimDrafts.id,
@@ -123,6 +154,8 @@ export class DrizzleCaseService implements CaseService {
         locked.draftStatus !== 'active' ||
         locked.expiresAt.getTime() <= submittedAt.getTime()
       ) {
+        const concurrentWinner = await this.findIdempotency(endpoint, keyHash, tx);
+        if (concurrentWinner) return this.replay(concurrentWinner, requestHash);
         throw new DraftExpiredOrInvalidError(
           'The draft token is invalid, or the draft is no longer active or has expired.',
         );
@@ -238,8 +271,32 @@ export class DrizzleCaseService implements CaseService {
           : 'submitted';
 
       const caseId = randomUUID();
-      const caseReference = generateCaseReference();
       const communicationId = randomUUID();
+      let caseReference: string | undefined;
+      for (let attempt = 0; attempt < CASE_REFERENCE_ATTEMPTS; attempt += 1) {
+        const candidate = this.referenceGenerator();
+        const [inserted] = await tx
+          .insert(recallCases)
+          .values({
+            id: caseId,
+            publicReference: candidate,
+            campaignId: locked.campaignId,
+            campaignVersionId: locked.campaignVersionId,
+            locale: command.body.locale,
+            subtype: hasIncident ? 'injury_hazard' : 'standard',
+            status: caseStatus,
+            incidentFlag: hasIncident,
+            submittedAt,
+          })
+          .onConflictDoNothing({ target: recallCases.publicReference })
+          .returning({ id: recallCases.id });
+        if (inserted) {
+          caseReference = candidate;
+          break;
+        }
+      }
+      if (!caseReference) throw new Error('Unable to allocate a unique Case Reference.');
+
       const response: ClaimSubmissionResponse = {
         caseReference,
         submittedAt: submittedAt.toISOString(),
@@ -247,17 +304,6 @@ export class DrizzleCaseService implements CaseService {
         nextStep: 'Keep this reference. We will email you after your claim has been received.',
       };
 
-      await tx.insert(recallCases).values({
-        id: caseId,
-        publicReference: caseReference,
-        campaignId: locked.campaignId,
-        campaignVersionId: locked.campaignVersionId,
-        locale: command.body.locale,
-        subtype: hasIncident ? 'injury_hazard' : 'standard',
-        status: caseStatus,
-        incidentFlag: hasIncident,
-        submittedAt,
-      });
       await tx.insert(caseConsumers).values({
         caseId,
         keyVersion: encrypted.firstName.keyVersion,
@@ -371,6 +417,15 @@ export class DrizzleCaseService implements CaseService {
       if (!template) {
         throw new Error('An active Claim confirmation template is required.');
       }
+      await tx.insert(idempotencyRecords).values({
+        endpoint,
+        keyHash,
+        requestHash,
+        statusCode: 201,
+        responseBody: { ...response },
+        caseId,
+        expiresAt: new Date(submittedAt.getTime() + IDEMPOTENCY_TTL_MS),
+      });
       await tx.insert(communications).values({
         id: communicationId,
         caseId,
@@ -388,22 +443,25 @@ export class DrizzleCaseService implements CaseService {
         deduplicationKey: `claim-confirmation:${keyHash}`,
         payload: { communicationId, caseId },
       });
-      await tx.insert(idempotencyRecords).values({
-        endpoint,
-        keyHash,
-        requestHash,
-        statusCode: 201,
-        responseBody: { ...response },
-        caseId,
-        expiresAt: new Date(submittedAt.getTime() + IDEMPOTENCY_TTL_MS),
-      });
-
       return response;
     });
+
+    try {
+      return await transaction;
+    } catch (error) {
+      if (!isPostgresUniqueConstraint(error, IDEMPOTENCY_UNIQUE_CONSTRAINT)) throw error;
+      const concurrentWinner = await this.findIdempotency(endpoint, keyHash);
+      if (!concurrentWinner) throw error;
+      return this.replay(concurrentWinner, requestHash);
+    }
   }
 
-  private async findIdempotency(endpoint: string, keyHash: string) {
-    const [record] = await this.handle.db
+  private async findIdempotency(
+    endpoint: string,
+    keyHash: string,
+    executor: DatabaseExecutor = this.handle.db,
+  ) {
+    const [record] = await executor
       .select({
         requestHash: idempotencyRecords.requestHash,
         responseBody: idempotencyRecords.responseBody,
