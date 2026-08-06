@@ -4,7 +4,7 @@
 
 本项目是独立的消费者召回 API，不修改现有静态 Demo。第一阶段的可验收目标是把公开 Campaign、商品预筛、匿名附件上传、申请提交入库和确认邮件排队串成稳定契约。
 
-当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册。其中 Campaign 查询、商品预筛和匿名 Draft 创建端点在配置 `DATABASE_URL` 时读写真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）；其余三个业务端点仍明确返回 `501 application/problem+json`。本次不接入 Vercel Blob、Resend，不部署 Vercel，不写真实凭证，不发送邮件。
+当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册。其中 Campaign 查询、商品预筛、匿名 Draft 创建、附件直传授权（`upload-tokens`）和附件删除端点在配置 `DATABASE_URL` 时读写真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）；附件直传在配置 `BLOB_READ_WRITE_TOKEN` 时接入 Vercel Private Blob（浏览器直传 + `/webhooks/vercel-blob` 完成回调回写 `document_uploads` 的 `verified`/`rejected`）。Claim 提交端点仍明确返回 `501 application/problem+json`。本次不接入 Resend，不部署 Vercel，不写真实凭证，不发送邮件。
 
 ## 2. 技术选型
 
@@ -64,7 +64,8 @@ openapi/                         # 代码生成的 ToC OpenAPI 3.1
 1. 按 `slug` 读取 `active` Campaign 和其 `published_version_id`。
 2. 从该版本读取英文本地化、商品/Lot、补救、附件要求。
 3. 生成基于 Campaign 版本的 ETag，响应 `Content-Language`。
-4. 只返回公开字段；不返回数据库内部 UUID 之外的存储标识、Blob pathname 或管理状态。
+4. 只返回公开字段；不返回数据库内部 UUID 之外的存储标识或管理状态。一次性上传授权可返回受限
+   pathname，供浏览器与短期 client token 一起使用。
 
 首版请求只接受 `en-US`。表结构允许直接插入 `es-US`；以后启用语言时更新契约和内容，不需要迁移数据库。
 
@@ -76,11 +77,14 @@ openapi/                         # 代码生成的 ToC OpenAPI 3.1
 
 1. 创建短期 `claim_drafts`，令牌只返回一次，库内只保存规范化哈希。
 2. 上传授权端点验证 Draft、Campaign 版本和附件规则。
-3. 服务端为唯一 pathname 签发短期 Client Upload token；文件不经过 Node Function。
-4. 回调验证签名、MIME、大小和 Blob 元数据，更新 `document_uploads`。
+3. 服务端为唯一 pathname 签发短期 Client Upload token；浏览器用 `put(pathname, file, { token })`
+   直传，文件不经过 Node Function。
+4. 回调验证签名、MIME、大小和 Blob 元数据，保存 Provider 最终 pathname，并更新
+   `document_uploads`；失败事件保持可重试。
 5. 提交前删除只把记录转为 `deletion_pending`；后台任务删除 Private Blob 和记录。
 
-Private Blob 的任何读取都必须经过授权服务端代理或签名 URL。日志和 API 响应不得暴露 `storage_pathname`。
+Private Blob 的任何读取都必须经过授权服务端代理或签名 URL。日志和普通 API 响应不得暴露
+`storage_pathname`；唯一例外是一次性上传授权返回的受限 pathname，前端不得记录或持久化。
 
 ### 5.4 Case 提交事务
 

@@ -5,6 +5,7 @@ import type { CaseService } from './modules/cases/service.js';
 import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-draft-service.js';
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
 import type { CommunicationService } from './modules/communications/service.js';
+import { DrizzleDocumentService } from './modules/documents/drizzle-document-service.js';
 import type { DocumentService } from './modules/documents/service.js';
 import type { IncidentService } from './modules/incidents/service.js';
 import { DrizzleProductCheckService } from './modules/product-checks/drizzle-product-check-service.js';
@@ -12,6 +13,7 @@ import type { ProductCheckService } from './modules/product-checks/service.js';
 import type { AppConfig } from './config/env.js';
 import { NotImplementedPrivateBlobAdapter } from './platform/blob/not-implemented.js';
 import type { PrivateBlobPort } from './platform/blob/port.js';
+import { VercelBlobAdapter } from './platform/blob/vercel-blob.js';
 import { NotImplementedCryptoAdapter } from './platform/crypto/not-implemented.js';
 import type { SensitiveDataCryptoPort } from './platform/crypto/port.js';
 import { NotImplementedEmailAdapter } from './platform/email/not-implemented.js';
@@ -59,6 +61,7 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
       documents: {
         authorizeUpload: () => unavailable('Private Blob upload authorization'),
         scheduleDraftDocumentDeletion: () => unavailable('Draft document deletion'),
+        reconcileCompletedUpload: () => unavailable('Private Blob upload callback reconciliation'),
       },
       cases: {
         submit: () => unavailable('Recall claim submission'),
@@ -79,11 +82,16 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
 }
 
 /**
- * Builds a registry where campaign retrieval, product checks, and anonymous
- * draft creation read from the database; every other Phase 1 capability stays
- * on the not-implemented placeholder.
+ * Builds a registry where campaign retrieval, product checks, anonymous draft
+ * creation, and draft document uploads read from the database; every other
+ * Phase 1 capability stays on the not-implemented placeholder. The blob
+ * adapter defaults to the not-implemented stub so callers without a configured
+ * Private Blob store still get a usable (501-on-blob-ops) registry.
  */
-export function createApplicationRegistry(handle: DatabaseHandle): ApplicationRegistry {
+export function createApplicationRegistry(
+  handle: DatabaseHandle,
+  blob: PrivateBlobPort = new NotImplementedPrivateBlobAdapter(),
+): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   return {
     services: {
@@ -91,9 +99,26 @@ export function createApplicationRegistry(handle: DatabaseHandle): ApplicationRe
       campaigns: new DrizzleCampaignService(handle.db),
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
+      documents: new DrizzleDocumentService(handle.db, blob),
     },
-    platform: placeholder.platform,
+    platform: { ...placeholder.platform, blob },
   };
+}
+
+/**
+ * Builds a Private Blob adapter from configuration. Returns the real Vercel
+ * adapter when a `BLOB_READ_WRITE_TOKEN` is configured; otherwise the
+ * not-implemented stub so the service still constructs (blob operations will
+ * surface 501/503 rather than crashing at startup).
+ */
+function createBlobAdapter(config: AppConfig): PrivateBlobPort {
+  if (!config.BLOB_READ_WRITE_TOKEN) return new NotImplementedPrivateBlobAdapter();
+  // An empty callback URL signals local dev where Vercel cannot reach the host;
+  // the adapter omits the callback option in that case.
+  return new VercelBlobAdapter(
+    config.BLOB_WEBHOOK_CALLBACK_URL ?? '',
+    config.BLOB_READ_WRITE_TOKEN,
+  );
 }
 
 /**
@@ -103,5 +128,5 @@ export function createApplicationRegistry(handle: DatabaseHandle): ApplicationRe
  */
 export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
   if (!config.DATABASE_URL) return createPlaceholderRegistry();
-  return createApplicationRegistry(createDatabase(config.DATABASE_URL));
+  return createApplicationRegistry(createDatabase(config.DATABASE_URL), createBlobAdapter(config));
 }

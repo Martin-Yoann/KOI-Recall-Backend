@@ -1,5 +1,7 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
+import { createHash } from 'node:crypto';
 import type { Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 
@@ -16,6 +18,7 @@ import {
   productCheckResponseSchema,
   productCheckRoute,
   submitClaimRoute,
+  uploadTokenResponseSchema,
 } from './contracts/toc.js';
 import {
   allowAllRateLimiter,
@@ -24,7 +27,11 @@ import {
 } from './middleware/rate-limit.js';
 import { requestContext, type AppEnv } from './middleware/request-context.js';
 import { consoleSafeLogger } from './platform/observability/logger.js';
-import { isConnectionError, NotImplementedServiceError } from './shared/errors.js';
+import {
+  HttpProblemError,
+  isConnectionError,
+  NotImplementedServiceError,
+} from './shared/errors.js';
 
 export interface AppDependencies {
   config?: AppConfig;
@@ -74,6 +81,19 @@ function dependencyUnavailable(context: Context<AppEnv>, capability: string): ne
     503,
     { 'Content-Type': 'application/problem+json' },
   ) as never;
+}
+
+/**
+ * Derives a stable provider event id from a Vercel Blob webhook payload for
+ * deduplication. Falls back to a JSON-derived digest when the payload carries
+ * no explicit id so redeliveries still collapse to one row.
+ */
+function deriveProviderEventId(payload: Record<string, unknown>): string {
+  const explicit = payload.id ?? payload.webhookId ?? payload.eventId;
+  if (typeof explicit === 'string' && explicit.length > 0) return explicit.slice(0, 200);
+  // Node's createHash gives a synchronous digest (WebCrypto's subtle.digest is
+  // async), matching the approach used for draft-token hashing.
+  return `sha256:${createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 48)}`;
 }
 
 export function createApp(dependencies: AppDependencies = {}) {
@@ -184,11 +204,20 @@ export function createApp(dependencies: AppDependencies = {}) {
       draftId,
       context.req.valid('header')['X-Draft-Token'],
     );
-    await registry.services.documents.authorizeUpload({
-      draftId,
-      ...context.req.valid('json'),
-    });
-    return notImplemented(context, 'Private Blob upload authorization');
+    let authorization;
+    try {
+      authorization = await registry.services.documents.authorizeUpload({
+        draftId,
+        ...context.req.valid('json'),
+      });
+    } catch (error) {
+      if (isConnectionError(error))
+        return dependencyUnavailable(context, 'Private Blob upload authorization');
+      throw error;
+    }
+
+    const response = uploadTokenResponseSchema.parse(authorization);
+    return context.json(response, 201);
   });
   app.openapi(deleteDraftDocumentRoute, async (context) => {
     const { draftId, documentId } = context.req.valid('param');
@@ -196,8 +225,15 @@ export function createApp(dependencies: AppDependencies = {}) {
       draftId,
       context.req.valid('header')['X-Draft-Token'],
     );
-    await registry.services.documents.scheduleDraftDocumentDeletion(draftId, documentId);
-    return notImplemented(context, 'Draft document deletion');
+    try {
+      await registry.services.documents.scheduleDraftDocumentDeletion(draftId, documentId);
+    } catch (error) {
+      if (isConnectionError(error))
+        return dependencyUnavailable(context, 'Draft document deletion');
+      throw error;
+    }
+
+    return context.body(null, 204);
   });
   app.openapi(submitClaimRoute, async (context) => {
     await registry.services.cases.submit({
@@ -218,11 +254,85 @@ export function createApp(dependencies: AppDependencies = {}) {
       'Content-Type': 'application/problem+json',
     }),
   );
-  app.post('/webhooks/vercel-blob', (context) =>
-    context.json(problem(context.get('requestId'), 'Vercel Blob callback processing'), 501, {
-      'Content-Type': 'application/problem+json',
-    }),
-  );
+  app.post('/webhooks/vercel-blob', async (context) => {
+    // Read the raw body once and hand the adapter a fresh Request built from
+    // it: the body stream is single-use, but the adapter must also read it to
+    // dispatch the completion event, and we need the parsed body for dedup.
+    const rawBody = await context.req.text();
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(rawBody) as Record<string, unknown>;
+    } catch {
+      return context.json(
+        {
+          type: 'https://api.example.invalid/problems/validation-error',
+          title: 'Invalid Request',
+          status: 400,
+          detail: 'The webhook payload was not valid JSON.',
+          requestId: context.get('requestId'),
+        },
+        400,
+        { 'Content-Type': 'application/problem+json' },
+      );
+    }
+
+    const replayed = new Request(context.req.raw.url, {
+      method: context.req.raw.method,
+      headers: context.req.raw.headers,
+      body: rawBody,
+      duplex: 'half',
+    });
+
+    // `handleUploadCallback` verifies the request signature and extracts
+    // completion metadata; token-generation events return null.
+    let completion;
+    try {
+      completion = await registry.platform.blob.handleUploadCallback(replayed);
+    } catch (error) {
+      if (isConnectionError(error))
+        return dependencyUnavailable(context, 'Private Blob upload callback');
+      // Signature verification failures and malformed payloads are reported to
+      // Vercel as 400 so it does not endlessly retry an undeliverable event.
+      consoleSafeLogger.error('Vercel Blob callback rejected', {
+        requestId: context.get('requestId'),
+        errorCode: error instanceof Error ? error.name : 'unknown',
+      });
+      return context.json(
+        {
+          type: 'https://api.example.invalid/problems/validation-error',
+          title: 'Invalid Request',
+          status: 400,
+          detail: 'The webhook payload could not be verified or processed.',
+          requestId: context.get('requestId'),
+        },
+        400,
+        { 'Content-Type': 'application/problem+json' },
+      );
+    }
+
+    if (!completion) {
+      // Not an upload-completion event (e.g. token generation routed here); ack
+      // so Vercel does not retry.
+      return context.body(null, 200);
+    }
+
+    const providerEventId = deriveProviderEventId(parsed);
+    try {
+      await registry.services.documents.reconcileCompletedUpload(completion, {
+        providerEventId,
+        eventType: 'blob.upload-completed',
+        payload: parsed,
+      });
+    } catch (error) {
+      if (isConnectionError(error))
+        return dependencyUnavailable(context, 'Private Blob upload callback');
+      throw error;
+    }
+
+    // Ack only after reconciliation succeeds (or identifies a fully processed
+    // duplicate). Failures surface as 5xx so Vercel can retry safely.
+    return context.body(null, 200);
+  });
   app.post('/webhooks/resend', (context) =>
     context.json(problem(context.get('requestId'), 'Resend webhook processing'), 501, {
       'Content-Type': 'application/problem+json',
@@ -251,6 +361,20 @@ export function createApp(dependencies: AppDependencies = {}) {
       return context.json(problem(context.get('requestId'), error.capability), 501, {
         'Content-Type': 'application/problem+json',
       });
+    }
+    if (error instanceof HttpProblemError) {
+      const status = error.status as ContentfulStatusCode;
+      return context.json(
+        {
+          type: error.type,
+          title: error.title,
+          status: error.status,
+          detail: error.message,
+          requestId: context.get('requestId'),
+        },
+        status,
+        { 'Content-Type': 'application/problem+json' },
+      );
     }
     consoleSafeLogger.error('Unhandled API error', {
       requestId: context.get('requestId'),

@@ -10,6 +10,8 @@ export default tseslint.config(
       'openapi/**',
       'eslint.config.js',
       'scripts/**',
+      // Vercel serverless entry shim; not part of the type-checked tsconfig project.
+      'api/**',
     ],
   },
   eslint.configs.recommended,

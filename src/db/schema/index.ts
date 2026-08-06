@@ -442,6 +442,7 @@ export const documentUploads = pgTable(
     draftId: uuid('draft_id').references(() => claimDrafts.id, { onDelete: 'set null' }),
     caseId: uuid('case_id').references(() => recallCases.id, { onDelete: 'cascade' }),
     category: evidenceCategoryEnum('category').notNull(),
+    categorySlot: integer('category_slot'),
     storagePathname: text('storage_pathname').notNull(),
     originalFileName: varchar('original_file_name', { length: 255 }).notNull(),
     declaredMimeType: varchar('declared_mime_type', { length: 120 }).notNull(),
@@ -457,6 +458,11 @@ export const documentUploads = pgTable(
   },
   (table) => [
     uniqueIndex('document_uploads_storage_pathname_uidx').on(table.storagePathname),
+    uniqueIndex('document_uploads_draft_category_slot_uidx').on(
+      table.draftId,
+      table.category,
+      table.categorySlot,
+    ),
     index('document_uploads_draft_status_idx').on(table.draftId, table.uploadStatus),
     index('document_uploads_case_category_idx').on(table.caseId, table.category),
     index('document_uploads_cleanup_idx').on(table.uploadStatus, table.expiresAt),
@@ -465,6 +471,10 @@ export const documentUploads = pgTable(
       sql`${table.draftId} is not null or ${table.caseId} is not null`,
     ),
     check('document_uploads_size_chk', sql`${table.sizeBytes} > 0`),
+    check(
+      'document_uploads_category_slot_chk',
+      sql`${table.categorySlot} is null or ${table.categorySlot} > 0`,
+    ),
     check(
       'document_uploads_sha256_format_chk',
       sql`${table.sha256} is null or ${table.sha256} ~ '^[a-f0-9]{64}$'`,

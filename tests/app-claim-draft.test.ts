@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import {
-  createApplicationRegistry,
-  createPlaceholderRegistry,
-  type ApplicationRegistry,
-} from '../src/composition.js';
+import { createPlaceholderRegistry, type ApplicationRegistry } from '../src/composition.js';
 import type { ClaimDraftResponse } from '../src/contracts/toc.js';
 import { loadConfig } from '../src/config/env.js';
-import type { Database } from '../src/db/client.js';
 import type { ClaimDraftService, CreatedClaimDraft } from '../src/modules/claim-drafts/service.js';
+import type { AuthorizedUpload, DocumentService } from '../src/modules/documents/service.js';
+import {
+  DraftExpiredOrInvalidError,
+  PayloadTooLargeError,
+  UnsupportedMediaTypeError,
+  EvidenceRulesViolationError,
+} from '../src/shared/errors.js';
 
 const draft: CreatedClaimDraft = {
   draftId: '21326c9a-5dc2-430f-98a6-546729a1065f',
@@ -39,13 +41,6 @@ function service(create: ClaimDraftService['create']): ClaimDraftService {
 async function createDraft(app: ReturnType<typeof appWith>) {
   return app.request('/v1/recall-campaigns/music-lollipop-demo-2026/claim-drafts', {
     method: 'POST',
-  });
-}
-
-function databaseBackedAppWithoutDatabaseIo() {
-  return createApp({
-    config: loadConfig({ CORS_ALLOWED_ORIGINS: 'https://consumer.example.com' }),
-    registry: createApplicationRegistry({ db: {} as Database }),
   });
 }
 
@@ -115,41 +110,154 @@ describe('POST /v1/recall-campaigns/{slug}/claim-drafts', () => {
   });
 });
 
-describe('database-backed claim draft placeholders', () => {
-  it('returns 501 for upload authorization while draft authentication is unimplemented', async () => {
-    const response = await databaseBackedAppWithoutDatabaseIo().request(
-      '/v1/claim-drafts/21326c9a-5dc2-430f-98a6-546729a1065f/upload-tokens',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Draft-Token': 'one-time-secret-with-at-least-32-characters',
-        },
-        body: JSON.stringify({
-          category: 'product_photo',
-          fileName: 'product-front.jpg',
-          mimeType: 'image/jpeg',
-          sizeBytes: 1024,
-        }),
-      },
+const DRAFT_ID = '21326c9a-5dc2-430f-98a6-546729a1065f';
+const DRAFT_TOKEN = 'one-time-secret-with-at-least-32-characters';
+
+function appWithDocuments(
+  documents: Pick<DocumentService, 'authorizeUpload' | 'scheduleDraftDocumentDeletion'>,
+  assertActive: ClaimDraftService['assertActive'] = () => Promise.resolve(),
+) {
+  const base = createPlaceholderRegistry();
+  const registry: ApplicationRegistry = {
+    services: {
+      ...base.services,
+      claimDrafts: { create: () => Promise.resolve(null), assertActive },
+      documents: documents as DocumentService,
+    },
+    platform: base.platform,
+  };
+  return createApp({
+    config: loadConfig({ CORS_ALLOWED_ORIGINS: 'https://consumer.example.com' }),
+    registry,
+  });
+}
+
+const validUploadBody = {
+  category: 'product_photo' as const,
+  fileName: 'product-front.jpg',
+  mimeType: 'image/jpeg',
+  sizeBytes: 1024,
+};
+
+const authorized: AuthorizedUpload = {
+  documentId: 'a996d56a-da5e-49c3-bf76-665130bbb88a',
+  pathname:
+    'drafts/21326c9a-5dc2-430f-98a6-546729a1065f/a996d56a-da5e-49c3-bf76-665130bbb88a/product-front.jpg',
+  clientToken: 'short-lived-private-blob-token',
+  expiresAt: '2026-08-04T13:15:00.000Z',
+};
+
+async function requestUploadToken(
+  app: ReturnType<typeof appWithDocuments>,
+  body: unknown = validUploadBody,
+) {
+  return app.request(`/v1/claim-drafts/${DRAFT_ID}/upload-tokens`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Draft-Token': DRAFT_TOKEN },
+    body: JSON.stringify(body),
+  });
+}
+
+describe('POST /v1/claim-drafts/{draftId}/upload-tokens', () => {
+  it('returns 201 with the authorized upload', async () => {
+    const response = await requestUploadToken(
+      appWithDocuments({
+        authorizeUpload: () => Promise.resolve(authorized),
+        scheduleDraftDocumentDeletion: () => Promise.resolve(),
+      }),
     );
 
-    expect(response.status).toBe(501);
-    await expect(response.json()).resolves.toMatchObject({ title: 'Not Implemented', status: 501 });
+    expect(response.status).toBe(201);
+    await expect(response.json()).resolves.toEqual(authorized);
   });
 
-  it('returns 501 for document deletion while draft authentication is unimplemented', async () => {
-    const response = await databaseBackedAppWithoutDatabaseIo().request(
-      '/v1/claim-drafts/21326c9a-5dc2-430f-98a6-546729a1065f/documents/a996d56a-da5e-49c3-bf76-665130bbb88a',
+  it('returns 410 when the draft token is invalid or expired', async () => {
+    const app = appWithDocuments(
       {
-        method: 'DELETE',
-        headers: {
-          'X-Draft-Token': 'one-time-secret-with-at-least-32-characters',
-        },
+        authorizeUpload: () => Promise.resolve(authorized),
+        scheduleDraftDocumentDeletion: () => Promise.resolve(),
       },
+      () => Promise.reject(new DraftExpiredOrInvalidError('expired')),
+    );
+    const response = await requestUploadToken(app);
+
+    expect(response.status).toBe(410);
+    expect(response.headers.get('Content-Type')).toContain('application/problem+json');
+    await expect(response.json()).resolves.toMatchObject({ status: 410, title: 'Gone' });
+  });
+
+  it('returns 413 when the file exceeds the size limit', async () => {
+    const app = appWithDocuments({
+      authorizeUpload: () => Promise.reject(new PayloadTooLargeError('too big')),
+      scheduleDraftDocumentDeletion: () => Promise.resolve(),
+    });
+    const response = await requestUploadToken(app);
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toMatchObject({ status: 413 });
+  });
+
+  it('returns 415 when the media type is not allowed', async () => {
+    const app = appWithDocuments({
+      authorizeUpload: () => Promise.reject(new UnsupportedMediaTypeError('not allowed')),
+      scheduleDraftDocumentDeletion: () => Promise.resolve(),
+    });
+    const response = await requestUploadToken(app);
+
+    expect(response.status).toBe(415);
+    await expect(response.json()).resolves.toMatchObject({ status: 415 });
+  });
+
+  it('returns 422 when evidence rules are violated', async () => {
+    const app = appWithDocuments({
+      authorizeUpload: () => Promise.reject(new EvidenceRulesViolationError('too many files')),
+      scheduleDraftDocumentDeletion: () => Promise.resolve(),
+    });
+    const response = await requestUploadToken(app);
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({ status: 422 });
+  });
+
+  it('returns 503 when a dependency is unavailable', async () => {
+    const app = appWithDocuments({
+      authorizeUpload: () =>
+        Promise.reject(Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' })),
+      scheduleDraftDocumentDeletion: () => Promise.resolve(),
+    });
+    const response = await requestUploadToken(app);
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      title: 'Dependency Unavailable',
+      status: 503,
+    });
+  });
+
+  it('returns 500 instead of a contract-invalid 201 response', async () => {
+    const invalid: AuthorizedUpload = { ...authorized, pathname: '../not-safe' };
+    const app = appWithDocuments({
+      authorizeUpload: () => Promise.resolve(invalid),
+      scheduleDraftDocumentDeletion: () => Promise.resolve(),
+    });
+    const response = await requestUploadToken(app);
+
+    expect(response.status).toBe(500);
+  });
+});
+
+describe('DELETE /v1/claim-drafts/{draftId}/documents/{documentId}', () => {
+  it('returns 204 when the document is scheduled for deletion', async () => {
+    const app = appWithDocuments({
+      authorizeUpload: () => Promise.resolve(authorized),
+      scheduleDraftDocumentDeletion: () => Promise.resolve(),
+    });
+    const response = await app.request(
+      `/v1/claim-drafts/${DRAFT_ID}/documents/a996d56a-da5e-49c3-bf76-665130bbb88a`,
+      { method: 'DELETE', headers: { 'X-Draft-Token': DRAFT_TOKEN } },
     );
 
-    expect(response.status).toBe(501);
-    await expect(response.json()).resolves.toMatchObject({ title: 'Not Implemented', status: 501 });
+    expect(response.status).toBe(204);
+    expect(await response.text()).toBe('');
   });
 });

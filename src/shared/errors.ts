@@ -1,3 +1,82 @@
+const PROBLEM_TYPE_BASE = 'https://api.example.invalid/problems/';
+
+/**
+ * Base class for service errors that map to a specific HTTP Problem Details
+ * response. Subclasses declare the {@link status}, {@link type} suffix, and
+ * {@link title}; the thrown message becomes the `detail`. The Hono
+ * `onError` handler instanceof-checks this base to render a uniform
+ * `application/problem+json` body, mirroring how
+ * {@link NotImplementedServiceError} already maps to 501.
+ */
+export abstract class HttpProblemError extends Error {
+  abstract readonly status: number;
+  abstract readonly type: string;
+  abstract readonly title: string;
+
+  constructor(detail: string) {
+    super(detail);
+    this.name = this.constructor.name;
+  }
+}
+
+/** A problem type URI under the API's canonical problem namespace. */
+export function problemType(suffix: string): string {
+  return `${PROBLEM_TYPE_BASE}${suffix}`;
+}
+
+/**
+ * Thrown when a draft token is missing, unknown, or the draft is no longer
+ * active or has expired. Maps to 410 Gone.
+ */
+export class DraftExpiredOrInvalidError extends HttpProblemError {
+  readonly status = 410;
+  readonly type = problemType('gone');
+  readonly title = 'Gone';
+}
+
+/**
+ * Thrown when an upload exceeds the campaign version's
+ * `maximumFileSizeBytes` for its evidence category. Maps to 413 Payload Too
+ * Large.
+ */
+export class PayloadTooLargeError extends HttpProblemError {
+  readonly status = 413;
+  readonly type = problemType('payload-too-large');
+  readonly title = 'Payload Too Large';
+}
+
+/**
+ * Thrown when the requested media type is not in the campaign version's
+ * `allowedMimeTypes` for its evidence category. Maps to 415 Unsupported
+ * Media Type.
+ */
+export class UnsupportedMediaTypeError extends HttpProblemError {
+  readonly status = 415;
+  readonly type = problemType('unsupported-media-type');
+  readonly title = 'Unsupported Media Type';
+}
+
+/**
+ * Thrown when campaign evidence rules (category present, file counts within
+ * `minimumFiles`/`maximumFiles`, conditional fields) are not satisfied. Maps
+ * to 422 Unprocessable Entity.
+ */
+export class EvidenceRulesViolationError extends HttpProblemError {
+  readonly status = 422;
+  readonly type = problemType('unprocessable-entity');
+  readonly title = 'Unprocessable Entity';
+}
+
+/**
+ * Thrown when a referenced draft or document cannot be found or is not
+ * accessible in the current context. Maps to 404 Not Found.
+ */
+export class ResourceNotFoundError extends HttpProblemError {
+  readonly status = 404;
+  readonly type = problemType('not-found');
+  readonly title = 'Not Found';
+}
+
 export class NotImplementedServiceError extends Error {
   constructor(readonly capability: string) {
     super(`${capability} is defined by contract but is not implemented in the Phase 1 skeleton.`);
@@ -43,6 +122,19 @@ function isAvailabilityCode(code: unknown): boolean {
  * Checks both the error and its `cause` (e.g. a wrapped `fetch failed`).
  */
 export function isConnectionError(error: unknown): boolean {
+  return errorHasCode(error, isAvailabilityCode);
+}
+
+/**
+ * Returns true when an error is a PostgreSQL unique-violation (SQLSTATE
+ * 23505), e.g. a duplicate insert against a unique index. Used for idempotent
+ * webhook deduplication where a redelivery is expected and safe to ignore.
+ */
+export function isUniqueViolation(error: unknown): boolean {
+  return errorHasCode(error, (code) => code === '23505');
+}
+
+function errorHasCode(error: unknown, predicate: (code: string) => boolean): boolean {
   const candidates: unknown[] = [error];
   const visited = new Set<object>();
   let examined = 0;
@@ -55,7 +147,7 @@ export function isConnectionError(error: unknown): boolean {
     examined += 1;
 
     const errorRecord = candidate as { code?: unknown; cause?: unknown; errors?: unknown };
-    if (isAvailabilityCode(errorRecord.code)) return true;
+    if (typeof errorRecord.code === 'string' && predicate(errorRecord.code)) return true;
     if (errorRecord.cause !== undefined) candidates.push(errorRecord.cause);
     if (Array.isArray(errorRecord.errors)) {
       for (const nestedError of errorRecord.errors as unknown[]) candidates.push(nestedError);
