@@ -1,15 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { detectDriver } from '../src/db/client.js';
+import { createDatabase, detectDriver } from '../src/db/client.js';
 
 describe('database driver detection', () => {
-  it('selects the neon driver for Neon hosts', () => {
+  it('selects the transaction-capable Neon serverless driver', () => {
     expect(
       detectDriver(
         'postgresql://user:pass@ep-cool-name-12345.us-east-2.aws.neon.tech/neondb?sslmode=require',
       ),
-    ).toBe('neon');
-    expect(detectDriver('postgres://user@ep-pooler.eu-west.aws.neon.tech/neondb')).toBe('neon');
+    ).toBe('neon-serverless');
+    expect(detectDriver('postgres://user@ep-pooler.eu-west.aws.neon.tech/neondb')).toBe(
+      'neon-serverless',
+    );
   });
 
   it('selects node-postgres for local and standard hosts', () => {
@@ -19,5 +21,15 @@ describe('database driver detection', () => {
 
   it('falls back to node-postgres for malformed urls', () => {
     expect(detectDriver('not-a-url')).toBe('node-postgres');
+  });
+
+  it('creates a transaction-capable handle', async () => {
+    const handle = createDatabase('postgresql://user:pass@127.0.0.1:5432/koi_recall');
+
+    expect(handle.driver).toBe('node-postgres');
+    expect(handle.transaction).toBeTypeOf('function');
+    expect(handle.close).toBeTypeOf('function');
+
+    await handle.close();
   });
 });

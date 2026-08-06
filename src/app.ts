@@ -280,7 +280,6 @@ export function createApp(dependencies: AppDependencies = {}) {
       method: context.req.raw.method,
       headers: context.req.raw.headers,
       body: rawBody,
-      duplex: 'half',
     });
 
     // `handleUploadCallback` verifies the request signature and extracts

@@ -19,7 +19,7 @@ const handle: DatabaseHandle | null = enabled
 
 describe.skipIf(!enabled)('DrizzleProductCheckService (database integration)', () => {
   afterAll(async () => {
-    await handle?.pool?.end();
+    await handle?.close();
   });
 
   it('flags an affected product as a potential match against the seeded version', async () => {

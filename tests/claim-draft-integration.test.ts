@@ -26,7 +26,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 describe.skipIf(!enabled)('DrizzleClaimDraftService (database integration)', () => {
   afterAll(async () => {
-    await handle?.pool?.end();
+    await handle?.close();
   });
 
   it('creates an active draft bound to the seeded published version', async () => {

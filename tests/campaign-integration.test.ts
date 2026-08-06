@@ -18,7 +18,7 @@ const handle: DatabaseHandle | null = enabled
 
 describe.skipIf(!enabled)('DrizzleCampaignService (database integration)', () => {
   afterAll(async () => {
-    await handle?.pool?.end();
+    await handle?.close();
   });
 
   it('returns the seeded published campaign with products and evidence rules', async () => {

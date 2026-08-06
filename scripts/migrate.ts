@@ -1,8 +1,8 @@
 import 'dotenv/config';
 
-import { neon } from '@neondatabase/serverless';
-import { drizzle as neonHttpDrizzle } from 'drizzle-orm/neon-http';
-import { migrate as migrateNeonHttp } from 'drizzle-orm/neon-http/migrator';
+import { Pool as NeonPool } from '@neondatabase/serverless';
+import { drizzle as neonServerlessDrizzle } from 'drizzle-orm/neon-serverless';
+import { migrate as migrateNeonServerless } from 'drizzle-orm/neon-serverless/migrator';
 import { drizzle as nodePostgresDrizzle } from 'drizzle-orm/node-postgres';
 import { migrate as migrateNodePostgres } from 'drizzle-orm/node-postgres/migrator';
 import { Client, Pool } from 'pg';
@@ -48,9 +48,14 @@ async function run(): Promise<void> {
   const driver = detectDriver(databaseUrl);
   console.log(`Applying migrations via ${driver} driver...`);
 
-  if (driver === 'neon') {
-    const db = neonHttpDrizzle({ client: neon(databaseUrl) });
-    await migrateNeonHttp(db, { migrationsFolder });
+  if (driver === 'neon-serverless') {
+    const pool = new NeonPool({ connectionString: databaseUrl });
+    try {
+      const db = neonServerlessDrizzle({ client: pool });
+      await migrateNeonServerless(db, { migrationsFolder });
+    } finally {
+      await pool.end();
+    }
     return;
   }
 
