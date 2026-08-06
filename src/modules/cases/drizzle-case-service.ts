@@ -104,6 +104,7 @@ export class DrizzleCaseService implements CaseService {
     private readonly handle: DatabaseHandle,
     private readonly crypto: SensitiveDataCryptoPort,
     private readonly referenceGenerator: () => string = generateCaseReference,
+    private readonly beforeIdempotencyInsert: () => Promise<void> = () => Promise.resolve(),
   ) {}
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
@@ -134,7 +135,7 @@ export class DrizzleCaseService implements CaseService {
         .innerJoin(recallCampaigns, eq(recallCampaigns.id, claimDrafts.campaignId))
         .innerJoin(campaignVersions, eq(campaignVersions.id, claimDrafts.campaignVersionId))
         .where(eq(claimDrafts.id, command.body.draftId))
-        .for('update');
+        .for('update', { of: claimDrafts });
 
       if (!locked) {
         throw new DraftExpiredOrInvalidError(
@@ -417,6 +418,7 @@ export class DrizzleCaseService implements CaseService {
       if (!template) {
         throw new Error('An active Claim confirmation template is required.');
       }
+      await this.beforeIdempotencyInsert();
       await tx.insert(idempotencyRecords).values({
         endpoint,
         keyHash,

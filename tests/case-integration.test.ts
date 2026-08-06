@@ -4,7 +4,7 @@ import 'dotenv/config';
 
 import { randomUUID } from 'node:crypto';
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
@@ -46,18 +46,26 @@ const crypto = new NodeSensitiveDataCrypto(
   Buffer.alloc(32, 2).toString('base64'),
 );
 
-function withTransactionBarrier(base: DatabaseHandle, parties = 2): DatabaseHandle {
+function withTransactionBarrier(
+  base: DatabaseHandle,
+  parties = 2,
+  onRelease: () => void = () => undefined,
+): DatabaseHandle {
   let arrivals = 0;
   let release!: () => void;
   const allArrived = new Promise<void>((resolve) => {
     release = resolve;
   });
-  const transaction: DatabaseHandle['transaction'] = async (work) => {
-    arrivals += 1;
-    if (arrivals === parties) release();
-    await allArrived;
-    return base.transaction(work);
-  };
+  const transaction: DatabaseHandle['transaction'] = (work) =>
+    base.transaction(async (tx) => {
+      arrivals += 1;
+      if (arrivals === parties) {
+        onRelease();
+        release();
+      }
+      await allArrived;
+      return work(tx);
+    });
   return { ...base, transaction };
 }
 
@@ -345,6 +353,38 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
   });
 
+  it('opens both real PostgreSQL transactions before releasing concurrent work', async () => {
+    let openTransactions = 0;
+    let openTransactionsAtRelease = -1;
+    const observedTransaction: DatabaseHandle['transaction'] = (work) =>
+      handle!.transaction(async (tx) => {
+        openTransactions += 1;
+        try {
+          return await work(tx);
+        } finally {
+          openTransactions -= 1;
+        }
+      });
+    const synchronized = withTransactionBarrier(
+      { ...handle!, transaction: observedTransaction },
+      2,
+      () => {
+        openTransactionsAtRelease = openTransactions;
+      },
+    );
+
+    await Promise.all([
+      synchronized.transaction(async (tx) => {
+        await tx.execute(sql`select pg_backend_pid()`);
+      }),
+      synchronized.transaction(async (tx) => {
+        await tx.execute(sql`select pg_backend_pid()`);
+      }),
+    ]);
+
+    expect(openTransactionsAtRelease).toBe(2);
+  });
+
   it('creates exactly one aggregate for concurrent submission of one Draft', async () => {
     const email = `same-draft-${randomUUID()}@example.com`;
     const body = fixture!.body({
@@ -369,7 +409,10 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(aggregate.consumers).toHaveLength(1);
     expect(aggregate.products).toHaveLength(1);
     expect(aggregate.documents).toHaveLength(2);
+    expect(aggregate.consents).toHaveLength(2);
     expect(aggregate.snapshots).toHaveLength(1);
+    expect(aggregate.incidents).toHaveLength(0);
+    expect(aggregate.reviews).toHaveLength(0);
     expect(aggregate.events).toHaveLength(1);
     expect(aggregate.communications).toHaveLength(1);
     expect(aggregate.outbox).toHaveLength(1);
@@ -399,7 +442,22 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const idempotencyKey = randomUUID();
     const firstEmail = `first-${randomUUID()}@example.com`;
     const secondEmail = `second-${randomUUID()}@example.com`;
-    const service = new DrizzleCaseService(withTransactionBarrier(handle!), crypto);
+    let idempotencyInsertArrivals = 0;
+    let releaseIdempotencyInserts!: () => void;
+    const bothAtIdempotencyInsert = new Promise<void>((resolve) => {
+      releaseIdempotencyInserts = resolve;
+    });
+    const beforeIdempotencyInsert = async (): Promise<void> => {
+      idempotencyInsertArrivals += 1;
+      if (idempotencyInsertArrivals === 2) releaseIdempotencyInserts();
+      await bothAtIdempotencyInsert;
+    };
+    const service = new DrizzleCaseService(
+      withTransactionBarrier(handle!),
+      crypto,
+      undefined,
+      beforeIdempotencyInsert,
+    );
 
     try {
       const results = await Promise.allSettled([
@@ -424,6 +482,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
       expect(rejected[0]?.reason).toBeInstanceOf(ClaimConflictError);
+      expect(idempotencyInsertArrivals).toBe(2);
       expect((await countCasesForEmail(firstEmail)) + (await countCasesForEmail(secondEmail))).toBe(
         1,
       );
