@@ -2,10 +2,11 @@
 
 第一阶段消费者召回 API 的独立 Node.js 服务骨架。现有静态 Demo 保持不变；本项目只定义可部署架构、数据库模型和 ToC 契约。
 
-当前六个 `/v1` 业务端点均已注册并进行运行时校验。其中 Campaign 查询、商品预筛和匿名 Draft
-创建端点在配置了 `DATABASE_URL` 时会读写真实数据库；其余三个端点仍返回
-`501 application/problem+json`。本阶段不接入 Vercel Blob 或 Resend，不发送邮件，也不执行
-Vercel 部署。
+当前六个 `/v1` 业务端点均已注册并进行运行时校验。其中 Campaign 查询、商品预筛、匿名 Draft
+创建、附件直传授权（`upload-tokens`）和附件删除端点在配置了 `DATABASE_URL` 时会读写真实数据库；
+附件直传在配置 `BLOB_READ_WRITE_TOKEN` 时接入 Vercel Private Blob（浏览器直传 + 完成回调回写
+`document_uploads`）。Claim 提交端点仍返回 `501 application/problem+json`。本阶段不接入 Resend，
+不发送邮件，也不执行 Vercel 部署。
 
 ## 本地检查
 

@@ -4,7 +4,7 @@
 
 本项目是独立的消费者召回 API，不修改现有静态 Demo。第一阶段的可验收目标是把公开 Campaign、商品预筛、匿名附件上传、申请提交入库和确认邮件排队串成稳定契约。
 
-当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册。其中 Campaign 查询、商品预筛和匿名 Draft 创建端点在配置 `DATABASE_URL` 时读写真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）；其余三个业务端点仍明确返回 `501 application/problem+json`。本次不接入 Vercel Blob、Resend，不部署 Vercel，不写真实凭证，不发送邮件。
+当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册。其中 Campaign 查询、商品预筛、匿名 Draft 创建、附件直传授权（`upload-tokens`）和附件删除端点在配置 `DATABASE_URL` 时读写真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）；附件直传在配置 `BLOB_READ_WRITE_TOKEN` 时接入 Vercel Private Blob（浏览器直传 + `/webhooks/vercel-blob` 完成回调回写 `document_uploads` 的 `verified`/`rejected`）。Claim 提交端点仍明确返回 `501 application/problem+json`。本次不接入 Resend，不部署 Vercel，不写真实凭证，不发送邮件。
 
 ## 2. 技术选型
 

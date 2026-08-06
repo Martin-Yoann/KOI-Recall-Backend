@@ -4,7 +4,7 @@
 
 本文是前端对接说明；字段名和示例保持英文，说明使用中文。机器契约见 `openapi/toc-v1.openapi.yaml`，其唯一来源为 `src/contracts/toc.ts`。
 
-当前代码是接口骨架：路由和验证已生效；Campaign 查询、商品预筛和匿名 Draft 创建端点在配置 `DATABASE_URL` 时读写真实数据库，其余三个业务端点返回 `501 Not Implemented`。本阶段仍不访问 Blob 或邮件服务。实现业务后保持本文与 OpenAPI 的请求/响应不变。
+当前代码是接口骨架：路由和验证已生效；Campaign 查询、商品预筛、匿名 Draft 创建、附件直传授权和附件删除端点在配置 `DATABASE_URL` 时读写真实数据库，附件直传在配置 `BLOB_READ_WRITE_TOKEN` 时接入 Vercel Private Blob（含完成回调回写 `document_uploads`）；Claim 提交端点仍返回 `501 Not Implemented`。本阶段仍不访问邮件服务。实现业务后保持本文与 OpenAPI 的请求/响应不变。
 
 不提供消费者账户、Case 查询、状态门户、修改或撤回接口。确认页使用提交响应，不通过公开 GET 暴露 Case。
 
@@ -182,17 +182,23 @@ X-Draft-Token: one-time-secret-with-at-least-32-characters
 }
 ```
 
-前端用短期参数直接上传 Blob。申请提交前需等待上传回调/状态验证；`documentId` 是后续提交使用的唯一文件引用。服务端按 Campaign 版本校验类别、数量、MIME 和 `sizeBytes`，回调还会检查实际元数据。
+前端用短期 `clientToken` 与 `uploadUrl` 调 `@vercel/blob/client` 的 `upload()` 直传 Private Blob。
+申请提交前需等待上传回调/状态验证；`documentId` 是后续提交使用的唯一文件引用。服务端按 Draft
+绑定的 Campaign 版本校验类别、数量、MIME 和 `sizeBytes`（不满足分别返回 `413/415/422`），上传完成
+回调（`POST /webhooks/vercel-blob`）会用 `head()` 取到的实际元数据再次核对 MIME，不一致则置
+`rejected`，一致则置 `verified`。需要配置 `BLOB_READ_WRITE_TOKEN` 才接入真实 Blob；未配置时该
+端点返回 `501`。
 
-可能错误：`400/404/410/413/415/422/429/500/503`；骨架另返回 `501`。
+可能错误：`400/404/410/413/415/422/429/500/503`；未配置 `BLOB_READ_WRITE_TOKEN` 时另返回 `501`。
 
 ## 8. 删除未提交附件
 
 `DELETE /v1/claim-drafts/{draftId}/documents/{documentId}`
 
-Header 同上。成功 `204 No Content`。此操作只适用于尚未提交的 Draft；服务端先撤销引用，再由清理任务删除 Private Blob。
+Header 同上。成功 `204 No Content`。此操作只适用于尚未提交的 Draft；服务端把记录置为
+`deletion_pending`，真实 Private Blob 对象由后续清理任务删除。
 
-可能错误：`400/404/410/429/500/503`；骨架另返回 `501`。
+可能错误：`400/404/410/429/500/503`；未配置 `BLOB_READ_WRITE_TOKEN` 时另返回 `501`。
 
 ## 9. 提交 Recall Claim
 

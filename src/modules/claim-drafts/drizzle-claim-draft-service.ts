@@ -2,7 +2,7 @@ import { and, eq } from 'drizzle-orm';
 
 import type { Database } from '../../db/client.js';
 import { claimDrafts, recallCampaigns } from '../../db/schema/index.js';
-import { NotImplementedServiceError } from '../../shared/errors.js';
+import { DraftExpiredOrInvalidError } from '../../shared/errors.js';
 import { buildPublishedVersionQuery } from '../campaigns/drizzle-campaign-service.js';
 import type { ClaimDraftService, CreatedClaimDraft } from './service.js';
 import { generateDraftToken, hashDraftToken } from './tokens.js';
@@ -62,7 +62,39 @@ export class DrizzleClaimDraftService implements ClaimDraftService {
     };
   }
 
-  assertActive(_draftId: string, _draftToken: string): Promise<void> {
-    return Promise.reject(new NotImplementedServiceError('Claim draft authentication'));
+  /**
+   * Confirms the draft exists, the presented token matches the stored digest,
+   * and the draft is still active and unexpired. Any failure maps to 410 via
+   * {@link DraftExpiredOrInvalidError}; an expired/unknown draft is not
+   * distinguished from an invalid token to avoid leaking draft existence.
+   */
+  async assertActive(draftId: string, draftToken: string): Promise<void> {
+    const db = this.db;
+
+    const [draft] = await db
+      .select({
+        status: claimDrafts.status,
+        expiresAt: claimDrafts.expiresAt,
+        tokenHash: claimDrafts.tokenHash,
+      })
+      .from(claimDrafts)
+      .where(eq(claimDrafts.id, draftId))
+      .limit(1);
+
+    const presentedHash = hashDraftToken(draftToken);
+    const now = Date.now();
+
+    if (
+      !draft ||
+      draft.tokenHash !== presentedHash ||
+      draft.status !== 'active' ||
+      // Comparing the loaded Date avoids a second round-trip and stays
+      // driver-agnostic across the Neon/node-pg union.
+      draft.expiresAt.getTime() <= now
+    ) {
+      throw new DraftExpiredOrInvalidError(
+        'The draft token is invalid, or the draft is no longer active or has expired.',
+      );
+    }
   }
 }

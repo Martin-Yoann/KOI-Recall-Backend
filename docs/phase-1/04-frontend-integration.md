@@ -72,6 +72,7 @@ type CampaignResponse = components['schemas']['CampaignResponse'];
 ## 4. CORS：让你的前端跑得起来
 
 `src/config/env.ts` 默认只允许 `http://localhost:3000`。前端 dev server 通常跑在：
+
 - Next.js：`http://localhost:3000`（已允许）
 - Vite：`http://localhost:5173`
 - Remix / Astro：`http://localhost:3000` / `http://localhost:4321`
@@ -131,12 +132,12 @@ curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2
 
 ## 8. 校验命令（前端不需要跑，但要知道）
 
-| 命令 | 用途 |
-| --- | --- |
+| 命令                 | 用途                                                              |
+| -------------------- | ----------------------------------------------------------------- |
 | `pnpm openapi:check` | 验证 `openapi/toc-v1.openapi.yaml` 与 `src/contracts/toc.ts` 一致 |
-| `pnpm typecheck` | `tsc --noEmit`，类型层校验 |
-| `pnpm test` | 跑 Vitest 套件，包括契约 round-trip 测试 |
-| `pnpm build` | `typecheck && openapi:check && db:check` 三个全过才算 build green |
+| `pnpm typecheck`     | `tsc --noEmit`，类型层校验                                        |
+| `pnpm test`          | 跑 Vitest 套件，包括契约 round-trip 测试                          |
+| `pnpm build`         | `typecheck && openapi:check && db:check` 三个全过才算 build green |
 
 后端 CI 跑这四个。前端 CI 至少要跑自己的 `tsc` + `openapi-typescript` 重新生成，确保 git pull 之后类型不漂。
 
