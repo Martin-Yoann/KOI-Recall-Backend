@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm';
 
 import type { Database } from '../../db/client.js';
 import { claimDrafts, recallCampaigns } from '../../db/schema/index.js';
+import { NotImplementedServiceError } from '../../shared/errors.js';
 import { buildPublishedVersionQuery } from '../campaigns/drizzle-campaign-service.js';
 import type { ClaimDraftService, CreatedClaimDraft } from './service.js';
 import { generateDraftToken, hashDraftToken } from './tokens.js';
@@ -62,6 +63,6 @@ export class DrizzleClaimDraftService implements ClaimDraftService {
   }
 
   assertActive(_draftId: string, _draftToken: string): Promise<void> {
-    return Promise.reject(new Error('Claim draft authentication is not implemented yet.'));
+    return Promise.reject(new NotImplementedServiceError('Claim draft authentication'));
   }
 }

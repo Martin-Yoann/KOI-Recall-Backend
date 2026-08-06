@@ -4,7 +4,7 @@
 
 本文是前端对接说明；字段名和示例保持英文，说明使用中文。机器契约见 `openapi/toc-v1.openapi.yaml`，其唯一来源为 `src/contracts/toc.ts`。
 
-当前代码是接口骨架：路由和验证已生效；`GET /v1/recall-campaigns/{slug}` 与 `POST /v1/recall-campaigns/{slug}/claim-drafts` 在配置 `DATABASE_URL` 时读写真实数据库返回公开 Campaign 或创建匿名 Draft，其余四个业务端点返回 `501 Not Implemented`。本阶段仍不访问 Blob 或邮件服务。实现业务后保持本文与 OpenAPI 的请求/响应不变。
+当前代码是接口骨架：路由和验证已生效；Campaign 查询、商品预筛和匿名 Draft 创建端点在配置 `DATABASE_URL` 时读写真实数据库，其余三个业务端点返回 `501 Not Implemented`。本阶段仍不访问 Blob 或邮件服务。实现业务后保持本文与 OpenAPI 的请求/响应不变。
 
 不提供消费者账户、Case 查询、状态门户、修改或撤回接口。确认页使用提交响应，不通过公开 GET 暴露 Case。
 

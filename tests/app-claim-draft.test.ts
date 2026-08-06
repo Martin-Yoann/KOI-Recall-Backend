@@ -1,9 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
-import { createPlaceholderRegistry, type ApplicationRegistry } from '../src/composition.js';
+import {
+  createApplicationRegistry,
+  createPlaceholderRegistry,
+  type ApplicationRegistry,
+} from '../src/composition.js';
 import type { ClaimDraftResponse } from '../src/contracts/toc.js';
 import { loadConfig } from '../src/config/env.js';
+import type { Database } from '../src/db/client.js';
 import type { ClaimDraftService, CreatedClaimDraft } from '../src/modules/claim-drafts/service.js';
 
 const draft: CreatedClaimDraft = {
@@ -34,6 +39,13 @@ function service(create: ClaimDraftService['create']): ClaimDraftService {
 async function createDraft(app: ReturnType<typeof appWith>) {
   return app.request('/v1/recall-campaigns/music-lollipop-demo-2026/claim-drafts', {
     method: 'POST',
+  });
+}
+
+function databaseBackedAppWithoutDatabaseIo() {
+  return createApp({
+    config: loadConfig({ CORS_ALLOWED_ORIGINS: 'https://consumer.example.com' }),
+    registry: createApplicationRegistry({ db: {} as Database }),
   });
 }
 
@@ -100,5 +112,44 @@ describe('POST /v1/recall-campaigns/{slug}/claim-drafts', () => {
     expect(response.status).toBe(501);
     const body = (await response.json()) as Record<string, unknown>;
     expect(body).toMatchObject({ title: 'Not Implemented', status: 501 });
+  });
+});
+
+describe('database-backed claim draft placeholders', () => {
+  it('returns 501 for upload authorization while draft authentication is unimplemented', async () => {
+    const response = await databaseBackedAppWithoutDatabaseIo().request(
+      '/v1/claim-drafts/21326c9a-5dc2-430f-98a6-546729a1065f/upload-tokens',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Draft-Token': 'one-time-secret-with-at-least-32-characters',
+        },
+        body: JSON.stringify({
+          category: 'product_photo',
+          fileName: 'product-front.jpg',
+          mimeType: 'image/jpeg',
+          sizeBytes: 1024,
+        }),
+      },
+    );
+
+    expect(response.status).toBe(501);
+    await expect(response.json()).resolves.toMatchObject({ title: 'Not Implemented', status: 501 });
+  });
+
+  it('returns 501 for document deletion while draft authentication is unimplemented', async () => {
+    const response = await databaseBackedAppWithoutDatabaseIo().request(
+      '/v1/claim-drafts/21326c9a-5dc2-430f-98a6-546729a1065f/documents/a996d56a-da5e-49c3-bf76-665130bbb88a',
+      {
+        method: 'DELETE',
+        headers: {
+          'X-Draft-Token': 'one-time-secret-with-at-least-32-characters',
+        },
+      },
+    );
+
+    expect(response.status).toBe(501);
+    await expect(response.json()).resolves.toMatchObject({ title: 'Not Implemented', status: 501 });
   });
 });
