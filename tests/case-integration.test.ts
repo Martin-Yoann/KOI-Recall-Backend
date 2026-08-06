@@ -11,6 +11,7 @@ import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
 import {
   campaignMessageTemplates,
   campaignRemedyOptions,
+  caseConsumers,
   claimDrafts,
   documentUploads,
   incidents,
@@ -433,9 +434,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
   it('rolls back the aggregate when the Outbox unique constraint rejects its event', async () => {
     const idempotencyKey = randomUUID();
+    const rollbackEmail = `rollback-${idempotencyKey}@example.com`;
     const command = fixture!.command({
       idempotencyKey,
       body: fixture!.body({
+        consumer: { ...fixture!.body().consumer, email: rollbackEmail },
         incidentAnswer: 'yes',
         incidentDetails: {
           eventTypes: ['injury'],
@@ -462,14 +465,28 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       });
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
-      const rolledBackIncidentReviews = await handle!.db
-        .select({ incidentId: incidents.id, reviewId: reportabilityReviews.id })
+      const rollbackEmailLookupHash = await crypto.lookupHash(rollbackEmail);
+      const remainingCases = await handle!.db
+        .select({ id: recallCases.id })
+        .from(recallCases)
+        .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+        .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
+      const remainingIncidentRows = await handle!.db
+        .select({ id: incidents.id })
         .from(incidents)
         .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
-        .innerJoin(claimDrafts, eq(claimDrafts.submittedCaseId, recallCases.id))
-        .leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id))
-        .where(eq(claimDrafts.id, fixture!.draftId));
-      expect(rolledBackIncidentReviews).toHaveLength(0);
+        .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+        .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
+      const remainingReviewRows = await handle!.db
+        .select({ id: reportabilityReviews.id })
+        .from(reportabilityReviews)
+        .innerJoin(incidents, eq(incidents.id, reportabilityReviews.incidentId))
+        .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
+        .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+        .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
+      expect(remainingCases).toHaveLength(0);
+      expect(remainingIncidentRows).toHaveLength(0);
+      expect(remainingReviewRows).toHaveLength(0);
 
       const documents = await handle!.db
         .select({
