@@ -18,7 +18,7 @@ describe('case normalization helpers', () => {
         city: ' Austin ',
         state: ' TX ',
         postalCode: ' 78701 ',
-        countryCode: 'us',
+        countryCode: ' us ',
       }),
     ).toBe(
       '{"city":"Austin","countryCode":"US","line1":"100 Example Street","postalCode":"78701","state":"TX"}',

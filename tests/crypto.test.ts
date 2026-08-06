@@ -28,6 +28,26 @@ describe('NodeSensitiveDataCrypto', () => {
     await expect(crypto.decrypt(tampered)).rejects.toThrow();
   });
 
+  it('rejects a Base64URL authentication-tag alias that decodes to the same bytes', async () => {
+    const crypto = new NodeSensitiveDataCrypto(encryptionKey, pepper);
+    let encrypted;
+
+    for (let attempt = 0; attempt < 128; attempt += 1) {
+      const candidate = await crypto.encrypt('secret');
+      if (candidate.value.endsWith('w')) {
+        encrypted = candidate;
+        break;
+      }
+    }
+
+    if (encrypted === undefined) {
+      throw new Error('Unable to create test ciphertext with a w tag suffix.');
+    }
+
+    const tampered = { ...encrypted, value: `${encrypted.value.slice(0, -1)}x` };
+    await expect(crypto.decrypt(tampered)).rejects.toThrow();
+  });
+
   it.each([
     { keyVersion: 'v1', value: 'not-an-envelope' },
     { keyVersion: 'v2', value: 'enc.v2.aes-256-gcm.a.b.c' },
@@ -55,5 +75,12 @@ describe('NodeSensitiveDataCrypto', () => {
     [encryptionKey, encryptionKey],
   ])('rejects unsafe secret configuration', (key, hashPepper) => {
     expect(() => new NodeSensitiveDataCrypto(key, hashPepper)).toThrow();
+  });
+
+  it('rejects a noncanonical Base64 secret alias', () => {
+    const aliasedKey = `${encryptionKey.slice(0, -2)}d=`;
+
+    expect(Buffer.from(aliasedKey, 'base64')).toEqual(Buffer.from(encryptionKey, 'base64'));
+    expect(() => new NodeSensitiveDataCrypto(aliasedKey, pepper)).toThrow();
   });
 });

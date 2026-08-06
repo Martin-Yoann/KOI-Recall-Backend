@@ -21,6 +21,9 @@ function decodeSecret(
   }
 
   const decoded = Buffer.from(encodedValue, 'base64');
+  if (decoded.toString('base64') !== encodedValue) {
+    throw new Error(`${name} must use canonical Base64.`);
+  }
   if (
     decoded.length < minimumByteLength ||
     (maximumByteLength !== undefined && decoded.length > maximumByteLength)
@@ -40,7 +43,12 @@ function decodeBase64url(value: string, label: string, allowEmpty = false): Buff
     throw new Error(`Malformed ${label}.`);
   }
 
-  return Buffer.from(value, 'base64url');
+  const decoded = Buffer.from(value, 'base64url');
+  if (b64(decoded) !== value) {
+    throw new Error(`Malformed ${label}.`);
+  }
+
+  return decoded;
 }
 
 export class NodeSensitiveDataCrypto implements SensitiveDataCryptoPort {

@@ -57,7 +57,8 @@ export function normalizeAddress(value: Record<string, string | undefined>): str
   const normalized = Object.entries(value).reduce<Record<string, string>>(
     (result, [key, fieldValue]) => {
       if (fieldValue !== undefined) {
-        result[key] = key === 'countryCode' ? fieldValue.toUpperCase() : fieldValue.trim();
+        const trimmedValue = fieldValue.trim();
+        result[key] = key === 'countryCode' ? trimmedValue.toUpperCase() : trimmedValue;
       }
       return result;
     },
