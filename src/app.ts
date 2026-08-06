@@ -280,7 +280,6 @@ export function createApp(dependencies: AppDependencies = {}) {
       method: context.req.raw.method,
       headers: context.req.raw.headers,
       body: rawBody,
-      // @ts-expect-error duplex is required by undici to stream a body to Request
       duplex: 'half',
     });
 
