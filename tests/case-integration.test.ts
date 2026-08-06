@@ -46,27 +46,86 @@ const crypto = new NodeSensitiveDataCrypto(
   Buffer.alloc(32, 2).toString('base64'),
 );
 
-function withTransactionBarrier(
-  base: DatabaseHandle,
-  parties = 2,
+const CONCURRENT_GATE_TIMEOUT_MESSAGE = 'Concurrent test gate timed out waiting for participants.';
+const CONCURRENT_GATE_ABORT_MESSAGE = 'Concurrent test gate aborted because a participant failed.';
+
+interface FailSafeGate {
+  readonly arrivals: number;
+  wait: () => Promise<void>;
+  fail: () => void;
+}
+
+function createFailSafeGate(
+  parties: number,
+  timeoutMs = 1000,
   onRelease: () => void = () => undefined,
-): DatabaseHandle {
+): FailSafeGate {
   let arrivals = 0;
-  let release!: () => void;
-  const allArrived = new Promise<void>((resolve) => {
-    release = resolve;
+  let settled = false;
+  let resolveGate!: () => void;
+  let rejectGate!: (error: Error) => void;
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveGate = resolve;
+    rejectGate = reject;
   });
+  void ready.catch(() => undefined);
+
+  const rejectAll = (message: string): void => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeout);
+    rejectGate(new Error(message));
+  };
+  const timeout = setTimeout(() => {
+    rejectAll(CONCURRENT_GATE_TIMEOUT_MESSAGE);
+  }, timeoutMs);
+
+  return {
+    get arrivals() {
+      return arrivals;
+    },
+    wait: () => {
+      if (!settled) {
+        arrivals += 1;
+        if (arrivals === parties) {
+          try {
+            onRelease();
+          } catch {
+            rejectAll(CONCURRENT_GATE_ABORT_MESSAGE);
+            return ready;
+          }
+          settled = true;
+          clearTimeout(timeout);
+          resolveGate();
+        }
+      }
+      return ready;
+    },
+    fail: () => {
+      rejectAll(CONCURRENT_GATE_ABORT_MESSAGE);
+    },
+  };
+}
+
+function withTransactionBarrier(base: DatabaseHandle, gate: FailSafeGate): DatabaseHandle {
   const transaction: DatabaseHandle['transaction'] = (work) =>
     base.transaction(async (tx) => {
-      arrivals += 1;
-      if (arrivals === parties) {
-        onRelease();
-        release();
-      }
-      await allArrived;
+      await gate.wait();
       return work(tx);
     });
   return { ...base, transaction };
+}
+
+async function runGateParticipant<T>(
+  operation: () => Promise<T>,
+  gates: FailSafeGate[],
+): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    for (const gate of gates) gate.fail();
+    throw error;
+  }
 }
 
 async function countCasesForEmail(email: string): Promise<number> {
@@ -365,12 +424,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
           openTransactions -= 1;
         }
       });
+    const transactionGate = createFailSafeGate(2, 1000, () => {
+      openTransactionsAtRelease = openTransactions;
+    });
     const synchronized = withTransactionBarrier(
       { ...handle!, transaction: observedTransaction },
-      2,
-      () => {
-        openTransactionsAtRelease = openTransactions;
-      },
+      transactionGate,
     );
 
     await Promise.all([
@@ -385,16 +444,104 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(openTransactionsAtRelease).toBe(2);
   });
 
+  it('rejects a real transaction gate when another participant never arrives', async () => {
+    let openTransactions = 0;
+    const observedTransaction: DatabaseHandle['transaction'] = (work) =>
+      handle!.transaction(async (tx) => {
+        openTransactions += 1;
+        try {
+          return await work(tx);
+        } finally {
+          openTransactions -= 1;
+        }
+      });
+    const transactionGate = createFailSafeGate(2, 25);
+    const synchronized = withTransactionBarrier(
+      { ...handle!, transaction: observedTransaction },
+      transactionGate,
+    );
+    const singleParticipant = synchronized.transaction(async (tx) => {
+      await tx.execute(sql`select pg_backend_pid()`);
+    });
+
+    await expect(singleParticipant).rejects.toThrow(CONCURRENT_GATE_TIMEOUT_MESSAGE);
+    expect(openTransactions).toBe(0);
+    await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
+  });
+
+  it('aborts an insert-gate participant when its peer fails before reaching the gate', async () => {
+    const secondFixture = await createClaimFixture(handle!);
+    const waitingEmail = `gate-rollback-${randomUUID()}@example.com`;
+    const transactionGate = createFailSafeGate(2);
+    const idempotencyInsertGate = createFailSafeGate(2);
+    const service = new DrizzleCaseService(
+      withTransactionBarrier(handle!, transactionGate),
+      crypto,
+      undefined,
+      idempotencyInsertGate.wait,
+    );
+    const gates = [transactionGate, idempotencyInsertGate];
+    const waiting = runGateParticipant(
+      () =>
+        service.submit(
+          fixture!.command({
+            body: fixture!.body({
+              consumer: { ...fixture!.body().consumer, email: waitingEmail },
+            }),
+          }),
+        ),
+      gates,
+    );
+    const failing = runGateParticipant(
+      () =>
+        service.submit(
+          secondFixture.command({
+            body: secondFixture.body({ remedyCode: `missing-${randomUUID()}` }),
+          }),
+        ),
+      gates,
+    );
+
+    try {
+      const [waitingResult, failingResult] = await Promise.allSettled([waiting, failing]);
+      expect(waitingResult.status).toBe('rejected');
+      if (waitingResult.status !== 'rejected') throw new Error('Expected the waiter to reject.');
+      expect(waitingResult.reason).toMatchObject({ message: CONCURRENT_GATE_ABORT_MESSAGE });
+      expect(failingResult.status).toBe('rejected');
+      if (failingResult.status !== 'rejected') {
+        throw new Error('Expected the failing participant to reject.');
+      }
+      expect(failingResult.reason).toBeInstanceOf(ClaimValidationError);
+      await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
+      await expect(countCasesForDraft(handle!, secondFixture.draftId)).resolves.toBe(0);
+      await expect(countCasesForEmail(waitingEmail)).resolves.toBe(0);
+      await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
+      await expect(loadDraftStatus(handle!, secondFixture.draftId)).resolves.toBe('active');
+    } finally {
+      await cleanupClaimFixture(handle!, secondFixture);
+    }
+  });
+
   it('creates exactly one aggregate for concurrent submission of one Draft', async () => {
     const email = `same-draft-${randomUUID()}@example.com`;
     const body = fixture!.body({
       consumer: { ...fixture!.body().consumer, email },
     });
-    const service = new DrizzleCaseService(withTransactionBarrier(handle!), crypto);
+    const transactionGate = createFailSafeGate(2);
+    const service = new DrizzleCaseService(
+      withTransactionBarrier(handle!, transactionGate),
+      crypto,
+    );
 
     const results = await Promise.allSettled([
-      service.submit(fixture!.command({ idempotencyKey: randomUUID(), body })),
-      service.submit(fixture!.command({ idempotencyKey: randomUUID(), body })),
+      runGateParticipant(
+        () => service.submit(fixture!.command({ idempotencyKey: randomUUID(), body })),
+        [transactionGate],
+      ),
+      runGateParticipant(
+        () => service.submit(fixture!.command({ idempotencyKey: randomUUID(), body })),
+        [transactionGate],
+      ),
     ]);
 
     const fulfilled = results.filter((result) => result.status === 'fulfilled');
@@ -425,9 +572,16 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       idempotencyKey: randomUUID(),
       body: fixture!.body({ consumer: { ...fixture!.body().consumer, email } }),
     });
-    const service = new DrizzleCaseService(withTransactionBarrier(handle!), crypto);
+    const transactionGate = createFailSafeGate(2);
+    const service = new DrizzleCaseService(
+      withTransactionBarrier(handle!, transactionGate),
+      crypto,
+    );
 
-    const [first, second] = await Promise.all([service.submit(command), service.submit(command)]);
+    const [first, second] = await Promise.all([
+      runGateParticipant(() => service.submit(command), [transactionGate]),
+      runGateParticipant(() => service.submit(command), [transactionGate]),
+    ]);
 
     expect(second).toEqual(first);
     await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
@@ -442,38 +596,41 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const idempotencyKey = randomUUID();
     const firstEmail = `first-${randomUUID()}@example.com`;
     const secondEmail = `second-${randomUUID()}@example.com`;
-    let idempotencyInsertArrivals = 0;
-    let releaseIdempotencyInserts!: () => void;
-    const bothAtIdempotencyInsert = new Promise<void>((resolve) => {
-      releaseIdempotencyInserts = resolve;
-    });
-    const beforeIdempotencyInsert = async (): Promise<void> => {
-      idempotencyInsertArrivals += 1;
-      if (idempotencyInsertArrivals === 2) releaseIdempotencyInserts();
-      await bothAtIdempotencyInsert;
-    };
+    const transactionGate = createFailSafeGate(2);
+    const idempotencyInsertGate = createFailSafeGate(2);
     const service = new DrizzleCaseService(
-      withTransactionBarrier(handle!),
+      withTransactionBarrier(handle!, transactionGate),
       crypto,
       undefined,
-      beforeIdempotencyInsert,
+      idempotencyInsertGate.wait,
     );
+    const gates = [transactionGate, idempotencyInsertGate];
 
     try {
       const results = await Promise.allSettled([
-        service.submit(
-          fixture!.command({
-            idempotencyKey,
-            body: fixture!.body({ consumer: { ...fixture!.body().consumer, email: firstEmail } }),
-          }),
+        runGateParticipant(
+          () =>
+            service.submit(
+              fixture!.command({
+                idempotencyKey,
+                body: fixture!.body({
+                  consumer: { ...fixture!.body().consumer, email: firstEmail },
+                }),
+              }),
+            ),
+          gates,
         ),
-        service.submit(
-          secondFixture.command({
-            idempotencyKey,
-            body: secondFixture.body({
-              consumer: { ...secondFixture.body().consumer, email: secondEmail },
-            }),
-          }),
+        runGateParticipant(
+          () =>
+            service.submit(
+              secondFixture.command({
+                idempotencyKey,
+                body: secondFixture.body({
+                  consumer: { ...secondFixture.body().consumer, email: secondEmail },
+                }),
+              }),
+            ),
+          gates,
         ),
       ]);
 
@@ -482,7 +639,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
       expect(rejected[0]?.reason).toBeInstanceOf(ClaimConflictError);
-      expect(idempotencyInsertArrivals).toBe(2);
+      expect(idempotencyInsertGate.arrivals).toBe(2);
       expect((await countCasesForEmail(firstEmail)) + (await countCasesForEmail(secondEmail))).toBe(
         1,
       );
