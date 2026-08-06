@@ -3,8 +3,9 @@
 第一阶段消费者召回 API 的独立 Node.js 服务骨架。现有静态 Demo 保持不变；本项目只定义可部署架构、数据库模型和 ToC 契约。
 
 当前六个 `/v1` 业务端点均已注册并进行运行时校验。其中 `GET /v1/recall-campaigns/{slug}`
-在配置了 `DATABASE_URL` 时会读取真实数据库返回公开 Campaign；其余五个端点仍返回
-`501 application/problem+json`。本阶段不接入 Vercel Blob 或 Resend，不发送邮件，也不执行 Vercel 部署。
+与 `POST /v1/recall-campaigns/{slug}/claim-drafts` 在配置了 `DATABASE_URL` 时会读取/写入
+真实数据库；其余四个端点仍返回 `501 application/problem+json`。本阶段不接入 Vercel Blob 或
+Resend，不发送邮件，也不执行 Vercel 部署。
 
 ## 本地检查
 

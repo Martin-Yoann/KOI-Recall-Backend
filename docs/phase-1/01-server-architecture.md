@@ -4,7 +4,7 @@
 
 本项目是独立的消费者召回 API，不修改现有静态 Demo。第一阶段的可验收目标是把公开 Campaign、商品预筛、匿名附件上传、申请提交入库和确认邮件排队串成稳定契约。
 
-当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册；业务端点明确返回 `501 application/problem+json`。其中 `GET /v1/recall-campaigns/{slug}` 在配置 `DATABASE_URL` 时读取真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）返回公开 Campaign；其余五个业务端点仍明确返回 `501 application/problem+json`。本次不接入 Vercel Blob、Resend，不部署 Vercel，不写真实凭证，不发送邮件。
+当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册；业务端点明确返回 `501 application/problem+json`。其中 `GET /v1/recall-campaigns/{slug}` 与 `POST /v1/recall-campaigns/{slug}/claim-drafts` 在配置 `DATABASE_URL` 时读写真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）返回公开 Campaign 或创建匿名 Draft；其余四个业务端点仍明确返回 `501 application/problem+json`。本次不接入 Vercel Blob、Resend，不部署 Vercel，不写真实凭证，不发送邮件。
 
 ## 2. 技术选型
 

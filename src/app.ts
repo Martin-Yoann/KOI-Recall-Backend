@@ -7,6 +7,7 @@ import { createDefaultRegistry, type ApplicationRegistry } from './composition.j
 import { loadConfig, type AppConfig } from './config/env.js';
 import {
   campaignResponseSchema,
+  claimDraftResponseSchema,
   createClaimDraftRoute,
   createUploadTokenRoute,
   deleteDraftDocumentRoute,
@@ -163,8 +164,18 @@ export function createApp(dependencies: AppDependencies = {}) {
     return context.json(response, 200);
   });
   app.openapi(createClaimDraftRoute, async (context) => {
-    await registry.services.claimDrafts.create(context.req.valid('param').slug);
-    return notImplemented(context, 'Claim draft creation');
+    let draft;
+    try {
+      draft = await registry.services.claimDrafts.create(context.req.valid('param').slug);
+    } catch (error) {
+      if (isConnectionError(error)) return dependencyUnavailable(context, 'Claim draft creation');
+      throw error;
+    }
+
+    if (!draft) return notFound(context, 'Campaign');
+
+    const response = claimDraftResponseSchema.parse(draft);
+    return context.json(response, 201);
   });
   app.openapi(createUploadTokenRoute, async (context) => {
     const { draftId } = context.req.valid('param');

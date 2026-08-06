@@ -146,6 +146,12 @@ export const claimDraftResponseSchema = z
   })
   .openapi('ClaimDraftResponse');
 
+/**
+ * The created draft returned to consumers. Derived from the Zod contract so the
+ * service and route handler share one shape.
+ */
+export type ClaimDraftResponse = z.infer<typeof claimDraftResponseSchema>;
+
 const draftTokenHeaderSchema = z.object({
   'X-Draft-Token': z
     .string()
