@@ -38,17 +38,26 @@ const publicPaths = [
 
 describe('documentation cross-check', () => {
   it('documents the enabled Claim submission path without overstating delivery', async () => {
-    const [readme, architecture, apiDoc] = await Promise.all([
+    const [readme, architecture, apiDoc, frontendDoc] = await Promise.all([
       readFile('README.md', 'utf8'),
       readFile('docs/phase-1/01-server-architecture.md', 'utf8'),
       readFile('docs/phase-1/03-toc-api.md', 'utf8'),
+      readFile('docs/phase-1/04-frontend-integration.md', 'utf8'),
     ]);
 
     expect(readme).toContain('Claim 提交');
     expect(readme).toContain('FIELD_ENCRYPTION_KEY');
     expect(apiDoc).toContain('emailStatus=queued');
-    expect(apiDoc).toContain('Resend');
+    expect(apiDoc).toContain('不代表 Resend 已发送或送达');
     expect(architecture).toContain('Neon Serverless Pool');
+    expect(architecture).toContain('Resend 投递与 Webhook');
+    expect(architecture).toContain('Admin API 和 Vercel 部署仍未实现');
+    expect(architecture).toContain('Phase 1 只定义一种授权后台用户');
+    expect(architecture).toContain('允许查看/导出完整数据');
+    expect(architecture).toContain('不实现多级权限或字段脱敏');
+    expect(frontendDoc).toContain('重试必须复用原 Key 和完全相同的请求体');
+    expect(frontendDoc).toContain('不要在前端持有 `FIELD_ENCRYPTION_KEY` 或 `HASH_PEPPER`');
+    expect(frontendDoc).toContain('这两项只属于后端运行环境');
     expect(readme).not.toContain('Claim 提交固定返回 `501`');
     expect(readme).not.toContain('Claim 提交端点仍返回');
     expect(apiDoc).not.toContain('Claim 提交固定返回 `501`');
