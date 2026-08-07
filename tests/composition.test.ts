@@ -146,6 +146,34 @@ describe('application composition', () => {
     expect(registry.platform.crypto).toBeInstanceOf(NodeSensitiveDataCrypto);
   });
 
+  it('registers the Drizzle Case service for a pooled Neon database URL without querying it', () => {
+    const registry = createDefaultRegistry(
+      configuredConfig({
+        DATABASE_URL:
+          'postgresql://user:password@ep-koi-test-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require',
+      }),
+    );
+
+    expect(registry.services.cases).toBeInstanceOf(DrizzleCaseService);
+    expect(registry.platform.crypto).toBeInstanceOf(NodeSensitiveDataCrypto);
+  });
+
+  it('fails closed for a direct Neon database URL without exposing it', () => {
+    const databaseUrl =
+      'postgresql://sensitive-user:sensitive-password@ep-koi-test.us-east-2.aws.neon.tech/neondb';
+    let thrown: unknown;
+    try {
+      createDefaultRegistry(configuredConfig({ DATABASE_URL: databaseUrl }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toContain('pooled Neon connection string');
+    expect((thrown as Error).message).not.toContain(databaseUrl);
+    expect((thrown as Error).message).not.toContain('sensitive-password');
+  });
+
   it.each([
     ['empty encryption key', { FIELD_ENCRYPTION_KEY: '' }],
     ['empty hash pepper', { HASH_PEPPER: '' }],

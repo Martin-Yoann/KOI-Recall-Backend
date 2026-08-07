@@ -9,8 +9,8 @@ import type { ProductCheckInput, ProductCheckResult, ProductCheckService } from 
 /**
  * Reads published campaign products and lots from Postgres via Drizzle to run a
  * preliminary affected-product check. The injected {@link Database} is the
- * dual-adapter union, so the same code runs against Neon HTTP in production and
- * node-postgres locally with no branching.
+ * dual-adapter union, so the same code runs against Neon Serverless Pool in
+ * production and node-postgres locally with no branching.
  */
 export class DrizzleProductCheckService implements ProductCheckService {
   constructor(private readonly db: Database) {}

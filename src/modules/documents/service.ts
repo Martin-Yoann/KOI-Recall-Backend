@@ -39,13 +39,17 @@ export interface DocumentService {
   authorizeUpload(input: AuthorizeUploadInput): Promise<AuthorizedUpload>;
 
   /**
-   * Marks an unsubmitted draft document as `deletion_pending`. The actual
-   * Private Blob object is removed later by the cleanup job; this only
-   * advances the row's state machine. Idempotent for rows already pending or
-   * deleted. Throws {@link ResourceNotFoundError} when the document does not
-   * belong to the draft.
+   * Authenticates and locks the active Draft, then locks and conditionally marks
+   * its unlinked Document as `deletion_pending` in the same transaction. The
+   * actual Private Blob object is removed later by the cleanup job. Idempotent
+   * for rows already pending or deleted. Throws {@link ResourceNotFoundError}
+   * when the Document does not belong to the Draft.
    */
-  scheduleDraftDocumentDeletion(draftId: string, documentId: string): Promise<void>;
+  scheduleDraftDocumentDeletion(
+    draftId: string,
+    documentId: string,
+    draftToken: string,
+  ): Promise<void>;
 
   /**
    * Reconciles a completed Private Blob upload. Records the webhook event for

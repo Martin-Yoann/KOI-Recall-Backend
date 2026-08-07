@@ -107,7 +107,7 @@ export function createApplicationRegistry(
       campaigns: new DrizzleCampaignService(handle.db),
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
-      documents: new DrizzleDocumentService(handle.db, blob),
+      documents: new DrizzleDocumentService(handle.db, blob, (work) => handle.transaction(work)),
       ...(crypto instanceof NotImplementedCryptoAdapter
         ? {}
         : { cases: new DrizzleCaseService(handle, crypto) }),

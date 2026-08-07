@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { Database } from '../src/db/client.js';
+import type { Database, DatabaseExecutor, DatabaseHandle } from '../src/db/client.js';
 import {
   campaignEvidenceRequirements,
   claimDrafts,
@@ -144,9 +144,12 @@ const event = {
 };
 
 function serviceWith(fake: FakeReconciliationDatabase) {
+  const transaction: DatabaseHandle['transaction'] = (work) =>
+    work(fake as unknown as DatabaseExecutor);
   return new DrizzleDocumentService(
     fake as unknown as Database,
     new NotImplementedPrivateBlobAdapter(),
+    transaction,
   );
 }
 
@@ -301,7 +304,13 @@ class FakeBlobAdapter implements PrivateBlobPort {
 describe('DrizzleDocumentService upload quotas', () => {
   it('allows only one concurrent authorization when maximumFiles is one', async () => {
     const fake = new FakeUploadDatabase();
-    const service = new DrizzleDocumentService(fake as unknown as Database, new FakeBlobAdapter());
+    const transaction: DatabaseHandle['transaction'] = (work) =>
+      work(fake as unknown as DatabaseExecutor);
+    const service = new DrizzleDocumentService(
+      fake as unknown as Database,
+      new FakeBlobAdapter(),
+      transaction,
+    );
     const input = {
       draftId: '21326c9a-5dc2-430f-98a6-546729a1065f',
       category: 'product_photo' as const,

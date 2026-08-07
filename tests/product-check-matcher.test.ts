@@ -65,6 +65,31 @@ describe('product check matcher', () => {
     expect(result.result).toBe('not_matched');
   });
 
+  it('returns manual review when the matching lot requires manual review', () => {
+    const result = evaluateProductCheck(
+      input,
+      [product(PRODUCT_ID)],
+      [lot(PRODUCT_ID, 'ML-2406-A', '06/2024', 'manual_review')],
+    );
+
+    expect(result.result).toBe('manual_review');
+    expect(result.message).toBeTypeOf('string');
+    expect(result.message.length).toBeGreaterThan(0);
+  });
+
+  it('prioritizes an affected match over a manual-review match', () => {
+    const result = evaluateProductCheck(
+      input,
+      [product(PRODUCT_ID)],
+      [
+        lot(PRODUCT_ID, 'ML-2406-A', '06/2024', 'manual_review'),
+        lot(PRODUCT_ID, 'ML-2406-A', '06/2024', 'affected'),
+      ],
+    );
+
+    expect(result.result).toBe('potential_match');
+  });
+
   it('returns not matched when the shape is not listed for the product', () => {
     const result = evaluateProductCheck(
       { ...input, shape: 'Dinosaur' },

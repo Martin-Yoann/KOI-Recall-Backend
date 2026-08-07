@@ -35,8 +35,9 @@ pnpm db:check
 
 `src/db/client.ts` 按连接串自动选择驱动，无需手工切换：
 
-- 主机名以 `neon.tech` 结尾 → Neon Serverless Pool（`@neondatabase/serverless` +
-  `drizzle-orm/neon-serverless`），用于 Vercel/Neon。Neon 环境必须提供 pooled connection string。
+- 主机名匹配 `ep-...-pooler.*.neon.tech` → Neon Serverless Pool
+  （`@neondatabase/serverless` + `drizzle-orm/neon-serverless`），用于 Vercel/Neon。Neon
+  直连主机名会在启动时失败关闭，运行时必须提供 pooled connection string。
 - 其余（含本地 `127.0.0.1`）→ node-postgres（`drizzle-orm/node-postgres` + `pg`），用于本地开发。
 
 本地首次初始化数据库并读取演示 Campaign：
@@ -70,6 +71,14 @@ Seed 只允许显式运行于非生产环境：
 
 ```bash
 APP_ENV=local ALLOW_SYNTHETIC_SEED=true DATABASE_URL='postgresql://...' pnpm db:seed
+```
+
+真实 Neon 事务 smoke 使用独立测试连接串并需显式 opt-in；默认测试不会创建 Neon 客户端或联网：
+
+```bash
+RUN_NEON_POOL_INTEGRATION=true \
+NEON_POOLED_TEST_DATABASE_URL='postgresql://...@ep-...-pooler....neon.tech/neondb?sslmode=require' \
+pnpm exec vitest run tests/neon-pooled-transaction.integration.test.ts
 ```
 
 ## 敏感数据与人工查看边界

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, lte } from 'drizzle-orm';
 
 import {
   claimSubmissionResponseSchema,
@@ -90,6 +90,7 @@ interface EncryptedSubmission {
   firstName: Ciphertext;
   lastName: Ciphertext;
   email: Ciphertext;
+  recipientEmail: Ciphertext;
   phone?: Ciphertext;
   address: Ciphertext;
   emailLookupHash: string;
@@ -111,13 +112,24 @@ export class DrizzleCaseService implements CaseService {
     const endpoint = `/v1/recall-campaigns/${command.campaignSlug}/claims`;
     const requestHash = hashCanonicalRequest(command.body);
     const keyHash = await this.crypto.lookupHash(command.idempotencyKey);
-    const existing = await this.findIdempotency(endpoint, keyHash);
+    const submittedAt = new Date();
+    const existing = await this.findIdempotency(endpoint, keyHash, this.handle.db, submittedAt);
     if (existing) return this.replay(existing, requestHash);
 
     const encrypted = await this.encryptSubmission(command.body);
-    const submittedAt = new Date();
 
     const transaction = this.handle.transaction(async (tx) => {
+      await tx
+        .delete(idempotencyRecords)
+        .where(
+          and(
+            eq(idempotencyRecords.endpoint, endpoint),
+            eq(idempotencyRecords.keyHash, keyHash),
+            lte(idempotencyRecords.expiresAt, submittedAt),
+          ),
+        )
+        .returning({ id: idempotencyRecords.id });
+
       const [locked] = await tx
         .select({
           draftId: claimDrafts.id,
@@ -142,6 +154,21 @@ export class DrizzleCaseService implements CaseService {
           'The draft token is invalid, or the draft is no longer active or has expired.',
         );
       }
+      if (locked.tokenHash !== hashDraftToken(command.body.draftToken)) {
+        throw new DraftExpiredOrInvalidError(
+          'The draft token is invalid, or the draft is no longer active or has expired.',
+        );
+      }
+      if (locked.draftStatus === 'submitted') {
+        const concurrentWinner = await this.findIdempotency(endpoint, keyHash, tx, submittedAt);
+        if (concurrentWinner) return this.replay(concurrentWinner, requestHash);
+        throw new ClaimConflictError('The Claim Draft has already been submitted.');
+      }
+      if (locked.draftStatus !== 'active' || locked.expiresAt.getTime() <= submittedAt.getTime()) {
+        throw new DraftExpiredOrInvalidError(
+          'The draft token is invalid, or the draft is no longer active or has expired.',
+        );
+      }
       if (
         locked.campaignSlug !== command.campaignSlug ||
         locked.campaignStatus !== 'active' ||
@@ -149,17 +176,6 @@ export class DrizzleCaseService implements CaseService {
         locked.versionCampaignId !== locked.campaignId
       ) {
         throw new ResourceNotFoundError('Campaign was not found for this Claim Draft.');
-      }
-      if (
-        locked.tokenHash !== hashDraftToken(command.body.draftToken) ||
-        locked.draftStatus !== 'active' ||
-        locked.expiresAt.getTime() <= submittedAt.getTime()
-      ) {
-        const concurrentWinner = await this.findIdempotency(endpoint, keyHash, tx);
-        if (concurrentWinner) return this.replay(concurrentWinner, requestHash);
-        throw new DraftExpiredOrInvalidError(
-          'The draft token is invalid, or the draft is no longer active or has expired.',
-        );
       }
 
       this.validateConsents(command.body);
@@ -267,7 +283,7 @@ export class DrizzleCaseService implements CaseService {
       const hasIncident = command.body.incidentAnswer !== 'no';
       const caseStatus =
         command.body.incidentAnswer === 'unsure' ||
-        productEvaluations.some(({ evaluation }) => evaluation.result === 'not_matched')
+        productEvaluations.some(({ evaluation }) => evaluation.result !== 'potential_match')
           ? 'triage'
           : 'submitted';
 
@@ -434,15 +450,15 @@ export class DrizzleCaseService implements CaseService {
         templateId: template.id,
         messageKey: `claim-confirmation:${caseId}`,
         channel: 'email',
-        recipientKeyVersion: encrypted.email.keyVersion,
-        recipientEncrypted: encrypted.email.value,
+        recipientKeyVersion: encrypted.recipientEmail.keyVersion,
+        recipientEncrypted: encrypted.recipientEmail.value,
         status: 'queued',
       });
       await tx.insert(outboxEvents).values({
         aggregateType: 'recall_case',
         aggregateId: caseId,
         eventType: 'claim.confirmation.requested',
-        deduplicationKey: `claim-confirmation:${keyHash}`,
+        deduplicationKey: `claim-confirmation:${caseReference}`,
         payload: { communicationId, caseId },
       });
       return response;
@@ -452,7 +468,12 @@ export class DrizzleCaseService implements CaseService {
       return await transaction;
     } catch (error) {
       if (!isPostgresUniqueConstraint(error, IDEMPOTENCY_UNIQUE_CONSTRAINT)) throw error;
-      const concurrentWinner = await this.findIdempotency(endpoint, keyHash);
+      const concurrentWinner = await this.findIdempotency(
+        endpoint,
+        keyHash,
+        this.handle.db,
+        submittedAt,
+      );
       if (!concurrentWinner) throw error;
       return this.replay(concurrentWinner, requestHash);
     }
@@ -462,6 +483,7 @@ export class DrizzleCaseService implements CaseService {
     endpoint: string,
     keyHash: string,
     executor: DatabaseExecutor = this.handle.db,
+    unexpiredAt: Date = new Date(),
   ) {
     const [record] = await executor
       .select({
@@ -470,7 +492,11 @@ export class DrizzleCaseService implements CaseService {
       })
       .from(idempotencyRecords)
       .where(
-        and(eq(idempotencyRecords.endpoint, endpoint), eq(idempotencyRecords.keyHash, keyHash)),
+        and(
+          eq(idempotencyRecords.endpoint, endpoint),
+          eq(idempotencyRecords.keyHash, keyHash),
+          gt(idempotencyRecords.expiresAt, unexpiredAt),
+        ),
       )
       .limit(1);
     return record;
@@ -500,10 +526,12 @@ export class DrizzleCaseService implements CaseService {
 
   private async encryptSubmission(body: ClaimSubmissionRequest): Promise<EncryptedSubmission> {
     const normalizedAddress = normalizeAddress({ ...body.consumer.mailingAddress });
+    const normalizedEmail = normalizeEmail(body.consumer.email);
     const [
       firstName,
       lastName,
       email,
+      recipientEmail,
       phone,
       address,
       emailLookupHash,
@@ -513,10 +541,11 @@ export class DrizzleCaseService implements CaseService {
     ] = await Promise.all([
       this.crypto.encrypt(body.consumer.firstName),
       this.crypto.encrypt(body.consumer.lastName),
-      this.crypto.encrypt(body.consumer.email),
+      this.crypto.encrypt(normalizedEmail),
+      this.crypto.encrypt(normalizedEmail),
       body.consumer.phone ? this.crypto.encrypt(body.consumer.phone) : Promise.resolve(undefined),
       this.crypto.encrypt(normalizedAddress),
-      this.crypto.lookupHash(normalizeEmail(body.consumer.email)),
+      this.crypto.lookupHash(normalizedEmail),
       this.crypto.lookupHash(normalizedAddress),
       this.crypto.encrypt(canonicalJson(body)),
       Promise.all(
@@ -535,6 +564,7 @@ export class DrizzleCaseService implements CaseService {
       firstName,
       lastName,
       email,
+      recipientEmail,
       ...(phone ? { phone } : {}),
       address,
       emailLookupHash,

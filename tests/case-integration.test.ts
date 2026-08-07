@@ -9,18 +9,26 @@ import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
 import {
+  campaignEvidenceRequirements,
   campaignMessageTemplates,
+  campaignProductLots,
+  campaignProducts,
   campaignRemedyOptions,
+  campaignVersions,
   caseConsumers,
   claimDrafts,
   documentUploads,
   idempotencyRecords,
   incidents,
   outboxEvents,
+  recallCampaigns,
   recallCases,
   reportabilityReviews,
 } from '../src/db/schema/index.js';
 import { DrizzleCaseService } from '../src/modules/cases/drizzle-case-service.js';
+import { DrizzleClaimDraftService } from '../src/modules/claim-drafts/drizzle-claim-draft-service.js';
+import { DrizzleDocumentService } from '../src/modules/documents/drizzle-document-service.js';
+import { NotImplementedPrivateBlobAdapter } from '../src/platform/blob/not-implemented.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 import {
   ClaimConflictError,
@@ -53,6 +61,64 @@ interface FailSafeGate {
   readonly arrivals: number;
   wait: () => Promise<void>;
   fail: () => void;
+}
+
+interface BoundedPause {
+  entered: Promise<void>;
+  wait: () => Promise<void>;
+  release: () => void;
+  fail: () => void;
+}
+
+function createBoundedPause(timeoutMs = 1000): BoundedPause {
+  let entered = false;
+  let settled = false;
+  let resolveEntered!: () => void;
+  let rejectEntered!: (error: Error) => void;
+  let resolveRelease!: () => void;
+  let rejectRelease!: (error: Error) => void;
+  const enteredPromise = new Promise<void>((resolve, reject) => {
+    resolveEntered = resolve;
+    rejectEntered = reject;
+  });
+  const released = new Promise<void>((resolve, reject) => {
+    resolveRelease = resolve;
+    rejectRelease = reject;
+  });
+  void enteredPromise.catch(() => undefined);
+  void released.catch(() => undefined);
+  const timeout = setTimeout(() => {
+    if (settled) return;
+    settled = true;
+    const error = new Error(CONCURRENT_GATE_TIMEOUT_MESSAGE);
+    if (!entered) rejectEntered(error);
+    rejectRelease(error);
+  }, timeoutMs);
+
+  return {
+    entered: enteredPromise,
+    wait: () => {
+      if (!entered) {
+        entered = true;
+        resolveEntered();
+      }
+      return released;
+    },
+    release: () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      resolveRelease();
+    },
+    fail: () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      const error = new Error(CONCURRENT_GATE_ABORT_MESSAGE);
+      if (!entered) rejectEntered(error);
+      rejectRelease(error);
+    },
+  };
 }
 
 function createFailSafeGate(
@@ -166,6 +232,97 @@ async function insertReferenceCollisions(draftId: string, references: string[]):
   return caseIds;
 }
 
+async function createTemporaryCampaign() {
+  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
+  const campaignId = randomUUID();
+  const campaignVersionId = randomUUID();
+  const productId = randomUUID();
+  const slug = `claim-scope-${suffix}`;
+  await handle!.db.insert(recallCampaigns).values({
+    id: campaignId,
+    slug,
+    code: `SCOPE-${suffix}`,
+    status: 'active',
+    defaultLocale: 'en-US',
+    isTestData: true,
+  });
+  await handle!.db.insert(campaignVersions).values({
+    id: campaignVersionId,
+    campaignId,
+    versionNumber: 1,
+    status: 'published',
+    publishedAt: new Date(),
+  });
+  await handle!.db
+    .update(recallCampaigns)
+    .set({ publishedVersionId: campaignVersionId })
+    .where(eq(recallCampaigns.id, campaignId));
+  await handle!.db.insert(campaignProducts).values({
+    id: productId,
+    campaignVersionId,
+    sku: `SCOPE-${suffix}`,
+    brand: 'KOI Test',
+    name: 'Scoped idempotency fixture',
+    attributes: { shapes: ['Bear'], flavors: ['Peach'] },
+  });
+  await handle!.db.insert(campaignProductLots).values({
+    campaignProductId: productId,
+    lotCode: 'ML-2406-A',
+    dateCode: '06/2024',
+    eligibilityStatus: 'affected',
+  });
+  await handle!.db.insert(campaignRemedyOptions).values({
+    campaignVersionId,
+    code: 'replacement',
+    displayName: 'Replacement',
+    active: true,
+  });
+  await handle!.db.insert(campaignEvidenceRequirements).values([
+    {
+      campaignVersionId,
+      category: 'product_photo',
+      required: true,
+      minimumFiles: 1,
+      maximumFiles: 2,
+      allowedMimeTypes: ['image/jpeg'],
+      maximumFileSizeBytes: 5_000_000,
+      instructions: 'Upload one product photo.',
+    },
+    {
+      campaignVersionId,
+      category: 'proof_of_purchase',
+      required: true,
+      minimumFiles: 1,
+      maximumFiles: 1,
+      allowedMimeTypes: ['application/pdf'],
+      maximumFileSizeBytes: 5_000_000,
+      instructions: 'Upload one receipt.',
+    },
+  ]);
+  await handle!.db.insert(campaignMessageTemplates).values({
+    campaignVersionId,
+    locale: 'en-US',
+    templateType: 'claim_confirmation',
+    version: 1,
+    subject: 'Claim received',
+    htmlBody: '<p>Claim received.</p>',
+    textBody: 'Claim received.',
+    active: true,
+  });
+
+  return {
+    slug,
+    productId,
+    cleanup: async () => {
+      await handle!.db
+        .update(recallCampaigns)
+        .set({ publishedVersionId: null })
+        .where(eq(recallCampaigns.id, campaignId));
+      await handle!.db.delete(recallCampaigns).where(eq(recallCampaigns.id, campaignId));
+    },
+  };
+}
+
 type ValidationSetup = (fixture: ClaimFixture) => Promise<{
   command: ReturnType<ClaimFixture['command']>;
   cleanup?: () => Promise<void>;
@@ -182,6 +339,22 @@ const validationCases: Array<{
     error: ResourceNotFoundError,
     setup: (claimFixture) =>
       Promise.resolve({ command: claimFixture.command({ campaignSlug: 'another-campaign' }) }),
+  },
+  {
+    name: 'hides Campaign ownership when the Draft token is invalid',
+    error: DraftExpiredOrInvalidError,
+    setup: (claimFixture) => {
+      const body = claimFixture.body();
+      return Promise.resolve({
+        command: claimFixture.command({
+          campaignSlug: 'another-campaign',
+          body: {
+            ...body,
+            draftToken: 'invalid-token-that-is-still-at-least-32-characters',
+          },
+        }),
+      });
+    },
   },
   {
     name: 'rejects an expired Draft',
@@ -307,10 +480,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
   it('atomically persists a standard claim without plaintext sensitive data', async () => {
     const service = new DrizzleCaseService(handle!, crypto);
+    const normalizedEmail = 'taylor@example.com';
+    const baseBody = fixture!.body({ incidentAnswer: 'no' });
     const result = await service.submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
-      body: fixture!.body({ incidentAnswer: 'no' }),
+      body: {
+        ...baseBody,
+        consumer: { ...baseBody.consumer, email: 'Taylor@Example.COM' },
+      },
     });
 
     expect(result.caseReference).toMatch(/^KOI-[A-Z0-9]{4}-[A-Z0-9]{8}$/);
@@ -332,9 +510,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(aggregate.idempotency).toHaveLength(1);
     expect(aggregate.incidents).toHaveLength(0);
     expect(aggregate.reviews).toHaveLength(0);
-    expect(aggregate.consumers[0]?.emailLookupHash).toBe(
-      await crypto.lookupHash('taylor@example.com'),
-    );
+    expect(aggregate.consumers[0]?.emailLookupHash).toBe(await crypto.lookupHash(normalizedEmail));
     expect(aggregate.consumers[0]?.addressLookupHash).toBe(
       await crypto.lookupHash(
         '{"city":"Austin","countryCode":"US","line1":"100 Example Street","line2":"Unit 4","postalCode":"78701","state":"TX"}',
@@ -345,6 +521,21 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     );
     expect(aggregate.snapshots[0]?.schemaVersion).toBe('phase1-v1');
     expect(aggregate.communications[0]?.status).toBe('queued');
+    expect(aggregate.communications[0]?.recipientEncrypted).not.toBe(
+      aggregate.consumers[0]?.emailEncrypted,
+    );
+    await expect(
+      crypto.decrypt({
+        keyVersion: aggregate.consumers[0]!.keyVersion,
+        value: aggregate.consumers[0]!.emailEncrypted,
+      }),
+    ).resolves.toBe(normalizedEmail);
+    await expect(
+      crypto.decrypt({
+        keyVersion: aggregate.communications[0]!.recipientKeyVersion,
+        value: aggregate.communications[0]!.recipientEncrypted,
+      }),
+    ).resolves.toBe(normalizedEmail);
     expect(aggregate.outbox[0]?.eventType).toBe('claim.confirmation.requested');
     expect(aggregate.outbox[0]?.payload).toEqual({
       communicationId: aggregate.communications[0]?.id,
@@ -398,6 +589,105 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(serialized).not.toContain(command.body.products[0]!.orderNumber!);
   });
 
+  it('atomically recycles an expired Idempotency-Key for a new Draft', async () => {
+    const service = new DrizzleCaseService(handle!, crypto);
+    const idempotencyKey = randomUUID();
+    const keyHash = await crypto.lookupHash(idempotencyKey);
+    const first = await service.submit(fixture!.command({ idempotencyKey }));
+    await handle!.db
+      .update(idempotencyRecords)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(
+        and(
+          eq(idempotencyRecords.endpoint, '/v1/recall-campaigns/music-lollipop-demo-2026/claims'),
+          eq(idempotencyRecords.keyHash, keyHash),
+        ),
+      );
+    const secondFixture = await createClaimFixture(handle!);
+
+    try {
+      const second = await service.submit(secondFixture.command({ idempotencyKey }));
+
+      expect(second.caseReference).not.toBe(first.caseReference);
+      await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
+      await expect(countCasesForDraft(handle!, secondFixture.draftId)).resolves.toBe(1);
+      const records = await handle!.db
+        .select({ caseId: idempotencyRecords.caseId, expiresAt: idempotencyRecords.expiresAt })
+        .from(idempotencyRecords)
+        .where(
+          and(
+            eq(idempotencyRecords.endpoint, '/v1/recall-campaigns/music-lollipop-demo-2026/claims'),
+            eq(idempotencyRecords.keyHash, keyHash),
+          ),
+        );
+      expect(records).toHaveLength(1);
+      expect(records[0]?.caseId).toBe((await loadAggregate(handle!, second.caseReference)).case.id);
+      expect(records[0]!.expiresAt.getTime()).toBeGreaterThan(Date.now());
+    } finally {
+      await cleanupClaimFixture(handle!, secondFixture);
+    }
+  });
+
+  it('allows exactly one concurrent winner when recycling an expired Idempotency-Key', async () => {
+    const idempotencyKey = randomUUID();
+    const keyHash = await crypto.lookupHash(idempotencyKey);
+    await new DrizzleCaseService(handle!, crypto).submit(fixture!.command({ idempotencyKey }));
+    await handle!.db
+      .update(idempotencyRecords)
+      .set({ expiresAt: new Date(Date.now() - 1000) })
+      .where(
+        and(
+          eq(idempotencyRecords.endpoint, '/v1/recall-campaigns/music-lollipop-demo-2026/claims'),
+          eq(idempotencyRecords.keyHash, keyHash),
+        ),
+      );
+    const secondFixture = await createClaimFixture(handle!);
+    const thirdFixture = await createClaimFixture(handle!);
+    const transactionGate = createFailSafeGate(2);
+    const service = new DrizzleCaseService(
+      withTransactionBarrier(handle!, transactionGate),
+      crypto,
+    );
+
+    try {
+      const results = await Promise.allSettled([
+        runGateParticipant(
+          () => service.submit(secondFixture.command({ idempotencyKey })),
+          [transactionGate],
+        ),
+        runGateParticipant(
+          () => service.submit(thirdFixture.command({ idempotencyKey })),
+          [transactionGate],
+        ),
+      ]);
+      const fulfilled = results.filter((result) => result.status === 'fulfilled');
+      const rejected = results.filter((result) => result.status === 'rejected');
+
+      expect(transactionGate.arrivals).toBe(2);
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect(rejected[0]?.reason).toBeInstanceOf(ClaimConflictError);
+      expect(
+        (await countCasesForDraft(handle!, secondFixture.draftId)) +
+          (await countCasesForDraft(handle!, thirdFixture.draftId)),
+      ).toBe(1);
+      const records = await handle!.db
+        .select({ id: idempotencyRecords.id })
+        .from(idempotencyRecords)
+        .where(
+          and(
+            eq(idempotencyRecords.endpoint, '/v1/recall-campaigns/music-lollipop-demo-2026/claims'),
+            eq(idempotencyRecords.keyHash, keyHash),
+          ),
+        );
+      expect(records).toHaveLength(1);
+    } finally {
+      transactionGate.fail();
+      await cleanupClaimFixture(handle!, secondFixture);
+      await cleanupClaimFixture(handle!, thirdFixture);
+    }
+  });
+
   it('returns 409 when a key is reused with a different request', async () => {
     const service = new DrizzleCaseService(handle!, crypto);
     const command = fixture!.command({ idempotencyKey: randomUUID() });
@@ -410,6 +700,119 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       }),
     ).rejects.toBeInstanceOf(ClaimConflictError);
     await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
+  });
+
+  it('scopes one Idempotency-Key independently across two Campaign endpoints', async () => {
+    const temporaryCampaign = await createTemporaryCampaign();
+    const secondFixture = await createClaimFixture(handle!, {
+      campaignSlug: temporaryCampaign.slug,
+      productId: temporaryCampaign.productId,
+    });
+    const idempotencyKey = randomUUID();
+    const service = new DrizzleCaseService(handle!, crypto);
+
+    try {
+      const first = await service.submit(fixture!.command({ idempotencyKey }));
+      const second = await service.submit(secondFixture.command({ idempotencyKey }));
+      const firstAggregate = await loadAggregate(handle!, first.caseReference);
+      const secondAggregate = await loadAggregate(handle!, second.caseReference);
+
+      expect(first.caseReference).not.toBe(second.caseReference);
+      expect(firstAggregate.idempotency[0]?.endpoint).toBe(
+        '/v1/recall-campaigns/music-lollipop-demo-2026/claims',
+      );
+      expect(secondAggregate.idempotency[0]?.endpoint).toBe(
+        `/v1/recall-campaigns/${temporaryCampaign.slug}/claims`,
+      );
+      expect(firstAggregate.outbox).toHaveLength(1);
+      expect(secondAggregate.outbox).toHaveLength(1);
+      expect(firstAggregate.outbox[0]?.deduplicationKey).not.toBe(
+        secondAggregate.outbox[0]?.deduplicationKey,
+      );
+    } finally {
+      await cleanupClaimFixture(handle!, secondFixture);
+      await temporaryCampaign.cleanup();
+    }
+  });
+
+  it('returns a Claim conflict when a submitted Draft is retried with a new key', async () => {
+    const service = new DrizzleCaseService(handle!, crypto);
+    await service.submit(fixture!.command({ idempotencyKey: randomUUID() }));
+
+    await expect(
+      service.submit(fixture!.command({ idempotencyKey: randomUUID() })),
+    ).rejects.toBeInstanceOf(ClaimConflictError);
+    await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
+  });
+
+  it('never marks a Document for deletion after Claim association wins the Draft lock', async () => {
+    const claimPause = createBoundedPause();
+    let deletionEnteredResolve!: () => void;
+    let deletionEnteredReject!: (error: Error) => void;
+    let deletionEntered = false;
+    const deletionStarted = new Promise<void>((resolve, reject) => {
+      deletionEnteredResolve = resolve;
+      deletionEnteredReject = reject;
+    });
+    void deletionStarted.catch(() => undefined);
+    const notifyDeletionEntered = (): void => {
+      if (deletionEntered) return;
+      deletionEntered = true;
+      deletionEnteredResolve();
+    };
+    const deletionTimeout = setTimeout(() => {
+      if (!deletionEntered) deletionEnteredReject(new Error(CONCURRENT_GATE_TIMEOUT_MESSAGE));
+    }, 1000);
+    const observedTransaction: DatabaseHandle['transaction'] = (work) => {
+      notifyDeletionEntered();
+      return handle!.transaction(work);
+    };
+    const documentService = new DrizzleDocumentService(
+      handle!.db,
+      new NotImplementedPrivateBlobAdapter(),
+      observedTransaction,
+    );
+    const claimService = new DrizzleCaseService(handle!, crypto, undefined, claimPause.wait);
+
+    await new DrizzleClaimDraftService(handle!.db).assertActive(
+      fixture!.draftId,
+      fixture!.draftToken,
+    );
+    const claim = claimService.submit(fixture!.command());
+    try {
+      await claimPause.entered;
+      const deletion = documentService.scheduleDraftDocumentDeletion(
+        fixture!.draftId,
+        fixture!.documentIds[0]!,
+        fixture!.draftToken,
+      );
+      await deletionStarted;
+      claimPause.release();
+
+      const [claimResult, deletionResult] = await Promise.allSettled([claim, deletion]);
+      expect(claimResult.status).toBe('fulfilled');
+      expect(deletionResult.status).toBe('rejected');
+      if (deletionResult.status !== 'rejected') {
+        throw new Error('Expected deletion to reject after Claim association.');
+      }
+      expect(deletionResult.reason).toBeInstanceOf(DraftExpiredOrInvalidError);
+      const [document] = await handle!.db
+        .select({
+          draftId: documentUploads.draftId,
+          caseId: documentUploads.caseId,
+          uploadStatus: documentUploads.uploadStatus,
+        })
+        .from(documentUploads)
+        .where(eq(documentUploads.id, fixture!.documentIds[0]!));
+      expect(document).toMatchObject({
+        draftId: null,
+        uploadStatus: 'linked',
+      });
+      expect(document?.caseId).not.toBeNull();
+    } finally {
+      clearTimeout(deletionTimeout);
+      claimPause.release();
+    }
   });
 
   it('opens both real PostgreSQL transactions before releasing concurrent work', async () => {
@@ -548,7 +951,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const rejected = results.filter((result) => result.status === 'rejected');
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(rejected[0]?.reason).toBeInstanceOf(DraftExpiredOrInvalidError);
+    expect(rejected[0]?.reason).toBeInstanceOf(ClaimConflictError);
     await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(1);
     await expect(countCasesForEmail(email)).resolves.toBe(1);
 
@@ -802,6 +1205,42 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(aggregate.products[0]?.checkResult).toBe('not_matched');
   });
 
+  it('persists a manual-review Product result and routes the Case to triage', async () => {
+    const lotId = randomUUID();
+    const body = fixture!.body();
+    await handle!.db.insert(campaignProductLots).values({
+      id: lotId,
+      campaignProductId: body.products[0]!.campaignProductId,
+      lotCode: `MANUAL-${lotId.slice(0, 8)}`,
+      dateCode: '08/2026',
+      eligibilityStatus: 'manual_review',
+    });
+
+    try {
+      const result = await new DrizzleCaseService(handle!, crypto).submit(
+        fixture!.command({
+          body: {
+            ...body,
+            products: [
+              {
+                ...body.products[0]!,
+                lotCode: `MANUAL-${lotId.slice(0, 8)}`,
+                dateCode: '08/2026',
+              },
+            ],
+          },
+        }),
+      );
+      const aggregate = await loadAggregate(handle!, result.caseReference);
+
+      expect(aggregate.case.status).toBe('triage');
+      expect(aggregate.products).toHaveLength(1);
+      expect(aggregate.products[0]?.checkResult).toBe('manual_review');
+    } finally {
+      await handle!.db.delete(campaignProductLots).where(eq(campaignProductLots.id, lotId));
+    }
+  });
+
   it('leaves an omitted verified Document owned by the Draft', async () => {
     const omittedDocumentId = randomUUID();
     fixture!.documentIds.push(omittedDocumentId);
@@ -899,8 +1338,8 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
         },
       }),
     });
-    const keyHash = await crypto.lookupHash(idempotencyKey);
-    const deduplicationKey = `claim-confirmation:${keyHash}`;
+    const forcedReference = uniqueCaseReference();
+    const deduplicationKey = `claim-confirmation:${forcedReference}`;
     await handle!.db.insert(outboxEvents).values({
       aggregateType: 'test',
       aggregateId: randomUUID(),
@@ -910,9 +1349,9 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     });
 
     try {
-      await expect(new DrizzleCaseService(handle!, crypto).submit(command)).rejects.toMatchObject({
-        cause: { code: '23505' },
-      });
+      await expect(
+        new DrizzleCaseService(handle!, crypto, () => forcedReference).submit(command),
+      ).rejects.toMatchObject({ cause: { code: '23505' } });
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
       const rollbackEmailLookupHash = await crypto.lookupHash(rollbackEmail);

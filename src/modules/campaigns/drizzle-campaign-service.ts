@@ -30,8 +30,8 @@ export function buildPublishedVersionQuery(db: Database, campaignId: string, ver
 
 /**
  * Reads published campaigns from Postgres via Drizzle. The injected {@link Database}
- * is the dual-adapter union, so the same code runs against Neon HTTP in production
- * and node-postgres locally with no branching.
+ * is the dual-adapter union, so the same code runs against Neon Serverless Pool in
+ * production and node-postgres locally with no branching.
  */
 export class DrizzleCampaignService implements CampaignService {
   constructor(private readonly db: Database) {}

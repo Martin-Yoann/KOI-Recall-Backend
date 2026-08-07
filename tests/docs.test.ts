@@ -85,7 +85,7 @@ describe('documentation cross-check', () => {
     ]);
 
     expect(documents[0]).toContain('501');
-    expect(documents[1]).toContain('非交互式事务');
+    expect(documents[1]).toContain('Neon Serverless Pool 交互式事务');
     expect(documents[2]).toContain('501');
   });
 });

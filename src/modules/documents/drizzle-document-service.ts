@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
 
-import type { Database } from '../../db/client.js';
+import type { Database, DatabaseHandle } from '../../db/client.js';
 import {
   campaignEvidenceRequirements,
   claimDrafts,
@@ -11,12 +11,14 @@ import {
 import type { documentUploadStatusEnum } from '../../db/schema/index.js';
 import type { PrivateBlobPort, UploadCompletion } from '../../platform/blob/port.js';
 import {
+  DraftExpiredOrInvalidError,
   EvidenceRulesViolationError,
   isUniqueViolation,
   PayloadTooLargeError,
   ResourceNotFoundError,
   UnsupportedMediaTypeError,
 } from '../../shared/errors.js';
+import { hashDraftToken } from '../claim-drafts/tokens.js';
 import type { AuthorizeUploadInput, DocumentService, AuthorizedUpload } from './service.js';
 
 /** The full union of `document_uploads.upload_status` values. */
@@ -26,7 +28,7 @@ type DocumentUploadStatus = (typeof documentUploadStatusEnum.enumValues)[number]
  * Statuses eligible for soft deletion (advance to `deletion_pending`). Rows
  * already pending or deleted are treated as idempotently deleted.
  */
-const DELETABLE_UPLOAD_STATUSES = ['authorized', 'uploaded', 'verified', 'linked'] as const;
+const DELETABLE_UPLOAD_STATUSES = ['authorized', 'uploaded', 'verified'] as const;
 
 /** How long a draft-owned document authorization remains valid. Matches the draft TTL. */
 const DOCUMENT_AUTHORIZATION_TTL_MS = 48 * 60 * 60 * 1000;
@@ -41,6 +43,7 @@ export class DrizzleDocumentService implements DocumentService {
   constructor(
     private readonly db: Database,
     private readonly blob: PrivateBlobPort,
+    private readonly transaction: DatabaseHandle['transaction'],
   ) {}
 
   async authorizeUpload(input: AuthorizeUploadInput): Promise<AuthorizedUpload> {
@@ -139,9 +142,9 @@ export class DrizzleDocumentService implements DocumentService {
     } catch (error) {
       // The document row exists but no client can ever complete an upload
       // against it; remove it so the per-category count and cleanup index stay
-      // accurate. This best-effort delete is outside any transaction (Neon HTTP
-      // has no interactive transactions); a leftover row would be reaped by the
-      // draft-cleanup job via the expiresAt index.
+      // accurate. This best-effort delete happens after the Blob authorization
+      // failed; a leftover row would be reaped by the draft-cleanup job via the
+      // expiresAt index.
       await db
         .delete(documentUploads)
         .where(eq(documentUploads.id, documentId))
@@ -163,26 +166,63 @@ export class DrizzleDocumentService implements DocumentService {
     };
   }
 
-  async scheduleDraftDocumentDeletion(draftId: string, documentId: string): Promise<void> {
-    const db = this.db;
+  async scheduleDraftDocumentDeletion(
+    draftId: string,
+    documentId: string,
+    draftToken: string,
+  ): Promise<void> {
+    const now = new Date();
+    await this.transaction(async (tx) => {
+      const [draft] = await tx
+        .select({
+          tokenHash: claimDrafts.tokenHash,
+          status: claimDrafts.status,
+          expiresAt: claimDrafts.expiresAt,
+        })
+        .from(claimDrafts)
+        .where(eq(claimDrafts.id, draftId))
+        .for('update');
+      if (
+        !draft ||
+        draft.tokenHash !== hashDraftToken(draftToken) ||
+        draft.status !== 'active' ||
+        draft.expiresAt.getTime() <= now.getTime()
+      ) {
+        throw new DraftExpiredOrInvalidError(
+          'The draft token is invalid, or the draft is no longer active or has expired.',
+        );
+      }
 
-    const [document] = await db
-      .select({ uploadStatus: documentUploads.uploadStatus })
-      .from(documentUploads)
-      .where(and(eq(documentUploads.id, documentId), eq(documentUploads.draftId, draftId)))
-      .limit(1);
+      const [document] = await tx
+        .select({
+          draftId: documentUploads.draftId,
+          caseId: documentUploads.caseId,
+          uploadStatus: documentUploads.uploadStatus,
+        })
+        .from(documentUploads)
+        .where(eq(documentUploads.id, documentId))
+        .for('update');
+      if (!document || document.draftId !== draftId || document.caseId !== null) {
+        throw new ResourceNotFoundError('Document was not found for this draft.');
+      }
 
-    if (!document) throw new ResourceNotFoundError('Document was not found for this draft.');
+      const deletable = DELETABLE_UPLOAD_STATUSES as readonly DocumentUploadStatus[];
+      if (!deletable.includes(document.uploadStatus)) return;
 
-    // Idempotent: an already-scheduled or deleted document is a no-op success.
-    const deletable = DELETABLE_UPLOAD_STATUSES as readonly DocumentUploadStatus[];
-    if (!deletable.includes(document.uploadStatus)) return;
-
-    await db
-      .update(documentUploads)
-      .set({ uploadStatus: 'deletion_pending', categorySlot: null, updatedAt: sql`now()` })
-      .where(eq(documentUploads.id, documentId))
-      .execute();
+      const [updated] = await tx
+        .update(documentUploads)
+        .set({ uploadStatus: 'deletion_pending', categorySlot: null, updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(documentUploads.id, documentId),
+            eq(documentUploads.draftId, draftId),
+            isNull(documentUploads.caseId),
+            inArray(documentUploads.uploadStatus, DELETABLE_UPLOAD_STATUSES),
+          ),
+        )
+        .returning({ id: documentUploads.id });
+      if (!updated) throw new ResourceNotFoundError('Document was not found for this draft.');
+    });
   }
 
   async reconcileCompletedUpload(

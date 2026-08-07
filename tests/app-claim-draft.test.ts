@@ -247,11 +247,22 @@ describe('POST /v1/claim-drafts/{draftId}/upload-tokens', () => {
 });
 
 describe('DELETE /v1/claim-drafts/{draftId}/documents/{documentId}', () => {
-  it('returns 204 when the document is scheduled for deletion', async () => {
-    const app = appWithDocuments({
-      authorizeUpload: () => Promise.resolve(authorized),
-      scheduleDraftDocumentDeletion: () => Promise.resolve(),
-    });
+  it('delegates token validation and deletion atomically to the Document service', async () => {
+    const deletionCalls: unknown[][] = [];
+    let standaloneDraftChecks = 0;
+    const app = appWithDocuments(
+      {
+        authorizeUpload: () => Promise.resolve(authorized),
+        scheduleDraftDocumentDeletion: (...args: unknown[]) => {
+          deletionCalls.push(args);
+          return Promise.resolve();
+        },
+      },
+      () => {
+        standaloneDraftChecks += 1;
+        return Promise.resolve();
+      },
+    );
     const response = await app.request(
       `/v1/claim-drafts/${DRAFT_ID}/documents/a996d56a-da5e-49c3-bf76-665130bbb88a`,
       { method: 'DELETE', headers: { 'X-Draft-Token': DRAFT_TOKEN } },
@@ -259,5 +270,9 @@ describe('DELETE /v1/claim-drafts/{draftId}/documents/{documentId}', () => {
 
     expect(response.status).toBe(204);
     expect(await response.text()).toBe('');
+    expect(standaloneDraftChecks).toBe(0);
+    expect(deletionCalls).toEqual([
+      [DRAFT_ID, 'a996d56a-da5e-49c3-bf76-665130bbb88a', DRAFT_TOKEN],
+    ]);
   });
 });

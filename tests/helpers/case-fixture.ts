@@ -33,8 +33,18 @@ export interface ClaimFixture {
   command(overrides?: Partial<ClaimSubmissionCommand>): ClaimSubmissionCommand;
 }
 
-export async function createClaimFixture(handle: DatabaseHandle): Promise<ClaimFixture> {
-  const draft = await new DrizzleClaimDraftService(handle.db).create(CAMPAIGN_SLUG);
+export interface ClaimFixtureOptions {
+  campaignSlug?: string;
+  productId?: string;
+}
+
+export async function createClaimFixture(
+  handle: DatabaseHandle,
+  options: ClaimFixtureOptions = {},
+): Promise<ClaimFixture> {
+  const campaignSlug = options.campaignSlug ?? CAMPAIGN_SLUG;
+  const productId = options.productId ?? PRODUCT_ID;
+  const draft = await new DrizzleClaimDraftService(handle.db).create(campaignSlug);
   if (!draft) throw new Error('Seeded Campaign is required for Claim integration tests.');
 
   const documentIds = [randomUUID(), randomUUID()];
@@ -99,7 +109,7 @@ export async function createClaimFixture(handle: DatabaseHandle): Promise<ClaimF
     },
     products: [
       {
-        campaignProductId: PRODUCT_ID,
+        campaignProductId: productId,
         quantity: 1,
         shape: 'Bear',
         flavor: 'Peach',
@@ -121,7 +131,7 @@ export async function createClaimFixture(handle: DatabaseHandle): Promise<ClaimF
   });
 
   const command = (overrides: Partial<ClaimSubmissionCommand> = {}): ClaimSubmissionCommand => ({
-    campaignSlug: CAMPAIGN_SLUG,
+    campaignSlug,
     idempotencyKey: randomUUID(),
     body: body(),
     ...overrides,

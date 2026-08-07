@@ -216,12 +216,12 @@ export function createApp(dependencies: AppDependencies = {}) {
   });
   app.openapi(deleteDraftDocumentRoute, async (context) => {
     const { draftId, documentId } = context.req.valid('param');
-    await registry.services.claimDrafts.assertActive(
-      draftId,
-      context.req.valid('header')['X-Draft-Token'],
-    );
     try {
-      await registry.services.documents.scheduleDraftDocumentDeletion(draftId, documentId);
+      await registry.services.documents.scheduleDraftDocumentDeletion(
+        draftId,
+        documentId,
+        context.req.valid('header')['X-Draft-Token'],
+      );
     } catch (error) {
       if (isConnectionError(error))
         return dependencyUnavailable(context, 'Draft document deletion');
@@ -239,7 +239,8 @@ export function createApp(dependencies: AppDependencies = {}) {
         body: context.req.valid('json'),
       });
     } catch (error) {
-      if (isConnectionError(error)) return dependencyUnavailable(context, 'Recall claim submission');
+      if (isConnectionError(error))
+        return dependencyUnavailable(context, 'Recall claim submission');
       throw error;
     }
 

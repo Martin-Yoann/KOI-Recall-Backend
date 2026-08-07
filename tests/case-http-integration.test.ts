@@ -64,6 +64,28 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
     };
     const payload = JSON.stringify(claimBody);
 
+    const invalidTokenResponse = await app.request(
+      '/v1/recall-campaigns/not-the-draft-campaign/claims',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': randomUUID(),
+        },
+        body: JSON.stringify({
+          ...claimBody,
+          draftToken: 'invalid-token-that-is-still-at-least-32-characters',
+        }),
+      },
+    );
+    expect(invalidTokenResponse.status).toBe(410);
+    await expect(invalidTokenResponse.json()).resolves.toMatchObject({
+      type: 'https://api.example.invalid/problems/gone',
+      title: 'Gone',
+      status: 410,
+      detail: 'The draft token is invalid, or the draft is no longer active or has expired.',
+    });
+
     const response = await app.request(`/v1/recall-campaigns/${SEED_SLUG}/claims`, {
       method: 'POST',
       headers: {
@@ -146,6 +168,21 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
     const replayBody = claimSubmissionResponseSchema.parse(await replayResponse.json());
     expect(replayBody).toEqual(body);
 
+    const newKeyResponse = await app.request(`/v1/recall-campaigns/${SEED_SLUG}/claims`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': randomUUID(),
+      },
+      body: payload,
+    });
+    expect(newKeyResponse.status).toBe(409);
+    await expect(newKeyResponse.json()).resolves.toMatchObject({
+      type: 'https://api.example.invalid/problems/conflict',
+      title: 'Conflict',
+      status: 409,
+    });
+
     await expect(countCasesForDraft(handle!, fixture.draftId)).resolves.toBe(1);
     const casesForConsumer = await handle!.db
       .select({ caseId: caseConsumers.caseId })
@@ -162,6 +199,7 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
       [
         `status=${response.status}`,
         `replayStatus=${replayResponse.status}`,
+        `submittedNewKeyStatus=${newKeyResponse.status}`,
         `caseReference=${body.caseReference}`,
         `emailStatus=${body.emailStatus}`,
         `draftStatus=${replayAggregate.draft?.status}`,

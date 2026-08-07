@@ -13,7 +13,7 @@ const DRAFT_TTL_MS = 48 * 60 * 60 * 1000;
 /**
  * Persists anonymous claim drafts in Postgres via Drizzle. The injected
  * {@link Database} is the dual-adapter union, so the same code runs against Neon
- * HTTP in production and node-postgres locally with no branching.
+ * Serverless Pool in production and node-postgres locally with no branching.
  */
 export class DrizzleClaimDraftService implements ClaimDraftService {
   constructor(private readonly db: Database) {}

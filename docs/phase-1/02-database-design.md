@@ -3,7 +3,7 @@
 ## 1. 约定
 
 - PostgreSQL/Neon，Drizzle Schema 为 `src/db/schema/index.ts`，首个生成迁移为 `drizzle/0000_adorable_sue_storm.sql`。
-- 数据库客户端 `src/db/client.ts` 按连接串自动选择 Neon HTTP 或 node-postgres 驱动；`pnpm db:migrate`（`scripts/migrate.ts`）套用 `drizzle/` 迁移，本地缺失目标库时会自动创建。
+- 数据库客户端 `src/db/client.ts` 按连接串自动选择 Neon Serverless Pool 或 node-postgres 驱动；Neon 运行时必须使用 `ep-...-pooler.*.neon.tech`，直连 Neon 主机名失败关闭。`pnpm db:migrate`（`scripts/migrate.ts`）套用 `drizzle/` 迁移，本地缺失目标库时会自动创建。
 - 所有实体主键使用数据库生成 UUID；对消费者展示的是不可猜测 `public_reference`，不是内部 UUID 或序号。
 - 瞬时时间均为 UTC `timestamptz`；只有消费者提供的日历购买日期使用 `date`。
 - 状态和稳定类别使用 PostgreSQL enum 或 check constraint；金额字段若后续增加必须使用最小货币单位整数或 `numeric`，不能使用浮点数。
@@ -127,7 +127,7 @@ Append-only 审计事件，保存 Case、事件类型、最小化 actor 信息�
 
 ### `idempotency_records`
 
-按 `endpoint + key_hash` 唯一。保存请求 SHA-256、原始状态码/响应体、可选 Case 和过期时间。相同 Key/相同请求重放原响应；相同 Key/不同请求返回 `409`。不保存明文 Idempotency-Key。
+按 `endpoint + key_hash` 唯一。保存请求 SHA-256、原始状态码/响应体、可选 Case 和 24 小时过期时间。有效期内，相同 Key/相同请求重放原响应，相同 Key/不同请求返回 `409`；过期记录会在新 Claim 事务中原子删除并替换，并发回收仍只有一个获胜者。不保存明文 Idempotency-Key。
 
 ### `webhook_events`
 
@@ -154,7 +154,7 @@ Append-only 审计事件，保存 Case、事件类型、最小化 actor 信息�
 
 ## 8. 提交事务与并发约束
 
-Case 提交在一个 Neon 非交互式事务中完成，事务内锁定/条件更新 Draft，验证它仍为 active 且未过期。顺序为 Case → Consumer/Product/Consent/Snapshot → 可选 Incident/Review → Document 关联 → Events → Communication/Outbox → Idempotency response。任一步失败都不产生半成品 Case。
+Case 提交在一个 Neon Serverless Pool 交互式事务中完成，事务内锁定/条件更新 Draft，验证它仍为 active 且未过期。顺序为 Case → Consumer/Product/Consent/Snapshot → 可选 Incident/Review → Document 关联 → Events → Communication/Outbox → Idempotency response。任一步失败都不产生半成品 Case。
 
 上传回调、Outbox 和 Webhook 均按唯一键设计成可重试。后台清理必须以状态条件更新领取记录，不能依赖单实例内存锁。
 

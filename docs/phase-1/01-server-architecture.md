@@ -148,7 +148,7 @@ Private Blob 的任何读取都必须经过授权服务端代理或签名 URL。
 ## 7. Vercel 部署边界
 
 - `src/index.ts` 导出 Hono app，由 Vercel Node Runtime 承载。
-- 读写使用 Neon Serverless Pool；提交仅使用同一次请求内的非交互式事务，不把交互事务跨网络/函数保存。
+- 读写使用 Neon Serverless Pool；提交在同一次请求内完成一个交互式数据库事务，不把事务跨请求或函数调用保存。Neon 运行时连接串必须使用 `ep-...-pooler.*.neon.tech`，直连主机名启动失败关闭。
 - 大文件浏览器直传 Blob，避免函数请求体和执行时长成为瓶颈。
 - Cron 调用必须校验 Secret，并以数据库锁/状态实现并发安全和重复执行安全。
 - Preview 与 Production 使用隔离的 Neon、Blob、Resend 配置；测试 Seed 明确禁止生产执行。
