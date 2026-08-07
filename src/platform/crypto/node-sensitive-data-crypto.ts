@@ -34,6 +34,19 @@ function decodeSecret(
   return decoded;
 }
 
+export function validateFieldEncryptionKey(encryptionKeyBase64: string): Buffer {
+  return decodeSecret(
+    'FIELD_ENCRYPTION_KEY',
+    encryptionKeyBase64,
+    AES_256_KEY_BYTES,
+    AES_256_KEY_BYTES,
+  );
+}
+
+export function validateHashPepper(hashPepperBase64: string): Buffer {
+  return decodeSecret('HASH_PEPPER', hashPepperBase64, AES_256_KEY_BYTES);
+}
+
 function decodeBase64url(value: string, label: string, allowEmpty = false): Buffer {
   if (
     (!allowEmpty && value.length === 0) ||
@@ -56,13 +69,8 @@ export class NodeSensitiveDataCrypto implements SensitiveDataCryptoPort {
   private readonly pepper: Buffer;
 
   constructor(encryptionKeyBase64: string, hashPepperBase64: string) {
-    this.key = decodeSecret(
-      'FIELD_ENCRYPTION_KEY',
-      encryptionKeyBase64,
-      AES_256_KEY_BYTES,
-      AES_256_KEY_BYTES,
-    );
-    this.pepper = decodeSecret('HASH_PEPPER', hashPepperBase64, AES_256_KEY_BYTES);
+    this.key = validateFieldEncryptionKey(encryptionKeyBase64);
+    this.pepper = validateHashPepper(hashPepperBase64);
     if (this.key.equals(this.pepper)) {
       throw new Error('FIELD_ENCRYPTION_KEY and HASH_PEPPER must be distinct.');
     }

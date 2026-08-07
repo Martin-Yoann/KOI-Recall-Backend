@@ -136,8 +136,11 @@ describe('application composition', () => {
     },
   );
 
-  it('registers the Drizzle Case service from complete default configuration', () => {
-    const registry = createDefaultRegistry(configuredConfig());
+  it.each([
+    ['postgresql', 'postgresql://user:password@127.0.0.1:5432/koi'],
+    ['postgres', 'postgres://user:password@127.0.0.1:5432/koi'],
+  ])('registers the Drizzle Case service for a valid %s database URL', (_, databaseUrl) => {
+    const registry = createDefaultRegistry(configuredConfig({ DATABASE_URL: databaseUrl }));
 
     expect(registry.services.cases).toBeInstanceOf(DrizzleCaseService);
     expect(registry.platform.crypto).toBeInstanceOf(NodeSensitiveDataCrypto);
@@ -166,5 +169,44 @@ describe('application composition', () => {
     for (const secret of suppliedSecrets) {
       expect((thrown as Error).message).not.toContain(secret);
     }
+  });
+
+  it.each([
+    [
+      'an invalid encryption key when HASH_PEPPER is absent',
+      { FIELD_ENCRYPTION_KEY: 'not:a:base64:key', HASH_PEPPER: undefined },
+      'not:a:base64:key',
+    ],
+    [
+      'an invalid hash pepper when FIELD_ENCRYPTION_KEY is absent',
+      { FIELD_ENCRYPTION_KEY: undefined, HASH_PEPPER: 'not:a:base64:pepper' },
+      'not:a:base64:pepper',
+    ],
+  ])('fails safely for %s', (_, overrides, suppliedSecret) => {
+    let thrown: unknown;
+    try {
+      createDefaultRegistry(configuredConfig(overrides));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).not.toContain(suppliedSecret);
+  });
+
+  it.each([
+    ['a blank database URL', '   '],
+    ['a malformed database URL', 'not-a-url'],
+    ['a non-PostgreSQL database URL', 'mysql://user:password@127.0.0.1:3306/koi'],
+  ])('fails safely for %s', (_, databaseUrl) => {
+    let thrown: unknown;
+    try {
+      createDefaultRegistry(configuredConfig({ DATABASE_URL: databaseUrl }));
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).not.toContain(databaseUrl);
   });
 });

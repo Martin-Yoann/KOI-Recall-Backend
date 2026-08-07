@@ -16,7 +16,11 @@ import { NotImplementedPrivateBlobAdapter } from './platform/blob/not-implemente
 import type { PrivateBlobPort } from './platform/blob/port.js';
 import { VercelBlobAdapter } from './platform/blob/vercel-blob.js';
 import { NotImplementedCryptoAdapter } from './platform/crypto/not-implemented.js';
-import { NodeSensitiveDataCrypto } from './platform/crypto/node-sensitive-data-crypto.js';
+import {
+  NodeSensitiveDataCrypto,
+  validateFieldEncryptionKey,
+  validateHashPepper,
+} from './platform/crypto/node-sensitive-data-crypto.js';
 import type { SensitiveDataCryptoPort } from './platform/crypto/port.js';
 import { NotImplementedEmailAdapter } from './platform/email/not-implemented.js';
 import type { TransactionalEmailPort } from './platform/email/port.js';
@@ -113,10 +117,28 @@ export function createApplicationRegistry(
 }
 
 function createCryptoAdapter(config: AppConfig): SensitiveDataCryptoPort {
-  if (config.FIELD_ENCRYPTION_KEY === undefined || config.HASH_PEPPER === undefined) {
-    return new NotImplementedCryptoAdapter();
+  const encryptionKey = config.FIELD_ENCRYPTION_KEY;
+  const hashPepper = config.HASH_PEPPER;
+  if (encryptionKey !== undefined && hashPepper !== undefined) {
+    return new NodeSensitiveDataCrypto(encryptionKey, hashPepper);
   }
-  return new NodeSensitiveDataCrypto(config.FIELD_ENCRYPTION_KEY, config.HASH_PEPPER);
+  if (encryptionKey !== undefined) validateFieldEncryptionKey(encryptionKey);
+  if (hashPepper !== undefined) validateHashPepper(hashPepper);
+  return new NotImplementedCryptoAdapter();
+}
+
+function validateDatabaseUrl(databaseUrl: string): void {
+  try {
+    const parsed = new URL(databaseUrl);
+    if (
+      (parsed.protocol !== 'postgres:' && parsed.protocol !== 'postgresql:') ||
+      parsed.hostname.length === 0
+    ) {
+      throw new Error('Invalid database URL.');
+    }
+  } catch {
+    throw new Error('DATABASE_URL must be a valid PostgreSQL connection string.');
+  }
 }
 
 /**
@@ -141,8 +163,9 @@ function createBlobAdapter(config: AppConfig): PrivateBlobPort {
  * by the client), otherwise the all-placeholder skeleton registry.
  */
 export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
+  if (config.DATABASE_URL !== undefined) validateDatabaseUrl(config.DATABASE_URL);
   const crypto = createCryptoAdapter(config);
-  if (!config.DATABASE_URL) {
+  if (config.DATABASE_URL === undefined) {
     const placeholder = createPlaceholderRegistry();
     return { ...placeholder, platform: { ...placeholder.platform, crypto } };
   }
