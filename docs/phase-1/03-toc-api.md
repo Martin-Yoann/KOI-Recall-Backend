@@ -4,7 +4,9 @@
 
 本文是前端对接说明；字段名和示例保持英文，说明使用中文。机器契约见 `openapi/toc-v1.openapi.yaml`，其唯一来源为 `src/contracts/toc.ts`。
 
-当前代码是接口骨架：路由和验证已生效；Campaign 查询、商品预筛、匿名 Draft 创建、附件直传授权和附件删除端点在配置 `DATABASE_URL` 时读写真实数据库，附件直传在配置 `BLOB_READ_WRITE_TOKEN` 时接入 Vercel Private Blob（含完成回调回写 `document_uploads`）；Claim 提交端点仍返回 `501 Not Implemented`。本阶段仍不访问邮件服务。实现业务后保持本文与 OpenAPI 的请求/响应不变。
+当前 Campaign 查询、商品预筛、匿名 Draft 创建、附件记录管理和 Claim 提交均有 PostgreSQL 实现。附件直传在配置 `BLOB_READ_WRITE_TOKEN` 后接入 Vercel Private Blob（含完成回调回写 `document_uploads`）。
+
+Claim 只在 `DATABASE_URL`、`FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 都已配置时返回 `201`；未配置数据库或缺少任一 Crypto Secret 时返回条件性 `501 Not Implemented`。成功事务会原子持久化 Case 聚合、Confirmation Communication 与 Outbox，但当前不调用 Resend。
 
 不提供消费者账户、Case 查询、状态门户、修改或撤回接口。确认页使用提交响应，不通过公开 GET 暴露 Case。
 
@@ -132,7 +134,7 @@ Query：
 }
 ```
 
-`result` 为 `potential_match|not_matched|manual_review`。预筛结果不能阻止用户提交，提交事务会重新核查。可能错误：`400/404/429/500/503`；骨架另返回 `501`。
+`result` 为 `potential_match|not_matched|manual_review`。预筛结果不能阻止用户提交，提交事务会重新核查。可能错误：`400/404/429/500/503`；未配置 `DATABASE_URL` 时另返回 `501`。
 
 ## 6. 创建匿名 Draft
 
@@ -278,13 +280,14 @@ Content-Type: application/json
 ```
 
 `emailStatus=queued` 只表示确认邮件已进入 Outbox，不代表 Resend 已发送或送达。
+该事务中 Communication 与 Outbox 和 Case 聚合一起提交；任一写入失败时整个申请回滚。
 
 ### 9.1 幂等规则
 
 - Key 长度 16–128，仅保存哈希。
 - 相同 Key + 相同规范化请求：返回首次成功的状态码和响应体，不重复创建 Case 或邮件。
 - 相同 Key + 不同请求：返回 `409`。
-- 前端重试网络超时时必须复用原 Key；用户主动开始新申请时生成新 Key。
+- 发生网络超时、连接中断或无法确定服务端是否已提交时，前端必须复用原 Key 和原请求体。只有用户主动开始新申请时才生成新 Key。
 
 ### 9.2 事故条件字段
 
@@ -312,23 +315,23 @@ Content-Type: application/json
 }
 ```
 
-可能错误：`400/404/409/410/422/429/500/503`；骨架另返回 `501`。
+可能错误：`400/404/409/410/422/429/500/503`；未配置 `DATABASE_URL` 或缺少任一 Crypto Secret 时另返回 `501`。
 
 ## 10. HTTP 错误码总表
 
-| Status | Meaning                                            |
-| -----: | -------------------------------------------------- |
-|  `400` | JSON、路径、Query、Header 或运行时 Schema 无效。   |
-|  `404` | 公开 Campaign、Draft 或 Document 不存在/不可访问。 |
-|  `409` | Idempotency 冲突、Draft 已使用或并发状态冲突。     |
-|  `410` | Draft 或上传授权已过期。                           |
-|  `413` | 文件超过 Campaign 限制。                           |
-|  `415` | MIME 不在允许列表。                                |
-|  `422` | 产品、附件、补救或事故条件规则未满足。             |
-|  `429` | 请求过多。                                         |
-|  `500` | 未预期服务端错误。                                 |
-|  `501` | 当前骨架已声明契约但尚未实现业务。                 |
-|  `503` | 数据库、Blob 等必需依赖暂不可用。                  |
+| Status | Meaning                                                 |
+| -----: | ------------------------------------------------------- |
+|  `400` | JSON、路径、Query、Header 或运行时 Schema 无效。        |
+|  `404` | 公开 Campaign、Draft 或 Document 不存在/不可访问。      |
+|  `409` | Idempotency 冲突、Draft 已使用或并发状态冲突。          |
+|  `410` | Draft 或上传授权已过期。                                |
+|  `413` | 文件超过 Campaign 限制。                                |
+|  `415` | MIME 不在允许列表。                                     |
+|  `422` | 产品、附件、补救或事故条件规则未满足。                  |
+|  `429` | 请求过多。                                              |
+|  `500` | 未预期服务端错误。                                      |
+|  `501` | 当前未启用的可选 Provider，或已注册但未实现的后续能力。 |
+|  `503` | 数据库、Blob 等必需依赖暂不可用。                       |
 
 ## 11. 非 ToC 入口
 
@@ -339,5 +342,6 @@ Content-Type: application/json
 - `POST /webhooks/vercel-blob`
 - `POST /webhooks/resend`
 
-生产实现必须验证 Cron Secret、Blob callback signature 和 Resend/Svix 签名，并使用 `webhook_events`
-的 `processing/processed/failed` 状态实现可重试去重；只有完成 reconciliation 后才确认 Blob 回调。
+`/webhooks/vercel-blob` 的签名验证、上传 reconciliation 和去重已实现；只有完成 reconciliation 后才确认 Blob 回调。`/internal/jobs/outbox`、`/internal/jobs/cleanup-drafts` 和 `/webhooks/resend` 仍返回 `501`；后续实现必须验证 Cron Secret 与 Resend/Svix 签名，并使用 `webhook_events` 的 `processing/processed/failed` 状态实现可重试去重。
+
+当前不提供 Admin API。Phase 1 预定的人工查看语义是：只有一种授权后台用户，由后端在授权边界内解密并允许查看/导出完整数据；本阶段不实现多级权限或脱敏展示。

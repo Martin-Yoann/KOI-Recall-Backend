@@ -37,6 +37,25 @@ const publicPaths = [
 ];
 
 describe('documentation cross-check', () => {
+  it('documents the enabled Claim submission path without overstating delivery', async () => {
+    const [readme, architecture, apiDoc] = await Promise.all([
+      readFile('README.md', 'utf8'),
+      readFile('docs/phase-1/01-server-architecture.md', 'utf8'),
+      readFile('docs/phase-1/03-toc-api.md', 'utf8'),
+    ]);
+
+    expect(readme).toContain('Claim 提交');
+    expect(readme).toContain('FIELD_ENCRYPTION_KEY');
+    expect(apiDoc).toContain('emailStatus=queued');
+    expect(apiDoc).toContain('Resend');
+    expect(architecture).toContain('Neon Serverless Pool');
+    expect(readme).not.toContain('Claim 提交固定返回 `501`');
+    expect(readme).not.toContain('Claim 提交端点仍返回');
+    expect(apiDoc).not.toContain('Claim 提交固定返回 `501`');
+    expect(apiDoc).not.toContain('Claim 提交端点仍返回');
+    expect(architecture).not.toContain('Claim 提交端点仍明确返回');
+  });
+
   it('database document names every schema table', async () => {
     const design = await readFile('docs/phase-1/02-database-design.md', 'utf8');
 

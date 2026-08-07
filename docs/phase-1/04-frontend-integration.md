@@ -5,7 +5,7 @@
 本文面向前端工程师，说明如何把独立的前端项目接到本仓库的 ToC API。
 契约细节（字段、状态码、调用顺序）见 `03-toc-api.md`；本文只关心**第 0 步到第 1 步**：怎么跑起来、怎么消费契约、怎么不踩坑。
 
-**前置条件**：本机已装 Node.js 24.x、pnpm 11.9.0。前端同事不需要 Vercel 账号、不需要本地 Postgres——除非前端要联调 `GET /v1/recall-campaigns/{slug}` 的真实数据。
+**前置条件**：本机已装 Node.js 24.x、pnpm 11.9.0。只读契约或使用前端 mock 不需要 Vercel 账号和本地 Postgres；联调真实 Campaign/Draft/Claim 流程需要 PostgreSQL 与演示 Seed。
 
 ## 2. 快速上手
 
@@ -21,18 +21,25 @@ pnpm dev
 
 `pnpm dev` 现在跑的是 `tsx watch src/dev.ts`（见 `package.json`），用 `@hono/node-server` 起一个 Node 进程，**不依赖 Vercel CLI**。这只服务本地开发，不会真部署到 Vercel。
 
-可选：起一份本地 Postgres + 演示数据，这样 `GET /v1/recall-campaigns/{slug}` 能返回真实 Campaign：
+可选：起一份本地 Postgres + 演示数据，用于联调真实 Campaign/Draft/Claim 流程：
 
 ```bash
 # 仅当你要联调真实数据时执行
-cp .env.example .env
-# 编辑 .env，把 DATABASE_URL 指向你的本地 Postgres
+export DATABASE_URL='postgresql://alexyuan@127.0.0.1:5432/koi_recall'
 pnpm db:migrate
 APP_ENV=local ALLOW_SYNTHETIC_SEED=true pnpm db:seed
 ```
 
-不打算联调真实数据的前端同事可以**直接跳过数据库**；未配置数据库/Provider 的端点会返回 501，
-前端仍可用 mock 完成骨架开发。
+真实 Claim 提交另需两个不同的 Crypto Secret。下列值只在当次 API 进程中使用，不要提交、记录或共享生成结果：
+
+```bash
+DATABASE_URL='postgresql://alexyuan@127.0.0.1:5432/koi_recall' \
+FIELD_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+HASH_PEPPER="$(openssl rand -base64 32)" \
+pnpm dev
+```
+
+不打算联调真实数据的前端同事可以直接跳过数据库；未配置数据库/Provider 的能力会返回 `501`，前端仍可使用符合 OpenAPI 的 mock。
 
 ## 3. 契约的来源与消费
 
@@ -95,7 +102,7 @@ CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
 # Campaign 查询（需要先 seed）
 curl -i 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US'
 
-# 未配置数据库或对应 Provider 的端点会返回 501 application/problem+json
+# 未配置数据库时，数据库能力会返回 501 application/problem+json
 curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2026/claim-drafts'
 
 # 提交端点（带 Idempotency-Key 才能渲染完整的请求校验）
@@ -107,22 +114,21 @@ curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2
 
 后端日志会打 `X-Request-Id`，复制它去服务器终端 grep 自己的请求，整条链路都能追。
 
-## 6. Phase 1 期间的 501 端点策略
+## 6. Phase 1 期间的真实与 501 能力
 
-**现实**：Phase 1 后端按配置渐进启用数据库和 Provider。未配置的能力返回
-`501 application/problem+json`（响应体符合 Problem Details 规范）。
+Phase 1 后端按配置渐进启用数据库和 Provider，未配置的能力返回
+`501 application/problem+json`（响应体符合 Problem Details 规范）：
 
-前端有两条路：
+- 配置 `DATABASE_URL` 后，Campaign、商品预筛、Draft 和附件记录读写使用真实 PostgreSQL。
+- 再配置 `FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 后，Claim 提交返回 `201`，并原子持久化 Communication 与 Outbox。
+- 附件直传另需 `BLOB_READ_WRITE_TOKEN`。
+- Resend 投递/Webhook、Outbox worker、Draft cleanup 与 Private Blob 实体删除仍是未实现的后续能力。
 
-### 6.1 推荐：先按真契约写，前端 mock 业务分支
+前端应始终按 OpenAPI 的真实契约编写。未配置后端依赖时，可在前端开发进程用 MSW 或 fetch wrapper 模拟对应能力；联调环境开启真实配置后应删除该能力的 mock。fetch wrapper 仍必须显式处理 `501`，不能当作成功响应渲染。
 
-拿 `openapi-typescript` 生成的类型写代码。在前端进程里**拦截 501**，临时返回一组符合契约的成功 payload——这样 Phase 1 期间前端可以**完整跑完提交流程**，到 Phase 2 后端真接通时只删掉 mock 层。
+### 6.1 Claim 幂等 Key 生命周期
 
-### 6.2 备选：前端只写 GET，前端 mock 未启用端点
-
-通过 service worker / MSW / 直接在 fetch wrapper 里短路返回 stub。简单但 Phase 2 切换时容易漏改。
-
-**两种方案都要保证**：前端代码不能"忘了 501"。至少在 fetch wrapper 里显式处理 501，避免 Phase 2 真实接通时把 5 端点当 200 渲染。
+进入最终提交时生成一个 16–128 字符的 `Idempotency-Key`，并把它与当次请求体绑定。如果网络超时、连接中断，或客户端无法确定服务端是否已提交，重试必须复用原 Key 和完全相同的请求体。不要为“不确定的重试”生成新 Key；用户主动开始新申请时才生成新 Key。
 
 ## 7. 明确边界
 
@@ -131,6 +137,7 @@ curl -i -X POST 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2
 - **不要写死 `evidenceRequirements` 规则**——必须从 `GET /v1/recall-campaigns/{slug}` 响应里读 category / minimumFiles / mimeTypes，相应当前 Campaign 版本。
 - **不要假设 `emailStatus=queued` 等于邮件已送达**——这只是 Outbox 入队状态。Phase 1 不会真的发邮件。
 - **不要在提交后又改 `incidentAnswer` 又复用同一 `Idempotency-Key`**——后端会返回 409，要求"用户开始新申请"必须生成新 Key。
+- **不要在前端持有 `FIELD_ENCRYPTION_KEY` 或 `HASH_PEPPER`**——这两项只属于后端运行环境，且必须与数据库分开保存。
 
 ## 8. 校验命令（前端不需要跑，但要知道）
 

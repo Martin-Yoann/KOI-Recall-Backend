@@ -1,12 +1,14 @@
 # KOI Recall API
 
-第一阶段消费者召回 API 的独立 Node.js 服务骨架。现有静态 Demo 保持不变；本项目只定义可部署架构、数据库模型和 ToC 契约。
+第一阶段消费者召回 API 的独立 Node.js 服务。现有静态 Demo 保持不变；本项目提供可部署架构、PostgreSQL 数据模型和 ToC 契约。
 
-当前六个 `/v1` 业务端点均已注册并进行运行时校验。其中 Campaign 查询、商品预筛、匿名 Draft
-创建、附件直传授权（`upload-tokens`）和附件删除端点在配置了 `DATABASE_URL` 时会读写真实数据库；
-附件直传在配置 `BLOB_READ_WRITE_TOKEN` 时接入 Vercel Private Blob（浏览器直传 + 完成回调回写
-`document_uploads`）。Claim 提交端点仍返回 `501 application/problem+json`。本阶段不接入 Resend，
-不发送邮件，也不执行 Vercel 部署。
+当前六个 `/v1` 业务端点均已注册并进行运行时校验。配置 `DATABASE_URL`
+后，Campaign 查询、商品预筛、匿名 Draft 创建与附件记录管理会读写真实数据库。再同时配置
+`FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 后，Claim 提交会在一个事务中写入 Case 聚合、
+Confirmation Communication 和 Outbox，成功返回 `201` 与 `emailStatus=queued`。
+
+当前不会内联发送邮件。Resend 投递与 Webhook、Outbox worker、Draft cleanup、Private
+Blob 实体删除和 Admin API 仍是后续工作，对应的未实现入口保持 `501 application/problem+json`。
 
 ## 本地检查
 
@@ -33,13 +35,14 @@ pnpm db:check
 
 `src/db/client.ts` 按连接串自动选择驱动，无需手工切换：
 
-- 主机名以 `neon.tech` 结尾 → Neon HTTP 驱动（`@neondatabase/serverless`），用于 Vercel/Neon。
+- 主机名以 `neon.tech` 结尾 → Neon Serverless Pool（`@neondatabase/serverless` +
+  `drizzle-orm/neon-serverless`），用于 Vercel/Neon。Neon 环境必须提供 pooled connection string。
 - 其余（含本地 `127.0.0.1`）→ node-postgres（`drizzle-orm/node-postgres` + `pg`），用于本地开发。
 
 本地首次初始化数据库并读取演示 Campaign：
 
 ```bash
-# 1) 确保本地 Postgres 已启动，DATABASE_URL 指向它（见 .env）
+export DATABASE_URL='postgresql://alexyuan@127.0.0.1:5432/koi_recall'
 # 2) 套用迁移（脚本会在缺失时自动创建 koi_recall 库）
 pnpm db:migrate
 # 3) 写入虚构演示数据（仅允许显式在非生产环境运行）
@@ -49,11 +52,33 @@ pnpm dev
 curl -i 'http://localhost:3000/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US'
 ```
 
+本地启用 Claim 提交时，为两项用途生成不同的 32-byte Base64 值。下列命令只把值注入当次
+`pnpm dev` 进程，不要把它们写入文档、Git 或日志：
+
+```bash
+DATABASE_URL='postgresql://alexyuan@127.0.0.1:5432/koi_recall' \
+FIELD_ENCRYPTION_KEY="$(openssl rand -base64 32)" \
+HASH_PEPPER="$(openssl rand -base64 32)" \
+pnpm dev
+```
+
+Claim 仅在数据库和两项 Crypto Secret 都已配置时返回 `201`。未配置数据库，或缺少任一
+Crypto Secret 时，Claim 能力返回条件性 `501`；非空但非法的数据库 URL、Secret 或相同的两个
+Secret 会在组合阶段失败关闭。
+
 Seed 只允许显式运行于非生产环境：
 
 ```bash
 APP_ENV=local ALLOW_SYNTHETIC_SEED=true DATABASE_URL='postgresql://...' pnpm db:seed
 ```
+
+## 敏感数据与人工查看边界
+
+Claim 的姓名、联系方式、地址、订单号、事故叙述和提交快照以 AES-256-GCM 密文持久化；查询用值使用
+独立 `HASH_PEPPER` 生成 HMAC。密钥必须与数据库分开保存，两项 Secret 也必须彼此不同。
+
+Phase 1 的权限模型只有一种授权后台用户：未来 Admin API 在授权后端边界内解密，允许查看/导出完整数据；
+本阶段不实现多级权限或字段脱敏。当前仓库尚未实现 Admin API，因此不要把数据库直连当作人工查看接口。
 
 ## 关键入口
 

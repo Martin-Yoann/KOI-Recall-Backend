@@ -4,14 +4,18 @@
 
 本项目是独立的消费者召回 API，不修改现有静态 Demo。第一阶段的可验收目标是把公开 Campaign、商品预筛、匿名附件上传、申请提交入库和确认邮件排队串成稳定契约。
 
-当前仓库交付的是“可编译、可测试、可部署检查”的骨架：六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册。其中 Campaign 查询、商品预筛、匿名 Draft 创建、附件直传授权（`upload-tokens`）和附件删除端点在配置 `DATABASE_URL` 时读写真实数据库（生产 Neon 或本地 Postgres，按连接串自动选择驱动）；附件直传在配置 `BLOB_READ_WRITE_TOKEN` 时接入 Vercel Private Blob（浏览器直传 + `/webhooks/vercel-blob` 完成回调回写 `document_uploads` 的 `verified`/`rejected`）。Claim 提交端点仍明确返回 `501 application/problem+json`。本次不接入 Resend，不部署 Vercel，不写真实凭证，不发送邮件。
+当前仓库的六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册。Campaign 查询、商品预筛、匿名 Draft 创建和附件记录管理在配置 `DATABASE_URL` 后读写真实 PostgreSQL；附件直传在配置 `BLOB_READ_WRITE_TOKEN` 后接入 Vercel Private Blob（浏览器直传 + `/webhooks/vercel-blob` 完成回调）。
+
+Claim 提交在 `DATABASE_URL`、`FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 三者都已配置时使用真实 `DrizzleCaseService`，成功返回 `201`。Case 聚合、Confirmation Communication 和 Outbox 在同一事务中原子持久化；响应仅承诺 `emailStatus=queued`，不表示邮件已发送或送达。未配置数据库或缺少任一 Crypto Secret 时，Claim 保持条件性 `501 application/problem+json`；非法非空配置在启动组合阶段失败关闭。
+
+Resend 投递与 Webhook、Outbox worker、Draft cleanup、Private Blob 实体删除、Admin API 和 Vercel 部署仍未实现。仓库不写真实凭证，当前 Claim 请求也不会内联发送邮件。
 
 ## 2. 技术选型
 
 - Node.js 24.x、TypeScript strict、pnpm。
 - Hono 与 `@hono/zod-openapi`；`src/contracts/toc.ts` 是运行时校验、TypeScript 类型和 OpenAPI 的唯一契约源。
 - Vercel Functions Node Runtime，独立 API 域名；生产启用 Fluid Compute 的具体配置在部署阶段确认。
-- Drizzle ORM、Drizzle Kit；数据库客户端 `src/db/client.ts` 为双适配器，按 `DATABASE_URL` 主机名自动选择 Neon HTTP 驱动（生产）或 node-postgres（本地），不改代码、不手工切换。
+- Drizzle ORM、Drizzle Kit；数据库客户端 `src/db/client.ts` 为双适配器，按 `DATABASE_URL` 主机名自动选择 Neon Serverless Pool（生产）或 node-postgres（本地），不改代码、不手工切换。Neon 必须使用 pooled connection string。
 - Vercel Private Blob 浏览器直传；API 只签发短期上传权限、验证回调和关联附件。
 - Resend、PostgreSQL Outbox、Vercel Cron；确认邮件与主事务解耦。
 - Vitest、ESLint、Prettier。
@@ -25,11 +29,11 @@ flowchart LR
   Browser[Consumer browser] -->|HTTPS /v1| API[Hono on Vercel Functions]
   Browser -->|short-lived client upload| Blob[(Vercel Private Blob)]
   Blob -->|signed callback| API
-  API -->|HTTP queries / transaction| Neon[(Neon PostgreSQL)]
+  API -->|pooled queries / transaction| Neon[(Neon Serverless Pool)]
   Cron[Vercel Cron] -->|authenticated /internal| API
   API -->|claim transaction writes| Outbox[(outbox_events)]
-  Cron -->|dispatch pending outbox| Resend[Resend]
-  Resend -->|Svix-signed webhook| API
+  Cron -.->|follow-up: dispatch pending outbox| Resend[Resend]
+  Resend -.->|follow-up: signed webhook| API
 ```
 
 生产环境只有公开的 `/v1` 和供应商要求的 `/webhooks` 入口。`/internal` 只接受 Cron Secret 或等价的服务到服务认证；它们不属于 ToC OpenAPI。
@@ -43,7 +47,7 @@ src/
   contracts/toc.ts               # Zod/OpenAPI 唯一契约源
   middleware/                    # request ID、CORS、headers、rate-limit 接口
   db/
-    client.ts                    # Neon HTTP + Drizzle 工厂
+    client.ts                    # Neon Serverless Pool / node-postgres + Drizzle 工厂
     schema/index.ts              # PostgreSQL Schema
     seed.ts                      # 显式开关保护的虚构 Seed
   modules/                       # Campaign、Draft、Document、Case 等领域端口
@@ -102,9 +106,9 @@ Private Blob 的任何读取都必须经过授权服务端代理或签名 URL。
 
 ### 5.5 邮件与 Webhook
 
-Cron 领取到期的 `outbox_events`，使用短锁和有限重试调用 Resend。成功后保存 Provider ID；失败记录稳定错误码并安排重试，超过上限进入 `dead_letter`。Resend 回调先验证 Svix 签名，再以 `provider + provider_event_id` 去重，最后更新 `communications`。
+当前事务只创建 `communications` 和 `outbox_events`，不调用 Resend。后续 Outbox worker 才会领取到期事件、有限重试投递并保存 Provider ID；后续 Resend Webhook 需验证签名、去重并更新 `communications`。当前 `/internal/jobs/outbox` 与 `/webhooks/resend` 均返回 `501`。
 
-邮件延迟或 Resend 不可用不回滚已提交 Case。申请成功和邮件已发送是两个独立状态。
+因此申请成功与邮件已发送是两个独立状态；`emailStatus=queued` 只是持久化状态。
 
 ## 6. 横切设计
 
@@ -124,6 +128,8 @@ Cron 领取到期的 `outbox_events`，使用短锁和有限重试调用 Resend�
 - Draft token 和 Idempotency-Key 只保存哈希。
 - Blob 永远为 Private；文件名视为不可信输入，展示和日志前转义/脱敏。
 - 所有密钥只来自 Vercel 加密环境变量或后续密钥管理方案，不进入 Git。
+- `FIELD_ENCRYPTION_KEY` 与 `HASH_PEPPER` 用途不同、值必须不同，并与数据库/备份分开保存。
+- Phase 1 只定义一种授权后台用户：由未来 Admin API 在授权后端边界内解密，允许查看/导出完整数据；不实现多级权限或字段脱敏。当前 Admin API 尚未实现。
 
 ### 6.3 异常语义
 
@@ -137,22 +143,22 @@ Cron 领取到期的 `outbox_events`，使用短锁和有限重试调用 Resend�
 - `429`：限流。
 - `500`：未预期错误；不回显堆栈或供应商响应。
 - `503`：数据库、Blob 等必要依赖不可用。
-- `501`：仅用于当前骨架中已注册但未实现的业务能力。
+- `501`：用于缺少必需配置的条件性能力，或已注册但尚未实现的后续能力。
 
 ## 7. Vercel 部署边界
 
 - `src/index.ts` 导出 Hono app，由 Vercel Node Runtime 承载。
-- 普通只读查询使用 Neon HTTP；提交仅使用同一次请求内的非交互式事务，不把交互事务跨网络/函数保存。
+- 读写使用 Neon Serverless Pool；提交仅使用同一次请求内的非交互式事务，不把交互事务跨网络/函数保存。
 - 大文件浏览器直传 Blob，避免函数请求体和执行时长成为瓶颈。
 - Cron 调用必须校验 Secret，并以数据库锁/状态实现并发安全和重复执行安全。
 - Preview 与 Production 使用隔离的 Neon、Blob、Resend 配置；测试 Seed 明确禁止生产执行。
 
 上线前必须确定：生产 API 域名、CORS Origin、数据地区、数据与附件保留年限、正式 Campaign 文案、发件域名、限流阈值、文件扫描方案、密钥轮换与告警。
 
-## 8. 当前骨架的完成标准
+## 8. 当前实现状态
 
 - 六个 ToC 路由和四个内部/回调入口完成注册。
 - 运行时请求校验、CORS、Request ID、安全头、Problem Details 和 OpenAPI 可测试。
-- 除公开 Campaign 读取已接入数据库外，其余 Provider 与领域服务只定义端口，不进行真实 I/O。
+- Campaign、商品预筛、Draft、Document 记录与 Claim 提交已有 PostgreSQL 实现；Claim 另需两项合法 Crypto Secret。
+- Claim 事务已持久化 Communication 与 Outbox；Resend 投递/Webhook、Outbox worker、Draft cleanup、Blob 实体删除和 Admin API 仍是后续工作。
 - OpenAPI 和 Drizzle migration 均可生成和检查漂移。
-- 后续实现业务时保持契约优先，不在路由中直接拼装 SQL 或供应商调用。
