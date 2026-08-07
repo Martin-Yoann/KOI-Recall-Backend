@@ -19,6 +19,20 @@ describe('database driver detection', () => {
     expect(() => createDatabase(directUrl)).toThrow('pooled Neon connection string');
   });
 
+  it('normalizes one trailing DNS root dot before classifying the hostname', () => {
+    expect(() =>
+      detectDriver(
+        'postgresql://user:pass@ep-cool-name-12345.us-east-2.aws.neon.tech./neondb?sslmode=require',
+      ),
+    ).toThrow('pooled Neon connection string');
+    expect(
+      detectDriver(
+        'postgresql://user:pass@ep-cool-name-12345-pooler.us-east-2.aws.neon.tech./neondb?sslmode=require',
+      ),
+    ).toBe('neon-serverless');
+    expect(detectDriver('postgresql://user:pass@db.example.com./recall')).toBe('node-postgres');
+  });
+
   it('does not mistake a non-Neon suffix for a Neon host', () => {
     expect(
       detectDriver('postgresql://user:pass@ep-example-pooler.neon.tech.example.com/neondb'),

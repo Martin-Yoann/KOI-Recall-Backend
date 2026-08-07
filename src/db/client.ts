@@ -36,7 +36,8 @@ export type DatabaseDriver = 'neon-serverless' | 'node-postgres';
 export function detectDriver(databaseUrl: string): DatabaseDriver {
   let hostname: string;
   try {
-    hostname = new URL(databaseUrl).hostname.toLowerCase();
+    const parsedHostname = new URL(databaseUrl).hostname.toLowerCase();
+    hostname = parsedHostname.endsWith('.') ? parsedHostname.slice(0, -1) : parsedHostname;
   } catch {
     return 'node-postgres';
   }

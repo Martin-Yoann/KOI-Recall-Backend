@@ -113,23 +113,10 @@ export class DrizzleCaseService implements CaseService {
     const requestHash = hashCanonicalRequest(command.body);
     const keyHash = await this.crypto.lookupHash(command.idempotencyKey);
     const submittedAt = new Date();
-    const existing = await this.findIdempotency(endpoint, keyHash, this.handle.db, submittedAt);
-    if (existing) return this.replay(existing, requestHash);
 
     const encrypted = await this.encryptSubmission(command.body);
 
     const transaction = this.handle.transaction(async (tx) => {
-      await tx
-        .delete(idempotencyRecords)
-        .where(
-          and(
-            eq(idempotencyRecords.endpoint, endpoint),
-            eq(idempotencyRecords.keyHash, keyHash),
-            lte(idempotencyRecords.expiresAt, submittedAt),
-          ),
-        )
-        .returning({ id: idempotencyRecords.id });
-
       const [locked] = await tx
         .select({
           draftId: claimDrafts.id,
@@ -177,6 +164,19 @@ export class DrizzleCaseService implements CaseService {
       ) {
         throw new ResourceNotFoundError('Campaign was not found for this Claim Draft.');
       }
+
+      const existing = await this.findIdempotency(endpoint, keyHash, tx, submittedAt);
+      if (existing) return this.replay(existing, requestHash);
+      await tx
+        .delete(idempotencyRecords)
+        .where(
+          and(
+            eq(idempotencyRecords.endpoint, endpoint),
+            eq(idempotencyRecords.keyHash, keyHash),
+            lte(idempotencyRecords.expiresAt, submittedAt),
+          ),
+        )
+        .returning({ id: idempotencyRecords.id });
 
       this.validateConsents(command.body);
       if (new Set(command.body.documentIds).size !== command.body.documentIds.length) {
