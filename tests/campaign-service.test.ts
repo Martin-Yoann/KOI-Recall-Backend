@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { Database } from '../src/db/client.js';
 import * as schema from '../src/db/schema/index.js';
 import * as campaignServiceModule from '../src/modules/campaigns/drizzle-campaign-service.js';
+import { CampaignValidationError } from '../src/shared/errors.js';
 
 describe('published campaign version query', () => {
   it('requires the published version id and owning campaign id', () => {
@@ -33,5 +34,64 @@ describe('published campaign version query', () => {
       'published',
       1,
     ]);
+  });
+});
+
+describe('campaign publish gate (T4.3/O4)', () => {
+  it('accepts a complete approval set (business + legal_compliance)', () => {
+    expect(() =>
+      campaignServiceModule.validateRequiredApprovals([
+        { role: 'business', approvedBy: 'ops@koi.test', approvedAt: '2026-08-07T00:00:00.000Z' },
+        {
+          role: 'legal_compliance',
+          approvedBy: 'legal@koi.test',
+          approvedAt: '2026-08-07T00:00:00.000Z',
+        },
+      ]),
+    ).not.toThrow();
+  });
+
+  it('accepts an optional cpsc_if_applicable approval', () => {
+    expect(() =>
+      campaignServiceModule.validateRequiredApprovals([
+        { role: 'business', approvedBy: 'ops@koi.test', approvedAt: '2026-08-07T00:00:00.000Z' },
+        {
+          role: 'legal_compliance',
+          approvedBy: 'legal@koi.test',
+          approvedAt: '2026-08-07T00:00:00.000Z',
+        },
+        {
+          role: 'cpsc_if_applicable',
+          approvedBy: 'cpsc@koi.test',
+          approvedAt: '2026-08-07T00:00:00.000Z',
+        },
+      ]),
+    ).not.toThrow();
+  });
+
+  it('rejects publishing without business approval', () => {
+    expect(() =>
+      campaignServiceModule.validateRequiredApprovals([
+        {
+          role: 'legal_compliance',
+          approvedBy: 'legal@koi.test',
+          approvedAt: '2026-08-07T00:00:00.000Z',
+        },
+      ]),
+    ).toThrow(CampaignValidationError);
+  });
+
+  it('rejects publishing without legal_compliance approval', () => {
+    expect(() =>
+      campaignServiceModule.validateRequiredApprovals([
+        { role: 'business', approvedBy: 'ops@koi.test', approvedAt: '2026-08-07T00:00:00.000Z' },
+      ]),
+    ).toThrow(CampaignValidationError);
+  });
+
+  it('rejects publishing with no approvals at all', () => {
+    expect(() => campaignServiceModule.validateRequiredApprovals([])).toThrow(
+      CampaignValidationError,
+    );
   });
 });

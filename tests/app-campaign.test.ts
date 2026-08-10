@@ -59,9 +59,20 @@ function appWith(campaigns: CampaignService) {
   });
 }
 
+/** A CampaignService mock that keeps publishVersion inert for read-only route tests. */
+function mockCampaignService(
+  getPublishedCampaign: CampaignService['getPublishedCampaign'],
+): CampaignService {
+  return {
+    getPublishedCampaign,
+    publishVersion: () =>
+      Promise.resolve({ versionNumber: 1, publishedAt: new Date().toISOString() }),
+  };
+}
+
 describe('GET /v1/recall-campaigns/{slug}', () => {
   it('returns 200 with a version-derived ETag and Content-Language when found', async () => {
-    const service: CampaignService = { getPublishedCampaign: () => Promise.resolve(campaign) };
+    const service = mockCampaignService(() => Promise.resolve(campaign));
     const response = await appWith(service).request(
       '/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US',
     );
@@ -75,7 +86,7 @@ describe('GET /v1/recall-campaigns/{slug}', () => {
   });
 
   it('returns a 404 problem when the campaign is not found', async () => {
-    const service: CampaignService = { getPublishedCampaign: () => Promise.resolve(null) };
+    const service = mockCampaignService(() => Promise.resolve(null));
     const response = await appWith(service).request(
       '/v1/recall-campaigns/missing-slug?locale=en-US',
     );
@@ -87,10 +98,9 @@ describe('GET /v1/recall-campaigns/{slug}', () => {
   });
 
   it('returns 503 when the database connection fails', async () => {
-    const service: CampaignService = {
-      getPublishedCampaign: () =>
-        Promise.reject(Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' })),
-    };
+    const service = mockCampaignService(() =>
+      Promise.reject(Object.assign(new Error('connect failed'), { code: 'ECONNREFUSED' })),
+    );
     const response = await appWith(service).request(
       '/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US',
     );
@@ -108,9 +118,7 @@ describe('GET /v1/recall-campaigns/{slug}', () => {
         { ...campaign.evidenceRequirements[0]!, minimumFiles: 0, maximumFiles: 0 },
       ],
     };
-    const service: CampaignService = {
-      getPublishedCampaign: () => Promise.resolve(invalidCampaign),
-    };
+    const service = mockCampaignService(() => Promise.resolve(invalidCampaign));
 
     const response = await appWith(service).request(
       '/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US',

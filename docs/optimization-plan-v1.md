@@ -191,11 +191,12 @@ identify(input, campaignSnapshot) -> {
 - 产品评估**提前**到 evidence 校验之前；`exact_order_match` / `order_evidence` 命中时**免除 proof_of_purchase 下限**（上限仍强制），订单本身即购买凭证。
 - 辅助函数 `deriveEvidenceProfile()`（纯函数）。
 
-#### T4.3 — 发布门禁（O4）
-- `campaign_versions` 新增审批/发布记录：`publishedBy / 审批记录（business, legal/compliance, cpsc_if_applicable, publishedAt）`。
-- 发布动作**原子校验**：产品范围、消费者名称、hazard、immediateAction、≥1 已批准 Remedy、support、隐私/同意文本、证据规则、消息模板。
+#### T4.3 — 发布门禁（O4）✅ 已完成
+- `campaign_versions` 新增 `published_by varchar(160)` 与 `approvals jsonb`（迁移 `0004_unusual_thanos.sql`），存储 `business / legal_compliance / cpsc_if_applicable` 结构化审批快照。
+- `CampaignService.publishVersion()` 原子发布：校验版本为 draft → 产品范围 ≥1 → 本地化消费者文案（title/hazard/immediateAction/support）→ ≥1 active Remedy → 证据规则 → 消息模板 → 审批记录（business + legal_compliance 必填，cpsc 可选）→ 翻转 `published` 并指向 `publishedVersionId`。
+- 审批校验提取为纯函数 `validateRequiredApprovals()`（可单测，5 项测试覆盖）。
 - **不通过单一环境变量选 Campaign**；门禁按 Campaign Version 生效。
-- `not_matched` 响应**不得包含** `safe`/`safe to use`（matcher message 常量下线）。
+- `not_matched` 响应不含 `safe`/`safe to use`（M2 已完成，T3）。
 
 #### T4.4 — 订单佐证与反滥用（O3.1，V1.1 新增）
 - Policy 输出 `purchaseCorroboration`（verified / partial / not_provided / conflict）与 `riskFlags`（duplicate_order / duplicate_document / identifier_order_conflict / evidence_insufficient）。

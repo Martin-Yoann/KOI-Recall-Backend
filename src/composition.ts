@@ -56,6 +56,7 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
     services: {
       campaigns: {
         getPublishedCampaign: () => unavailable('Published campaign retrieval'),
+        publishVersion: () => unavailable('Campaign version publishing'),
       },
       productChecks: {
         check: () => unavailable('Product checking'),

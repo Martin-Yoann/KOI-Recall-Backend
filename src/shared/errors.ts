@@ -97,6 +97,17 @@ export class ClaimValidationError extends HttpProblemError {
   readonly title = 'Unprocessable Entity';
 }
 
+/**
+ * Thrown when a campaign version fails the atomic publish gate (T4.3/O4):
+ * missing product scope, localization/hazard content, approved remedy,
+ * evidence rules, message templates, or required approvals. Maps to 422.
+ */
+export class CampaignValidationError extends HttpProblemError {
+  readonly status = 422;
+  readonly type = problemType('unprocessable-entity');
+  readonly title = 'Unprocessable Entity';
+}
+
 export class NotImplementedServiceError extends Error {
   constructor(readonly capability: string) {
     super(`${capability} is defined by contract but is not implemented in the Phase 1 skeleton.`);

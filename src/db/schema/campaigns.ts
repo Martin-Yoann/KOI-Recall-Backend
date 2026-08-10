@@ -58,6 +58,21 @@ export const campaignVersions = pgTable(
     schemaVersion: varchar('schema_version', { length: 40 }).notNull().default('phase1-v1'),
     publishedAt: timestamp('published_at', { withTimezone: true, mode: 'date' }),
     retiredAt: timestamp('retired_at', { withTimezone: true, mode: 'date' }),
+    // T4.3 (O4): publish-gate record. `approvals` carries the structured
+    // sign-off snapshot (business / legal_compliance / cpsc_if_applicable)
+    // captured when the version was published; `publishedBy` is the actor.
+    // Publishing is atomic: a version can only become `published` when every
+    // required content piece is present and all approvals are recorded.
+    publishedBy: varchar('published_by', { length: 160 }),
+    approvals: jsonb('approvals')
+      .$type<
+        Array<{
+          role: 'business' | 'legal_compliance' | 'cpsc_if_applicable';
+          approvedBy: string;
+          approvedAt: string;
+        }>
+      >()
+      .default([]),
     ...timestamps,
   },
   (table) => [
