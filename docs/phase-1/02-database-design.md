@@ -16,6 +16,8 @@ erDiagram
   recall_campaigns ||--o{ campaign_versions : versions
   campaign_versions ||--o{ campaign_localizations : localizes
   campaign_versions ||--o{ campaign_products : contains
+  campaign_products ||--o{ campaign_product_variants : models
+  campaign_product_variants ||--o{ campaign_product_identifiers : identified_by
   campaign_products ||--o{ campaign_product_lots : identifies
   campaign_versions ||--o{ campaign_remedy_options : offers
   campaign_versions ||--o{ campaign_evidence_requirements : requires
@@ -52,6 +54,14 @@ Campaign 主体。关键字段：唯一 `slug`、唯一内部 `code`、`status`�
 ### `campaign_products`
 
 一个版本下的商品，`campaign_version_id + sku` 唯一。品牌、SKU、产品名是稳定字段；口味、形状等可扩展内容放在 `attributes`。
+
+### `campaign_product_variants`
+
+产品的物理 Variant（型号/风格/包装版本/适用日期），`campaign_product_id + model` 唯一。使同一 SKU/UPC 能表达“JSM-18A 与 JSM-18D”这类真实歧义（ADR-0001）。`attributes` 仅放可扩展属性。
+
+### `campaign_product_identifiers`
+
+挂在 Variant 上的多值标识符（sku/unit_upc/gtin14/model/style/other），`variant_id + identifier_type + normalized_value` 唯一，查询走 `(identifier_type, normalized_value)` 索引。**不设全局唯一**——同一 UPC 跨 Variant 重复是业务事实，Policy 据此把多候选转为 `manual_review`（ADR-0001）。`raw_value` 保留原始输入供展示，`normalized_value` 用于匹配。
 
 ### `campaign_product_lots`
 
@@ -93,7 +103,7 @@ Case 聚合根。关键字段：唯一且格式受约束的 `public_reference`�
 
 ### `claimed_products`
 
-Case 中的一种申报商品。关联 Campaign Product，保存数量、shape、flavor、Lot/Date Code、购买渠道/日期、订单号密文与 HMAC、预筛结果。数量限制 1–100。
+Case 中的一种申报商品。关联 Campaign Product，保存数量、shape、flavor、Lot/Date Code、购买渠道/日期、订单号密文与 HMAC、预筛结果。数量限制 1–100。新增识别审计列（ADR-0001，M1 nullable）：`matched_variant_ids`（命中的候选 Variant 数组，多值即歧义，GIN 索引）、`identification_mode`（`product_identifiers|purchase_evidence|unknown`）、`reason_codes`（Policy 原因码）、`input_snapshot`（消费者原始输入快照）。
 
 ### `case_consents`
 

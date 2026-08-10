@@ -122,15 +122,20 @@ Sprint 0  ── 事实与设计基线（不动代码，产出 ADR + 迁移设�
 - 默认 Vitest **157 passed / 43 skipped**，与拆分前完全一致；
 - 无新增公开路径。
 
-#### T2 — Variant / Identifier 真实身份模型（O1）
+#### T2 — Variant / Identifier 真实身份模型（O1）✅ 已完成
 **新增表**（M1：新增、保留旧列、双读）：
-- `campaign_product_variants` — Model / Style / 包装版本 / 适用日期，归属 `campaign_products`。
-- `campaign_product_identifiers(variant_id, identifier_type, normalized_value)` — `identifier_type ∈ {sku, unit_upc, gtin14, model, style, other}`。索引 `(identifier_type, normalized_value)`。**不设全局唯一**。
-- `claimed_products` 保存 Variant / 候选结果 / 输入快照 / 识别方式与 reasonCodes。
+- `campaign_product_variants` — Model / Style / 包装版本 / 适用日期，归属 `campaign_products`，`(campaign_product_id, model)` 唯一。
+- `campaign_product_identifiers(variant_id, identifier_type, normalized_value)` — `identifier_type ∈ {sku, unit_upc, gtin14, model, style, other}`。查询索引 `(identifier_type, normalized_value)`。**不设全局唯一**（唯一索引仅限 `(variant_id, identifier_type, normalized_value)`）。
+- `claimed_products` 新增（M1 nullable，旧 NOT NULL 保留）：`matched_variant_ids uuid[]`（GIN 索引）、`identification_mode`、`reason_codes text[]`、`input_snapshot jsonb`。
 
-**改动点**：`src/db/schema/campaigns.ts` 新表 + `drizzle-kit generate`；`src/db/seed.ts` 与 Importer 同时写新旧结构。
+**改动点**：`src/db/schema/campaigns.ts`（新表 + `product_identifier_type` enum）、`src/db/schema/claims.ts`（`identification_mode` enum + 4 列）；迁移 `drizzle/0003_yummy_nightcrawler.sql`；`src/db/seed.ts` 双写新旧结构；`tests/schema.test.ts` 新增 ADR-0001 不变量断言；`docs/phase-1/02-database-design.md` 补新表文档。
 
-**验收（S01 数据）**：8 SKU / 7 UPC / 2 Model 可完整表达；同一 SKU 命中两 Model → `manual_review`。
+**验收**（已通过，2026-08-07）：
+- `pnpm build`（typecheck + openapi:check + db:check）全绿；
+- `drizzle-kit generate` 生成迁移 `0003` 后再跑为 no-op（schema 与迁移一致）；
+- **OpenAPI sha256 `5fd7e1d2…` 不变**（schema 改动不影响契约）；
+- 默认 Vitest **158 passed / 43 skipped**（+1：ADR-0001 不变量测试：variant 唯一性、identifier 无全局唯一、lookup 索引、claimed_products 审计列）。
+- ⚠️ 注：完整 S01 数据集（8 SKU / 7 UPC / 2 Model）验收需 T3 Policy 落地后端到端验证；本任务仅完成 schema + seed 双写结构。
 
 #### T3 — ProductIdentificationPolicy 深模块（O2）
 **目标接口**（ADR-0002，含 V1.1 订单佐证）：

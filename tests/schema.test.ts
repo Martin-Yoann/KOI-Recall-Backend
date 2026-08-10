@@ -11,6 +11,8 @@ const expectedTables = [
   'campaign_versions',
   'campaign_localizations',
   'campaign_products',
+  'campaign_product_variants',
+  'campaign_product_identifiers',
   'campaign_product_lots',
   'campaign_remedy_options',
   'campaign_evidence_requirements',
@@ -36,6 +38,8 @@ const schemaTables = [
   schema.campaignVersions,
   schema.campaignLocalizations,
   schema.campaignProducts,
+  schema.campaignProductVariants,
+  schema.campaignProductIdentifiers,
   schema.campaignProductLots,
   schema.campaignRemedyOptions,
   schema.campaignEvidenceRequirements,
@@ -57,7 +61,7 @@ const schemaTables = [
 ];
 
 describe('database design', () => {
-  it('declares all 22 Phase 1 tables', () => {
+  it('declares all 24 Phase 1 tables (22 base + 2 identity model, ADR-0001)', () => {
     expect(schemaTables.map(getTableName)).toEqual(expectedTables);
   });
 
@@ -108,6 +112,46 @@ describe('database design', () => {
     );
     expect(ownershipIndexPosition).toBeGreaterThanOrEqual(0);
     expect(ownershipForeignKeyPosition).toBeGreaterThan(ownershipIndexPosition);
+  });
+
+  it('models product identity with variants and multi-valued identifiers (ADR-0001)', async () => {
+    // Variants: model is unique per product, so one product can carry JSM-18A
+    // and JSM-18D as separate rows — the ambiguity the flat attributes model
+    // could not express.
+    const variantConfig = getTableConfig(schema.campaignProductVariants);
+    const variantUnique = variantConfig.indexes.find(
+      (ix) => ix.config.name === 'campaign_product_variants_product_model_uidx',
+    );
+    expect(variantUnique?.config.unique).toBe(true);
+    expect(variantUnique?.config.columns.map((c) => ('name' in c ? c.name : undefined))).toEqual([
+      'campaign_product_id',
+      'model',
+    ]);
+
+    // Identifiers: a lookup index on (type, normalized_value) but NO global
+    // unique constraint — the same UPC across two variants is a business fact
+    // the Policy resolves as manual_review, not a constraint violation.
+    const identifierConfig = getTableConfig(schema.campaignProductIdentifiers);
+    const identifierUnique = identifierConfig.indexes.find(
+      (ix) => ix.config.name === 'campaign_product_identifiers_variant_type_value_uidx',
+    );
+    expect(identifierUnique?.config.unique).toBe(true);
+    expect(identifierUnique?.config.columns.map((c) => ('name' in c ? c.name : undefined))).toEqual(
+      ['variant_id', 'identifier_type', 'normalized_value'],
+    );
+    const allIdentifierIndexes = identifierConfig.indexes.map((ix) => ix.config.unique);
+    // Exactly one unique index, scoped to the variant — never globally unique.
+    expect(allIdentifierIndexes.filter(Boolean)).toHaveLength(1);
+
+    const migration = await readFile('drizzle/0003_yummy_nightcrawler.sql', 'utf8');
+    expect(migration).toContain('CREATE TYPE "public"."product_identifier_type"');
+    expect(migration).toContain('CREATE TYPE "public"."identification_mode"');
+    expect(migration).toContain('campaign_product_identifiers_lookup_idx');
+    // claimed_products gained audit columns (M1 nullable, old NOT NULL kept).
+    expect(migration).toContain('ALTER TABLE "claimed_products" ADD COLUMN "matched_variant_ids"');
+    expect(migration).toContain('ALTER TABLE "claimed_products" ADD COLUMN "identification_mode"');
+    expect(migration).toContain('ALTER TABLE "claimed_products" ADD COLUMN "reason_codes"');
+    expect(migration).toContain('ALTER TABLE "claimed_products" ADD COLUMN "input_snapshot"');
   });
 
   it('keeps the synthetic seed English-only and protected from production use', async () => {

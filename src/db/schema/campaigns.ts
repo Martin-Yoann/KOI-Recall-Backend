@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   boolean,
   check,
+  date,
   foreignKey,
   index,
   integer,
@@ -148,6 +149,80 @@ export const campaignProducts = pgTable(
   (table) => [
     uniqueIndex('campaign_products_version_sku_uidx').on(table.campaignVersionId, table.sku),
     index('campaign_products_version_sort_idx').on(table.campaignVersionId, table.sortOrder),
+  ],
+);
+
+/**
+ * A physical variant of a campaign product — a specific Model / Style /
+ * packaging version / applicability window. ADR-0001 §2.1. Lets the catalogue
+ * express "the same SKU/UPC maps to JSM-18A and JSM-18D", the real-world
+ * ambiguity the flat attributes model could not.
+ */
+export const campaignProductVariants = pgTable(
+  'campaign_product_variants',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    campaignProductId: uuid('campaign_product_id')
+      .notNull()
+      .references(() => campaignProducts.id, { onDelete: 'cascade' }),
+    model: varchar('model', { length: 120 }).notNull(),
+    style: varchar('style', { length: 120 }),
+    applicableFrom: date('applicable_from', { mode: 'string' }),
+    applicableTo: date('applicable_to', { mode: 'string' }),
+    attributes: jsonb('attributes').$type<Record<string, unknown>>().notNull().default({}),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('campaign_product_variants_product_model_uidx').on(
+      table.campaignProductId,
+      table.model,
+    ),
+    index('campaign_product_variants_product_idx').on(table.campaignProductId),
+  ],
+);
+
+/**
+ * Identifier type for {@link campaignProductIdentifiers}. ADR-0001 §2.2.
+ * `other` keeps the set open for future identifier kinds without a schema change.
+ */
+export const productIdentifierTypeEnum = pgEnum('product_identifier_type', [
+  'sku',
+  'unit_upc',
+  'gtin14',
+  'model',
+  'style',
+  'other',
+]);
+
+/**
+ * A multi-valued, deliberately non-globally-unique identifier attached to a
+ * variant. ADR-0001 §2.2. Identifiers MAY repeat across variants because
+ * ambiguity (e.g. one UPC shared by two Models) is a business fact; the Policy
+ * turns multi-candidate matches into manual_review rather than picking one.
+ * Queries match on `normalized_value`; `raw_value` is preserved for display.
+ */
+export const campaignProductIdentifiers = pgTable(
+  'campaign_product_identifiers',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    variantId: uuid('variant_id')
+      .notNull()
+      .references(() => campaignProductVariants.id, { onDelete: 'cascade' }),
+    identifierType: productIdentifierTypeEnum('identifier_type').notNull(),
+    rawValue: varchar('raw_value', { length: 160 }).notNull(),
+    normalizedValue: varchar('normalized_value', { length: 160 }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('campaign_product_identifiers_variant_type_value_uidx').on(
+      table.variantId,
+      table.identifierType,
+      table.normalizedValue,
+    ),
+    index('campaign_product_identifiers_lookup_idx').on(
+      table.identifierType,
+      table.normalizedValue,
+    ),
   ],
 );
 

@@ -7,6 +7,8 @@ const tableNames = [
   'campaign_versions',
   'campaign_localizations',
   'campaign_products',
+  'campaign_product_variants',
+  'campaign_product_identifiers',
   'campaign_product_lots',
   'campaign_remedy_options',
   'campaign_evidence_requirements',

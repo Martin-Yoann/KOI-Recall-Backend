@@ -5,6 +5,7 @@ import {
   date,
   index,
   integer,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -44,6 +45,17 @@ export const productCheckResultEnum = pgEnum('product_check_result', [
   'potential_match',
   'not_matched',
   'manual_review',
+]);
+
+/**
+ * How a consumer's claimed product was identified. ADR-0001 §2.3 / ADR-0002.
+ * V1.1: `purchase_evidence` is a distinct mode — purchase corroboration is
+ * evaluated separately and never mistaken for a product identifier.
+ */
+export const identificationModeEnum = pgEnum('identification_mode', [
+  'product_identifiers',
+  'purchase_evidence',
+  'unknown',
 ]);
 
 export const recallCases = pgTable(
@@ -152,12 +164,21 @@ export const claimedProducts = pgTable(
     orderNumberEncrypted: text('order_number_encrypted'),
     orderNumberLookupHash: varchar('order_number_lookup_hash', { length: 128 }),
     checkResult: productCheckResultEnum('check_result').notNull(),
+    // ADR-0001 §2.3 — added in M1, nullable so the old NOT NULL columns stay
+    // usable during the dual-read window. Populated once the identification
+    // Policy (ADR-0002) drives writes; the old shape/flavor/lot/date columns
+    // become nullable in M3 and are dropped in M4.
+    matchedVariantIds: uuid('matched_variant_ids').array(),
+    identificationMode: identificationModeEnum('identification_mode'),
+    reasonCodes: text('reason_codes').array(),
+    inputSnapshot: jsonb('input_snapshot').$type<Record<string, unknown>>(),
     ...timestamps,
   },
   (table) => [
     index('claimed_products_case_idx').on(table.caseId),
     index('claimed_products_lot_date_idx').on(table.lotCode, table.dateCode),
     index('claimed_products_order_lookup_idx').on(table.orderNumberLookupHash),
+    index('claimed_products_matched_variants_idx').using('gin', table.matchedVariantIds),
     check('claimed_products_quantity_chk', sql`${table.quantity} between 1 and 100`),
   ],
 );

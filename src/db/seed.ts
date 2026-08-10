@@ -7,8 +7,10 @@ import {
   campaignEvidenceRequirements,
   campaignLocalizations,
   campaignMessageTemplates,
+  campaignProductIdentifiers,
   campaignProductLots,
   campaignProducts,
+  campaignProductVariants,
   campaignRemedyOptions,
   campaignVersions,
   recallCampaigns,
@@ -18,6 +20,7 @@ const ids = {
   campaign: '2bdac8b0-73d8-4e38-a7e2-98fd5608788a',
   version: '85eafab1-a5bd-4d57-a697-38bce973deab',
   product: '5e41d8b9-03c4-46d4-9b87-80c40cdfbde5',
+  variant: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
 } as const;
 
 async function seed() {
@@ -94,6 +97,39 @@ async function seed() {
           shapes: ['Bear', 'Dinosaur', 'Strawberry', 'Heart'],
         },
       })
+      .onConflictDoNothing();
+
+    // ADR-0001 dual-write: alongside the legacy flat attributes above, populate
+    // the new variant + identifier structure so both old and new read paths
+    // resolve the same demo product. The SKU is mirrored as an identifier and a
+    // demo UPC is added so the identifier lookup path has realistic data.
+    await db
+      .insert(campaignProductVariants)
+      .values({
+        id: ids.variant,
+        campaignProductId: ids.product,
+        model: 'ML-DEMO',
+        style: '18g',
+        attributes: { flavors: ['Peach', 'Strawberry'], shapes: ['Bear', 'Dinosaur'] },
+      })
+      .onConflictDoNothing();
+
+    await db
+      .insert(campaignProductIdentifiers)
+      .values([
+        {
+          variantId: ids.variant,
+          identifierType: 'sku',
+          rawValue: 'MUSIC-LOLLIPOP-DEMO-18G',
+          normalizedValue: 'music-lollipop-demo-18g',
+        },
+        {
+          variantId: ids.variant,
+          identifierType: 'unit_upc',
+          rawValue: '0123456789012',
+          normalizedValue: '0123456789012',
+        },
+      ])
       .onConflictDoNothing();
 
     await db
