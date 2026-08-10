@@ -1,3 +1,5 @@
+import { parseProductAttributes } from '../product-identification/attributes.js';
+
 /**
  * Row shapes read by {@link DrizzleProductCheckService} and consumed by
  * {@link evaluateProductCheck}. Declared explicitly so the matcher is a pure,
@@ -25,12 +27,6 @@ const MANUAL_REVIEW_MESSAGE = 'The product details require manual review.';
 const NOT_MATCHED_MESSAGE =
   'No affected product matches the shape, flavor, and lot details provided.';
 
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : [];
-}
-
 function normalize(value: string): string {
   return value.toLowerCase();
 }
@@ -55,9 +51,9 @@ export function evaluateProductCheck(
 
   let manualReview = false;
   for (const product of products) {
-    const attributes = product.attributes;
-    const shapes = asStringArray(attributes.shapes).map(normalize);
-    const flavors = asStringArray(attributes.flavors).map(normalize);
+    const attributes = parseProductAttributes(product.attributes);
+    const shapes = (attributes.shapes ?? []).map(normalize);
+    const flavors = (attributes.flavors ?? []).map(normalize);
     if (!shapes.includes(shape) || !flavors.includes(flavor)) continue;
 
     for (const lot of lots) {

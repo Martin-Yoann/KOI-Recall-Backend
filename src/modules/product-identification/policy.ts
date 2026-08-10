@@ -1,3 +1,5 @@
+import { parseProductAttributes } from './attributes.js';
+
 /**
  * ProductIdentificationPolicy — the single decision point for product
  * identification (ADR-0002). Pure, database-free, unit-testable.
@@ -231,9 +233,9 @@ function matchLegacy(signals: ProductSignals, snapshot: CampaignSnapshot): strin
   const dateCode = norm(signals.dateCode);
 
   for (const product of snapshot.products) {
-    const attributes = product.attributes;
-    const shapes = toLowerStringArray(attributes.shapes);
-    const flavors = toLowerStringArray(attributes.flavors);
+    const attributes = parseProductAttributes(product.attributes);
+    const shapes = (attributes.shapes ?? []).map(norm);
+    const flavors = (attributes.flavors ?? []).map(norm);
     if (shape && !shapes.includes(shape)) continue;
     if (flavor && !flavors.includes(flavor)) continue;
 
@@ -251,12 +253,6 @@ function matchLegacy(signals: ProductSignals, snapshot: CampaignSnapshot): strin
     }
   }
   return [...matched];
-}
-
-function toLowerStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string').map((s) => s.toLowerCase())
-    : [];
 }
 
 function hasNoSignals(signals: ProductSignals): boolean {

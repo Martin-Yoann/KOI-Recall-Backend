@@ -239,18 +239,17 @@ identify(input, campaignSnapshot) -> {
 
 ### Sprint 4 — 运营入口 + 容量证明（O9/O10）
 
-#### T7 — CI 与容量证明（O9）
-- **CI Gate 序列**：`format:check → lint → typecheck → openapi:check → db:check → 默认 Vitest → PostgreSQL Gate → Neon Smoke(受保护环境) → 容量 Gate`。
-- PostgreSQL Gate：CI 起临时 PostgreSQL，`RUN_DB_INTEGRATION=true`，**禁止默认跳过**现 6 个集成套件。
-- 容量 Gate：导入 ~130 万条脱敏/合成订单索引，记录导入耗时 / P95 / P99 / 索引大小 / 并发退化。
+#### T7 — CI 与容量证明（O9）✅ 已完成
+- **CI workflow**（`.github/workflows/ci.yml`）：`static-gates`（format:check → lint → typecheck → openapi:check → db:check）、`unit-http-gates`（默认 Vitest）、`postgres-gate`（临时 PG 16 + migrate + seed + `RUN_DB_INTEGRATION=true` 跑 7 个集成套件，**无静默跳过**）。Neon Smoke 留受保护环境。
+- **容量基准**（`scripts/capacity-benchmark.ts`，`pnpm db:benchmark`）：生成 ~130 万合成订单索引行，记录导入耗时（rows/s）、P95/P99 查询延迟、索引/表大小；自清理。
 
 #### T8 — 后台运营能力（O10，D6）
 - 单一授权角色边界内：Case 查看、队列（标准/人工/事故）、完整导出、报告义务关闭门禁。
 
-#### T9 — 深化与收拢（O7，S3 起并行）
-- `CaseService.submit` 保持小接口；把纯策略、共享快照读取、私有持久化步骤收拢到内部模块（**不为每步建公开 Port**）。
-- PostgreSQL 错误树遍历统一放 `src/shared/errors.ts`（现 Case 与通用错误各一份类似逻辑）。
-- 产品 `attributes` 建 Zod/TS 领域类型，逐步减少 `Record<string, unknown>`。
+#### T9 — 深化与收拢（O7，S3 起并行）✅ 已完成
+- `CaseService.submit` 保持小接口（未改签名）。
+- PostgreSQL 错误树统一：`isPostgresUniqueConstraint`（Case 私有）→ `shared/errors.ts` 的 `isUniqueViolationWithConstraint`，删除重复实现。
+- 产品 `attributes` 建 Zod/TS 领域类型（`src/modules/product-identification/attributes.ts`）：`parseProductAttributes`/`parseLotAttributes`，matcher/mapper/policy 不再手写 `asStringArray` 运行时猜测；malformed 历史值宽容降级为空。
 
 ---
 

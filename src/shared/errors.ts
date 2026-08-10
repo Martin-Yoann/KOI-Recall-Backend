@@ -173,6 +173,41 @@ export function isUniqueViolation(error: unknown): boolean {
   return errorHasCode(error, (code) => code === '23505');
 }
 
+/**
+ * Returns true when an error is a PostgreSQL unique-violation against a
+ * *specific* named constraint (T9/O7). Walks the error tree like
+ * {@link isUniqueViolation} but also requires `constraint === constraintName`.
+ * Used where a concurrent writer may have won the unique race (e.g. idempotency
+ * records) and the constraint name distinguishes that case.
+ */
+export function isUniqueViolationWithConstraint(error: unknown, constraintName: string): boolean {
+  const candidates: unknown[] = [error];
+  const visited = new Set<object>();
+  let examined = 0;
+
+  while (candidates.length > 0 && examined < MAX_ERROR_OBJECTS) {
+    const candidate = candidates.shift();
+    if (typeof candidate !== 'object' || candidate === null) continue;
+    if (visited.has(candidate)) continue;
+    visited.add(candidate);
+    examined += 1;
+
+    const record = candidate as {
+      code?: unknown;
+      constraint?: unknown;
+      cause?: unknown;
+      errors?: unknown;
+    };
+    if (record.code === '23505' && record.constraint === constraintName) return true;
+    if (record.cause !== undefined) candidates.push(record.cause);
+    if (Array.isArray(record.errors)) {
+      for (const nestedError of record.errors as unknown[]) candidates.push(nestedError);
+    }
+  }
+
+  return false;
+}
+
 function errorHasCode(error: unknown, predicate: (code: string) => boolean): boolean {
   const candidates: unknown[] = [error];
   const visited = new Set<object>();

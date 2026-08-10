@@ -1,4 +1,5 @@
 import type { CampaignView } from '../../contracts/toc.js';
+import { parseProductAttributes } from '../product-identification/attributes.js';
 
 /**
  * Row shapes read by {@link DrizzleCampaignService} and consumed by
@@ -72,12 +73,6 @@ function compareString(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-function asStringArray(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === 'string')
-    : [];
-}
-
 /**
  * Maps raw campaign rows into the public {@link CampaignView}. Filtering
  * (affected lots, active remedies) and ordering happen here so the rules live
@@ -100,13 +95,14 @@ export function mapToCampaignView(source: CampaignSource): CampaignView {
           attributes: lot.attributes,
         }));
 
+      const attributes = parseProductAttributes(product.attributes);
       return {
         productId: product.id,
         sku: product.sku,
         brand: product.brand,
         name: product.name,
-        flavors: asStringArray(product.attributes.flavors),
-        shapes: asStringArray(product.attributes.shapes),
+        flavors: attributes.flavors ?? [],
+        shapes: attributes.shapes ?? [],
         affectedLots,
       };
     });

@@ -35,6 +35,7 @@ import {
   ClaimConflictError,
   ClaimValidationError,
   DraftExpiredOrInvalidError,
+  isUniqueViolationWithConstraint,
   ResourceNotFoundError,
 } from '../../shared/errors.js';
 import { evaluateProductCheck } from '../product-checks/matcher.js';
@@ -52,35 +53,6 @@ import type { CaseService, ClaimSubmissionCommand } from './service.js';
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_UNIQUE_CONSTRAINT = 'idempotency_records_endpoint_key_uidx';
 const CASE_REFERENCE_ATTEMPTS = 3;
-const MAX_ERROR_OBJECTS = 64;
-
-function isPostgresUniqueConstraint(error: unknown, constraint: string): boolean {
-  const candidates: unknown[] = [error];
-  const visited = new Set<object>();
-  let examined = 0;
-
-  while (candidates.length > 0 && examined < MAX_ERROR_OBJECTS) {
-    const candidate = candidates.shift();
-    if (typeof candidate !== 'object' || candidate === null || visited.has(candidate)) continue;
-    visited.add(candidate);
-    examined += 1;
-
-    const record = candidate as {
-      code?: unknown;
-      constraint?: unknown;
-      cause?: unknown;
-      errors?: unknown;
-    };
-    if (record.code === '23505' && record.constraint === constraint) return true;
-    if (record.cause !== undefined) candidates.push(record.cause);
-    if (Array.isArray(record.errors)) {
-      for (const nestedError of record.errors as unknown[]) candidates.push(nestedError);
-    }
-  }
-
-  return false;
-}
-
 /**
  * Maps a claimed product's intake mode + matcher result onto the versioned
  * Evidence Profile (ADR-0003 M3, D3). The profile decides which evidence
@@ -588,7 +560,7 @@ export class DrizzleCaseService implements CaseService {
     try {
       return await transaction;
     } catch (error) {
-      if (!isPostgresUniqueConstraint(error, IDEMPOTENCY_UNIQUE_CONSTRAINT)) throw error;
+      if (!isUniqueViolationWithConstraint(error, IDEMPOTENCY_UNIQUE_CONSTRAINT)) throw error;
       const concurrentWinner = await this.findIdempotency(
         endpoint,
         keyHash,

@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CI: 'true'
+
+jobs:
+  static-gates:
+    name: Static gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Format
+        run: pnpm format:check
+      - name: Lint
+        run: pnpm lint
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: OpenAPI drift
+        run: pnpm openapi:check
+      - name: Drizzle schema check
+        run: pnpm db:check
+
+  unit-http-gates:
+    name: Unit + HTTP (Vitest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Default Vitest (unit + HTTP)
+        run: pnpm test
+
+  postgres-gate:
+    name: PostgreSQL integration gate
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: koi
+          POSTGRES_PASSWORD: koi
+          POSTGRES_DB: koi_recall_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U koi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Migrate test database
+        env:
+          DATABASE_URL: postgresql://koi:koi@localhost:5432/koi_recall_test
+        run: pnpm db:migrate
+      - name: Seed demo campaign
+        env:
+          DATABASE_URL: postgresql://koi:koi@localhost:5432/koi_recall_test
+          ALLOW_SYNTHETIC_SEED: 'true'
+          APP_ENV: local
+        run: pnpm db:seed
+      # Integration suites construct their own crypto keys (Buffer.alloc) so no
+      # secrets are required; RUN_DB_INTEGRATION=true is the only switch.
+      # neon-pooled-transaction is a Neon-only smoke and runs in the protected
+      # environment, not against the local Postgres gate.
+      - name: Run database integration suites (no silent skip)
+        env:
+          DATABASE_URL: postgresql://koi:koi@localhost:5432/koi_recall_test
+          RUN_DB_INTEGRATION: 'true'
+        run: >-
+          pnpm vitest run
+          tests/campaign-integration.test.ts
+          tests/claim-draft-integration.test.ts
+          tests/product-check-integration.test.ts
+          tests/case-integration.test.ts
+          tests/case-http-integration.test.ts
+          tests/outbox-worker.integration.test.ts
+          tests/draft-cleanup-worker.integration.test.ts
