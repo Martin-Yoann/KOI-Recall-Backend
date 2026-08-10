@@ -19,13 +19,11 @@ import {
 } from './middleware/rate-limit.js';
 import { requestContext, type AppEnv } from './middleware/request-context.js';
 import { consoleSafeLogger } from './platform/observability/logger.js';
+import { registerAdminRoutes } from './routes/admin.js';
 import { registerCampaignRoutes } from './routes/campaigns.js';
 import { registerClaimRoutes } from './routes/claims.js';
 import { registerDocumentRoutes } from './routes/documents.js';
-import {
-  notImplementedJobHandler,
-  registerInternalJobRoutes,
-} from './routes/internal-jobs.js';
+import { notImplementedJobHandler, registerInternalJobRoutes } from './routes/internal-jobs.js';
 import { registerProductCheckRoutes } from './routes/product-checks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import { problem } from './routes/shared.js';
@@ -125,18 +123,15 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   // Route handlers live in src/routes/*; app.ts only wires them in declaration
   // order so the OpenAPI path listing and registration stay centralized here.
+  registerAdminRoutes(app, registry, config.ADMIN_API_KEY);
   registerCampaignRoutes(app, registry);
   registerProductCheckRoutes(app, registry);
   registerDocumentRoutes(app, registry);
   registerClaimRoutes(app, registry);
-  registerInternalJobRoutes(
-    app,
-    config.CRON_SECRET,
-    {
-      drainOutbox: notImplementedJobHandler('Outbox processing'),
-      cleanupDrafts: notImplementedJobHandler('Draft cleanup'),
-    },
-  );
+  registerInternalJobRoutes(app, config.CRON_SECRET, {
+    drainOutbox: notImplementedJobHandler('Outbox processing'),
+    cleanupDrafts: notImplementedJobHandler('Draft cleanup'),
+  });
   registerWebhookRoutes(app, registry, config);
 
   app.doc('/openapi.json', buildOpenApiConfig(config.PROBLEM_BASE_URL));

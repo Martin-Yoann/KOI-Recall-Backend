@@ -9,6 +9,8 @@ const environmentSchema = z.object({
   RESEND_API_KEY: z.string().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),
   CRON_SECRET: z.string().optional(),
+  /** Single-role Admin API key (T8/O10). When absent, admin routes are 501. */
+  ADMIN_API_KEY: z.string().optional(),
   FIELD_ENCRYPTION_KEY: z.string().optional(),
   HASH_PEPPER: z.string().optional(),
   /** Stable production domain used in Problem Details URIs (T6.5/O6). */

@@ -243,8 +243,10 @@ identify(input, campaignSnapshot) -> {
 - **CI workflow**（`.github/workflows/ci.yml`）：`static-gates`（format:check → lint → typecheck → openapi:check → db:check）、`unit-http-gates`（默认 Vitest）、`postgres-gate`（临时 PG 16 + migrate + seed + `RUN_DB_INTEGRATION=true` 跑 7 个集成套件，**无静默跳过**）。Neon Smoke 留受保护环境。
 - **容量基准**（`scripts/capacity-benchmark.ts`，`pnpm db:benchmark`）：生成 ~130 万合成订单索引行，记录导入耗时（rows/s）、P95/P99 查询延迟、索引/表大小；自清理。
 
-#### T8 — 后台运营能力（O10，D6）
-- 单一授权角色边界内：Case 查看、队列（标准/人工/事故）、完整导出、报告义务关闭门禁。
+#### T8 — 后台运营能力（O10，D6）✅ 已完成
+- `ADMIN_API_KEY` 配置驱动的**单一授权角色**鉴权（`src/routes/admin.ts`，内部路由不进公开 OpenAPI）。
+- `AdminService`（`src/modules/admin/`）：`listCases`（standard/manual_review/incident 三队列 + 状态筛选）、`exportCases`（CSV 完整导出）、`closeReportabilityReview`（pending → filed 需 `cpscReference` / documented_non_reportable，rationale AEAD 加密，留 reviewerId/decisionAt）。
+- 接线：`DrizzleAdminService` 随 crypto 可用时注册；无 `ADMIN_API_KEY` 或无效 → 401。
 
 #### T9 — 深化与收拢（O7，S3 起并行）✅ 已完成
 - `CaseService.submit` 保持小接口（未改签名）。

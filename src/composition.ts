@@ -3,6 +3,8 @@ import { DrizzleCampaignService } from './modules/campaigns/drizzle-campaign-ser
 import type { CampaignService } from './modules/campaigns/service.js';
 import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
+import { DrizzleAdminService } from './modules/admin/drizzle-admin-service.js';
+import type { AdminService } from './modules/admin/service.js';
 import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-draft-service.js';
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
 import { DrizzleCommunicationService } from './modules/communications/drizzle-communication-service.js';
@@ -35,6 +37,7 @@ export interface ApplicationServices {
   cases: CaseService;
   incidents: IncidentService;
   communications: CommunicationService;
+  admin?: AdminService;
 }
 
 export interface PlatformAdapters {
@@ -114,7 +117,10 @@ export function createApplicationRegistry(
       communications: new DrizzleCommunicationService(handle.db),
       ...(crypto instanceof NotImplementedCryptoAdapter
         ? {}
-        : { cases: new DrizzleCaseService(handle, crypto) }),
+        : {
+            cases: new DrizzleCaseService(handle, crypto),
+            admin: new DrizzleAdminService(handle.db, crypto),
+          }),
     },
     platform: { ...placeholder.platform, blob, crypto },
   };
