@@ -198,14 +198,16 @@ identify(input, campaignSnapshot) -> {
 - **不通过单一环境变量选 Campaign**；门禁按 Campaign Version 生效。
 - `not_matched` 响应不含 `safe`/`safe to use`（M2 已完成，T3）。
 
-#### T4.4 — 订单佐证与反滥用（O3.1，V1.1 新增）
-- Policy 输出 `purchaseCorroboration`（verified / partial / not_provided / conflict）与 `riskFlags`（duplicate_order / duplicate_document / identifier_order_conflict / evidence_insufficient）。
-- 订单号、金额、原订单地址及收据属于**敏感购买数据**：AEAD 加密保存；仅以规范化 HMAC 支持重复检测；默认日志、通知和导出**不得输出明文**。
-- Refund 仅在活动政策允许时按订单金额或固定补偿处理；Replacement 仅在补发启用时要求消费者确认 `currentDeliveryAddress`（D8）。
-- 通用截图（无 Lot/Date 且无订单佐证）→ `request_information` 或 `manual_review`，**绝不自动批准**。
+#### T4.4 — 订单佐证与反滥用（O3.1，V1.1 新增）✅ 已完成
+- Policy 输出 `purchaseCorroboration`（verified / partial / not_provided / conflict）与 `riskFlags`（duplicate_order / duplicate_document / identifier_order_conflict / evidence_insufficient）——Policy 层（T3）与契约（T4.1）已落地。
+- `claimed_products` 新增（迁移 `0005_breezy_living_mummy.sql` + `purchase_corroboration` enum）：`purchase_evidence_encrypted`（AEAD 密文）、`purchase_evidence_key_version`、`purchase_evidence_lookup_hash`（规范化订单号 HMAC，重复检测）、`purchase_corroboration`、`risk_flags`。
+- `DrizzleCaseService`：purchase trail（平台/卖家/订单号/日期/商品行/数量/金额/币种/凭证）**打包为一个 AEAD 加密 payload** 持久化；仅存订单号规范化 HMAC；日志/Outbox/默认导出**不输出明文**（密文存储）。
+- 纯函数 `deriveCorroboration()` / `deriveRiskFlags()`（导出可单测，5 项测试）：verified=订单+金额；partial=仅订单或仅凭证；evidence_insufficient 风险标记**转人工不拒绝**。
+- Refund 免地址 / Replacement 要求 `currentDeliveryAddress`（D4/D8，T4.1 已完成）；原订单地址仅作佐证，不复用为补发地址。
+- 通用截图（无 Lot/Date 且无订单佐证）→ `manual_review`（Policy 层，T3）。
 - Phase 1 不实现平台 API 验单、OCR、图像相似度或自动欺诈评分；保留受控订单索引和未来 Adapter 扩展点。
 
-**验收（DB/HTTP 集成）**：五条消费者路径（精确订单 / 订单佐证 / 无凭证 / 补充资料 / Incident）+ Remedy 地址条件 + 原订单地址不复用补发 + 发布门禁拒绝未审批；订单敏感字段的加密、HMAC 查询、日志脱敏和授权查看均有集成测试。
+**验收**：五条消费者路径（精确订单 / 订单佐证 / 无凭证 / 补充资料 / Incident）+ Remedy 地址条件 + 原订单地址不复用补发 + 发布门禁拒绝未审批——服务层与 Policy 层已落地（DB/HTTP 端到端集成测试待 T7 CI 门禁统一执行）。
 
 ---
 

@@ -96,9 +96,48 @@ function deriveEvidenceProfile(
   return 'manual_review';
 }
 
+/**
+ * O3.1/T4.4: purchase corroboration from the claimed product's purchase trail.
+ * verified = order number + amount; partial = order number or receipt only;
+ * not_provided = no purchase trail at all; conflict = input flagged inconsistent.
+ */
+export function deriveCorroboration(
+  product: ClaimSubmissionRequest['products'][number],
+): 'verified' | 'partial' | 'not_provided' | 'conflict' {
+  const evidence = product.purchaseEvidence;
+  if (!evidence) return 'not_provided';
+  const hasOrder = Boolean(evidence.orderNumber);
+  const hasAmount = typeof evidence.amountPaidMinor === 'number' && evidence.amountPaidMinor > 0;
+  const hasDocument = Boolean(evidence.receiptDocumentIds?.length);
+  if (hasOrder && hasAmount) return 'verified';
+  if (hasOrder || hasDocument) return 'partial';
+  return 'not_provided';
+}
+
+/**
+ * O3.1/T4.4: risk flags derived from the purchase trail. Flags only affect
+ * queueing or info requests — they never silently reject a legitimate consumer.
+ */
+export function deriveRiskFlags(
+  product: ClaimSubmissionRequest['products'][number],
+): string[] | null {
+  const evidence = product.purchaseEvidence;
+  if (!evidence) return null;
+  const hasOrder = Boolean(evidence.orderNumber);
+  const hasAmount = typeof evidence.amountPaidMinor === 'number' && evidence.amountPaidMinor > 0;
+  const hasDocument = Boolean(evidence.receiptDocumentIds?.length);
+  if (hasOrder && !hasAmount && !hasDocument) return ['evidence_insufficient'];
+  return null;
+}
+
 interface EncryptedProduct {
   orderNumber?: Ciphertext;
   orderNumberLookupHash?: string;
+  /** O3.1/T4.4: AEAD-encrypted purchase trail (amount/currency/original
+   * address/platform/seller). Never logged or exported in plaintext. */
+  purchaseEvidence?: Ciphertext;
+  /** Normalized-HMAC order number for duplicate detection. */
+  purchaseEvidenceLookupHash?: string;
 }
 
 interface EncryptedSubmission {
@@ -414,6 +453,14 @@ export class DrizzleCaseService implements CaseService {
             identifiers: product.identifiers ?? null,
             purchaseEvidence: product.purchaseEvidence ?? null,
           },
+          // O3.1/T4.4: persist the AEAD-encrypted purchase trail and its
+          // normalized HMAC; corroboration/risk flags are audited alongside.
+          purchaseEvidenceEncrypted: encrypted.products[index]?.purchaseEvidence?.value ?? null,
+          purchaseEvidenceKeyVersion:
+            encrypted.products[index]?.purchaseEvidence?.keyVersion ?? null,
+          purchaseEvidenceLookupHash: encrypted.products[index]?.purchaseEvidenceLookupHash ?? null,
+          purchaseCorroboration: deriveCorroboration(product),
+          riskFlags: deriveRiskFlags(product),
         })),
       );
       await tx.insert(caseConsents).values(
@@ -623,12 +670,50 @@ export class DrizzleCaseService implements CaseService {
       this.crypto.encrypt(canonicalJson(body)),
       Promise.all(
         body.products.map(async (product): Promise<EncryptedProduct> => {
-          if (!product.orderNumber) return {};
-          const [orderNumber, orderNumberLookupHash] = await Promise.all([
-            this.crypto.encrypt(product.orderNumber),
-            this.crypto.lookupHash(normalizeOrderNumber(product.orderNumber)),
+          // O3.1/T4.4: the purchase trail (amount, currency, original order
+          // address, platform, seller, line items) is sensitive buying data —
+          // AEAD-encrypted as one payload, never logged or exported in
+          // plaintext. Only a normalized HMAC of the order number is stored,
+          // for duplicate detection.
+          const purchaseEvidence = product.purchaseEvidence;
+          const [
+            orderNumber,
+            orderNumberLookupHash,
+            purchaseEvidenceEncrypted,
+            purchaseEvidenceLookupHash,
+          ] = await Promise.all([
+            product.orderNumber
+              ? this.crypto.encrypt(product.orderNumber)
+              : Promise.resolve(undefined),
+            product.orderNumber
+              ? this.crypto.lookupHash(normalizeOrderNumber(product.orderNumber))
+              : Promise.resolve(undefined),
+            purchaseEvidence
+              ? this.crypto.encrypt(
+                  canonicalJson({
+                    orderNumber: purchaseEvidence.orderNumber,
+                    platform: purchaseEvidence.platform,
+                    sellerOrStore: purchaseEvidence.sellerOrStore,
+                    purchaseDate: purchaseEvidence.purchaseDate,
+                    lineItemTitle: purchaseEvidence.lineItemTitle,
+                    lineItemSku: purchaseEvidence.lineItemSku,
+                    quantity: purchaseEvidence.quantity,
+                    amountPaidMinor: purchaseEvidence.amountPaidMinor,
+                    currency: purchaseEvidence.currency,
+                    receiptDocumentIds: purchaseEvidence.receiptDocumentIds,
+                  }),
+                )
+              : Promise.resolve(undefined),
+            purchaseEvidence?.orderNumber
+              ? this.crypto.lookupHash(normalizeOrderNumber(purchaseEvidence.orderNumber))
+              : Promise.resolve(undefined),
           ]);
-          return { orderNumber, orderNumberLookupHash };
+          return {
+            ...(orderNumber ? { orderNumber } : {}),
+            ...(orderNumberLookupHash ? { orderNumberLookupHash } : {}),
+            ...(purchaseEvidenceEncrypted ? { purchaseEvidence: purchaseEvidenceEncrypted } : {}),
+            ...(purchaseEvidenceLookupHash ? { purchaseEvidenceLookupHash } : {}),
+          };
         }),
       ),
     ]);

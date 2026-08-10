@@ -58,6 +58,17 @@ export const identificationModeEnum = pgEnum('identification_mode', [
   'unknown',
 ]);
 
+/**
+ * Purchase corroboration outcome (O3.1/V1.1): how credible the consumer's
+ * purchase trail is. Evaluated independently of product identity.
+ */
+export const purchaseCorroborationEnum = pgEnum('purchase_corroboration', [
+  'verified',
+  'partial',
+  'not_provided',
+  'conflict',
+]);
+
 export const recallCases = pgTable(
   'recall_cases',
   {
@@ -172,6 +183,15 @@ export const claimedProducts = pgTable(
     identificationMode: identificationModeEnum('identification_mode'),
     reasonCodes: text('reason_codes').array(),
     inputSnapshot: jsonb('input_snapshot').$type<Record<string, unknown>>(),
+    // O3.1/V1.1 (T4.4): purchase evidence is sensitive buying data — AEAD
+    // encrypted as one payload (platform/seller/amount/currency/original order
+    // address/line items), only a normalized HMAC of the order number is stored
+    // for duplicate detection, and the corroboration + risk flags are audited.
+    purchaseEvidenceEncrypted: text('purchase_evidence_encrypted'),
+    purchaseEvidenceKeyVersion: varchar('purchase_evidence_key_version', { length: 40 }),
+    purchaseEvidenceLookupHash: varchar('purchase_evidence_lookup_hash', { length: 128 }),
+    purchaseCorroboration: purchaseCorroborationEnum('purchase_corroboration'),
+    riskFlags: text('risk_flags').array(),
     ...timestamps,
   },
   (table) => [
