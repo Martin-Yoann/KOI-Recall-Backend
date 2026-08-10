@@ -137,7 +137,7 @@ Sprint 0  ── 事实与设计基线（不动代码，产出 ADR + 迁移设�
 - 默认 Vitest **158 passed / 43 skipped**（+1：ADR-0001 不变量测试：variant 唯一性、identifier 无全局唯一、lookup 索引、claimed_products 审计列）。
 - ⚠️ 注：完整 S01 数据集（8 SKU / 7 UPC / 2 Model）验收需 T3 Policy 落地后端到端验证；本任务仅完成 schema + seed 双写结构。
 
-#### T3 — ProductIdentificationPolicy 深模块（O2）
+#### T3 — ProductIdentificationPolicy 深模块（O2）✅ 已完成（含 M2 契约切换）
 **目标接口**（ADR-0002，含 V1.1 订单佐证）：
 ```ts
 identify(input, campaignSnapshot) -> {
@@ -156,7 +156,18 @@ identify(input, campaignSnapshot) -> {
 - `riskFlags` 只能改变队列或要求补充资料（转 `request_information` / `manual_review`），**不能静默拒绝合法消费者**。
 - 新增 `src/modules/product-identification/{policy.ts, service.ts, drizzle-snapshot-reader.ts}`。matcher.ts 的硬编码 message → 稳定 reason code。
 
-**验收**：product_identifiers / purchase_evidence / unknown 三条路径通过；多型号歧义全链路 `manual_review`、reasonCodes 可审计；订单敏感字段不出现在日志/Outbox/默认导出。
+**M2 契约切换**（已完成）：
+- `productCheckRequestSchema` → discriminated union（product_identifiers / purchase_evidence / unknown），`purchaseEvidenceSchema` 承载订单佐证字段（平台/卖家/订单号/日期/商品行/数量/金额/凭证）。
+- `productCheckResponseSchema` → `messageKey` + `reasonCodes` + `matchedVariantIds` + `identificationMode` + `purchaseCorroboration?` + `riskFlags?`；**移除硬编码 `message`**。
+- Product Check 路由只做 HTTP 形状映射，triage 全部收敛到 Policy。
+- `DrizzleProductCheckService` 委托 `DrizzleProductIdentificationService` + `DrizzleCampaignSnapshotReader`。
+- CaseService 保持 legacy matcher（M1–M3 双读），M3 阶段（T4.1）再切到同一 Policy。
+
+**验收**（已通过，2026-08-07）：
+- policy 纯函数单测 8 项：单命中 / 多命中歧义 / 无命中 / 无信号 manual_review / legacy 四字段双读 / 无 safe 措辞 / 购买佐证独立评估 / evidence_insufficient 不拒绝。
+- Product Check 三态路径 HTTP 测试通过；OpenAPI 重新生成（sha256 `358632e7`，M2 预期变更），`openapi:check` 绿。
+- 默认 Vitest **167 passed / 44 skipped**（+9）；`pnpm build` 全绿。
+- 多型号歧义全链路 `manual_review`、reasonCodes 可审计；订单敏感字段不出现在日志/Outbox/默认导出（Policy 不输出明文，O3.1 记账）。
 
 ---
 

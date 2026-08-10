@@ -1,20 +1,108 @@
 import { z } from '@hono/zod-openapi';
 
-export const productCheckRequestSchema = z
+import { isoDate, uuid } from './common.js';
+
+/**
+ * A recognition signal the consumer supplies. Values are normalized for
+ * matching by the Policy; `raw_value` is preserved for display/audit.
+ */
+export const productIdentifierSchema = z
   .object({
-    shape: z.string().min(1).max(80),
-    flavor: z.string().min(1).max(80),
-    lotCode: z.string().min(1).max(80),
-    dateCode: z.string().min(1).max(40),
+    type: z.enum(['unit_upc', 'gtin14', 'model', 'style', 'lot_code', 'date_code']),
+    value: z.string().trim().min(1).max(160),
   })
+  .openapi('ProductIdentifier');
+
+/**
+ * Purchase trail (V1.1/O3.1): corroboration, NOT a product identifier. All
+ * fields default to optional; the Evidence Profile decides what to require.
+ */
+export const purchaseEvidenceSchema = z
+  .object({
+    platform: z.enum(['amazon', 'tiktok', 'koi', 'retailer', 'gift', 'other']).optional(),
+    sellerOrStore: z.string().trim().max(160).optional(),
+    orderNumber: z.string().trim().max(120).optional(),
+    purchaseDate: isoDate.optional(),
+    lineItemTitle: z.string().trim().max(240).optional(),
+    lineItemSku: z.string().trim().max(120).optional(),
+    quantity: z.number().int().min(1).max(100).optional(),
+    amountPaidMinor: z.number().int().min(0).optional(),
+    currency: z.string().length(3).optional(),
+    receiptDocumentIds: z.array(uuid).max(10).optional(),
+  })
+  .openapi('PurchaseEvidence');
+
+const productCheckIdentifiersInput = z
+  .object({
+    mode: z.literal('product_identifiers'),
+    identifiers: z.array(productIdentifierSchema).min(1).max(20),
+    purchaseEvidence: purchaseEvidenceSchema.optional(),
+  })
+  .openapi('ProductCheckIdentifiersInput');
+
+const productCheckPurchaseEvidenceInput = z
+  .object({
+    mode: z.literal('purchase_evidence'),
+    purchaseEvidence: purchaseEvidenceSchema,
+  })
+  .openapi('ProductCheckPurchaseEvidenceInput');
+
+const productCheckUnknownInput = z
+  .object({
+    mode: z.literal('unknown'),
+    purchaseEvidence: purchaseEvidenceSchema.optional(),
+    note: z.string().trim().max(500).optional(),
+  })
+  .openapi('ProductCheckUnknownInput');
+
+/**
+ * Product-check request as a discriminated union of the three intake modes
+ * (ADR-0002 §2.1, M2). Product identity and purchase evidence are kept
+ * separate so corroboration is never mistaken for an identifier.
+ */
+export const productCheckRequestSchema = z
+  .discriminatedUnion('mode', [
+    productCheckIdentifiersInput,
+    productCheckPurchaseEvidenceInput,
+    productCheckUnknownInput,
+  ])
   .openapi('ProductCheckRequest');
+
+export type ProductCheckRequest = z.infer<typeof productCheckRequestSchema>;
 
 export const productCheckResponseSchema = z
   .object({
     result: z.enum(['potential_match', 'not_matched', 'manual_review']),
-    message: z.string(),
+    reasonCodes: z.array(z.string().min(1).max(80)),
+    matchedVariantIds: z.array(uuid),
+    identificationMode: z.enum(['product_identifiers', 'purchase_evidence', 'unknown']),
+    messageKey: z.enum([
+      'product_check.potential_match',
+      'product_check.manual_review.ambiguous',
+      'product_check.manual_review.insufficient_signals',
+      'product_check.not_matched',
+    ]),
+    purchaseCorroboration: z.enum(['verified', 'partial', 'not_provided', 'conflict']).optional(),
+    riskFlags: z.array(z.string().min(1).max(80)).optional(),
     checkedCampaignVersion: z.number().int().positive(),
     disclaimer: z.literal('This check is preliminary and is not a final eligibility decision.'),
+  })
+  .superRefine((value, context) => {
+    // ADR-0002 §2.1: multi-candidate ambiguity must surface as manual_review.
+    if (value.matchedVariantIds.length > 1 && value.result !== 'manual_review') {
+      context.addIssue({
+        code: 'custom',
+        path: ['result'],
+        message: 'result must be manual_review when matchedVariantIds.length > 1.',
+      });
+    }
+    if (value.result !== 'potential_match' && value.matchedVariantIds.length === 1) {
+      context.addIssue({
+        code: 'custom',
+        path: ['matchedVariantIds'],
+        message: 'single matched variant must yield potential_match.',
+      });
+    }
   })
   .openapi('ProductCheckResponse');
 

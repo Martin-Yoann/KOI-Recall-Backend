@@ -4,12 +4,13 @@ import { createApp } from '../src/app.js';
 import { createPlaceholderRegistry, type ApplicationRegistry } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
 import type { ProductCheckResponse } from '../src/contracts/toc.js';
-import type {
-  ProductCheckResult,
-  ProductCheckService,
-} from '../src/modules/product-checks/service.js';
+import type { ProductCheckService } from '../src/modules/product-checks/service.js';
+import type { IdentificationResult } from '../src/modules/product-identification/policy.js';
 
-const baseBody = { shape: 'Bear', flavor: 'Peach', lotCode: 'ML-2406-A', dateCode: '06/2024' };
+const baseBody = {
+  mode: 'product_identifiers',
+  identifiers: [{ type: 'unit_upc', value: '0123456789012' }],
+};
 
 function appWith(productChecks: ProductCheckService) {
   const base = createPlaceholderRegistry();
@@ -35,35 +36,74 @@ async function postCheck(app: ReturnType<typeof appWith>, body: unknown) {
   });
 }
 
+function matchResult(overrides: Partial<IdentificationResult> = {}): IdentificationResult {
+  return {
+    result: 'potential_match',
+    reasonCodes: ['identifier.single_match'],
+    matchedVariantIds: ['a1b2c3d4-0000-4000-8000-000000000001'],
+    requiredEvidenceProfile: 'identifier_match',
+    checkedCampaignVersion: 1,
+    ...overrides,
+  };
+}
+
 describe('POST /v1/recall-campaigns/{slug}/product-checks', () => {
-  it('returns 200 with a potential match against an affected product', async () => {
-    const result: ProductCheckResult = {
-      result: 'potential_match',
-      message: 'The product may be included in this recall.',
-      checkedCampaignVersion: 1,
-    };
+  it('returns 200 with a potential match and stable reason codes', async () => {
+    const result = matchResult();
     const response = await postCheck(appWith(service(() => Promise.resolve(result))), baseBody);
 
     expect(response.status).toBe(200);
     const body = (await response.json()) as ProductCheckResponse;
     expect(body).toMatchObject({
       result: 'potential_match',
-      message: 'The product may be included in this recall.',
+      reasonCodes: ['identifier.single_match'],
+      matchedVariantIds: ['a1b2c3d4-0000-4000-8000-000000000001'],
+      identificationMode: 'product_identifiers',
+      messageKey: 'product_check.potential_match',
       checkedCampaignVersion: 1,
       disclaimer: 'This check is preliminary and is not a final eligibility decision.',
     });
+    expect(body).not.toHaveProperty('message'); // M2: no hardcoded message
   });
 
-  it('returns 200 with not matched when no affected product aligns', async () => {
-    const result: ProductCheckResult = {
-      result: 'not_matched',
-      message: 'No affected product matches the shape, flavor, and lot details provided.',
-      checkedCampaignVersion: 1,
-    };
+  it('maps an ambiguous multi-match to manual_review messageKey', async () => {
+    const result = matchResult({
+      result: 'manual_review',
+      reasonCodes: ['identifier.ambiguous_multi_match'],
+      matchedVariantIds: [
+        'a1b2c3d4-0000-4000-8000-000000000001',
+        'a1b2c3d4-0000-4000-8000-000000000002',
+      ],
+      requiredEvidenceProfile: 'manual_review',
+    });
     const response = await postCheck(appWith(service(() => Promise.resolve(result))), baseBody);
 
     expect(response.status).toBe(200);
-    expect(((await response.json()) as ProductCheckResponse).result).toBe('not_matched');
+    const body = (await response.json()) as ProductCheckResponse;
+    expect(body.messageKey).toBe('product_check.manual_review.ambiguous');
+  });
+
+  it('accepts a purchase_evidence request and returns corroboration (V1.1)', async () => {
+    const result = matchResult({
+      result: 'manual_review',
+      reasonCodes: ['input.insufficient_signals', 'purchase_evidence.verified'],
+      matchedVariantIds: [],
+      requiredEvidenceProfile: 'manual_review',
+      purchaseCorroboration: 'verified',
+    });
+    const response = await postCheck(appWith(service(() => Promise.resolve(result))), {
+      mode: 'purchase_evidence',
+      purchaseEvidence: {
+        orderNumber: 'ORD-123',
+        amountPaidMinor: 1990,
+        currency: 'USD',
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as ProductCheckResponse;
+    expect(body.identificationMode).toBe('purchase_evidence');
+    expect(body.purchaseCorroboration).toBe('verified');
   });
 
   it('returns 404 when the campaign is not found or not publicly visible', async () => {
@@ -90,19 +130,13 @@ describe('POST /v1/recall-campaigns/{slug}/product-checks', () => {
     expect(body).toMatchObject({ title: 'Dependency Unavailable', status: 503 });
   });
 
-  it('returns 500 instead of a contract-invalid 200 response', async () => {
-    const invalid: ProductCheckResult = {
-      result: 'potential_match',
-      message: 'ok',
-      checkedCampaignVersion: 0,
-    };
-    const response = await postCheck(appWith(service(() => Promise.resolve(invalid))), baseBody);
-
-    expect(response.status).toBe(500);
-    expect(response.headers.get('Content-Type')).toContain('application/problem+json');
-    await expect(response.json()).resolves.toMatchObject({
-      title: 'Internal Server Error',
-      status: 500,
+  it('rejects a payload whose mode conflicts with the discriminated union', async () => {
+    const response = await postCheck(appWith(service(() => Promise.resolve(matchResult()))), {
+      mode: 'product_identifiers',
+      identifiers: [],
     });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('Content-Type')).toContain('application/problem+json');
   });
 });

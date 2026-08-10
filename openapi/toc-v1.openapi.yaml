@@ -416,30 +416,47 @@ components:
         - status
         - detail
       type: object
-    ProductCheckRequest:
+    ProductCheckIdentifiersInput:
       properties:
-        dateCode:
-          maxLength: 40
-          minLength: 1
+        identifiers:
+          items:
+            $ref: "#/components/schemas/ProductIdentifier"
+          maxItems: 20
+          minItems: 1
+          type: array
+        mode:
+          enum:
+            - product_identifiers
           type: string
-        flavor:
-          maxLength: 80
-          minLength: 1
-          type: string
-        lotCode:
-          maxLength: 80
-          minLength: 1
-          type: string
-        shape:
-          maxLength: 80
-          minLength: 1
-          type: string
+        purchaseEvidence:
+          $ref: "#/components/schemas/PurchaseEvidence"
       required:
-        - shape
-        - flavor
-        - lotCode
-        - dateCode
+        - mode
+        - identifiers
       type: object
+    ProductCheckPurchaseEvidenceInput:
+      properties:
+        mode:
+          enum:
+            - purchase_evidence
+          type: string
+        purchaseEvidence:
+          $ref: "#/components/schemas/PurchaseEvidence"
+      required:
+        - mode
+        - purchaseEvidence
+      type: object
+    ProductCheckRequest:
+      discriminator:
+        mapping:
+          product_identifiers: "#/components/schemas/ProductCheckIdentifiersInput"
+          purchase_evidence: "#/components/schemas/ProductCheckPurchaseEvidenceInput"
+          unknown: "#/components/schemas/ProductCheckUnknownInput"
+        propertyName: mode
+      oneOf:
+        - $ref: "#/components/schemas/ProductCheckIdentifiersInput"
+        - $ref: "#/components/schemas/ProductCheckPurchaseEvidenceInput"
+        - $ref: "#/components/schemas/ProductCheckUnknownInput"
     ProductCheckResponse:
       properties:
         checkedCampaignVersion:
@@ -450,19 +467,90 @@ components:
           enum:
             - This check is preliminary and is not a final eligibility decision.
           type: string
-        message:
+        identificationMode:
+          enum:
+            - product_identifiers
+            - purchase_evidence
+            - unknown
           type: string
+        matchedVariantIds:
+          items:
+            format: uuid
+            type: string
+          type: array
+        messageKey:
+          enum:
+            - product_check.potential_match
+            - product_check.manual_review.ambiguous
+            - product_check.manual_review.insufficient_signals
+            - product_check.not_matched
+          type: string
+        purchaseCorroboration:
+          enum:
+            - verified
+            - partial
+            - not_provided
+            - conflict
+          type: string
+        reasonCodes:
+          items:
+            maxLength: 80
+            minLength: 1
+            type: string
+          type: array
         result:
           enum:
             - potential_match
             - not_matched
             - manual_review
           type: string
+        riskFlags:
+          items:
+            maxLength: 80
+            minLength: 1
+            type: string
+          type: array
       required:
         - result
-        - message
+        - reasonCodes
+        - matchedVariantIds
+        - identificationMode
+        - messageKey
         - checkedCampaignVersion
         - disclaimer
+      type: object
+    ProductCheckUnknownInput:
+      properties:
+        mode:
+          enum:
+            - unknown
+          type: string
+        note:
+          maxLength: 500
+          type: string
+        purchaseEvidence:
+          $ref: "#/components/schemas/PurchaseEvidence"
+      required:
+        - mode
+      type: object
+    ProductIdentifier:
+      properties:
+        type:
+          enum:
+            - unit_upc
+            - gtin14
+            - model
+            - style
+            - lot_code
+            - date_code
+          type: string
+        value:
+          maxLength: 160
+          minLength: 1
+          type: string
+      required:
+        - type
+        - value
       type: object
     PublicCampaignProduct:
       properties:
@@ -508,6 +596,50 @@ components:
         - flavors
         - shapes
         - affectedLots
+      type: object
+    PurchaseEvidence:
+      properties:
+        amountPaidMinor:
+          minimum: 0
+          type: integer
+        currency:
+          maxLength: 3
+          minLength: 3
+          type: string
+        lineItemSku:
+          maxLength: 120
+          type: string
+        lineItemTitle:
+          maxLength: 240
+          type: string
+        orderNumber:
+          maxLength: 120
+          type: string
+        platform:
+          enum:
+            - amazon
+            - tiktok
+            - koi
+            - retailer
+            - gift
+            - other
+          type: string
+        purchaseDate:
+          pattern: ^\d{4}-\d{2}-\d{2}$
+          type: string
+        quantity:
+          maximum: 100
+          minimum: 1
+          type: integer
+        receiptDocumentIds:
+          items:
+            format: uuid
+            type: string
+          maxItems: 10
+          type: array
+        sellerOrStore:
+          maxLength: 160
+          type: string
       type: object
     UploadTokenRequest:
       properties:
