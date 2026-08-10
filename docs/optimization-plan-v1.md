@@ -215,25 +215,25 @@ identify(input, campaignSnapshot) -> {
 
 > 与 Sprint 2 的下游并行：T5/T6 不依赖 Claim 契约变更，可并行开工；T9（结构深化）依赖 T4，S3 起接入。
 
-#### T5 — 生产运营闭环（O5）
-| 子任务 | 内容 | 改动点 |
+#### T5 — 生产运营闭环（O5）✅ 已完成
+| 子任务 | 内容 | 落地 |
 |---|---|---|
-| T5.1 | `ResendEmailAdapter` + `OutboxWorker`：批 claim/锁/重试/dead-letter，`deduplicationKey` 幂等 | `src/platform/email/resend.ts`（新增）；`src/jobs/outbox.ts`（现仅 interface，9 行）实现 |
-| T5.2 | `/internal/jobs/outbox` + `/internal/jobs/cleanup-drafts` 的 `CRON_SECRET` 鉴权；缺/无效 Secret 拒绝 | `src/routes/internal-jobs.ts`（替换 `app.ts:250-256` 的 501） |
-| T5.3 | Resend Webhook 去重 + Communication 状态迁移，存 `providerMessageId / delivered/bounced/failed` | `src/routes/webhooks.ts`（替换 `app.ts:339-342` 的 501） |
-| T5.4 | Draft Cleanup 删过期 DB 记录 + Private Blob 实体；删失败保留 `deletion_pending` 并重试 | 同 internal-jobs 路由 |
-| T5.5 | 恶意文件扫描门禁（D5）：上线要求扫描时，Claim 只能关联 `scanStatus=clean`；当前 `verified` ≠ safe | `DrizzleDocumentService` + schema |
+| T5.1 | `ResendEmailAdapter` + `DrizzleOutboxWorker`：批 claim（FOR UPDATE SKIP LOCKED）/锁/重试（指数退避）/dead-letter，`deduplicationKey` 幂等 | `src/platform/email/resend.ts`；`src/jobs/drizzle-outbox-worker.ts`（`outbox.ts` 接口保持不变） |
+| T5.2 | `/internal/jobs/outbox` + `/internal/jobs/cleanup-drafts` 的 `CRON_SECRET` 鉴权；缺/无效 Secret → 401 | `src/routes/internal-jobs.ts`（`requireCronSecret`） |
+| T5.3 | Resend Webhook 去重（`webhook_events` provider+event 唯一）+ Communication 状态迁移（delivered/bounced/failed），存 `providerMessageId` | `src/routes/webhooks.ts` + `DrizzleCommunicationService.recordDeliveryEvent` |
+| T5.4 | Draft Cleanup：删过期 Blob 实体，删除成功才标记 `deleted`；失败保留 `deletion_pending` 下次重试 | `src/jobs/draft-cleanup-worker.ts` |
+| T5.5 | 恶意文件扫描门禁（D5）：CaseService 证据校验要求 `scanStatus=clean`；`verified`（媒体类型复核）≠ 安全 | `DrizzleCaseService` selectedDocuments 校验 |
 
-**验收**：确认邮件可观测送达、失败可重试、Outbox/Webhook 重放不重复发送；scanStatus 非 clean 不静默关联。
+**验收**：确认邮件可观测送达（Outbox→sent→providerMessageId）、失败可重试（指数退避→dead_letter）、Webhook 重放不重复更新（webhook_events 去重）；scanStatus 非 clean 的文档**不能**被 Claim 关联（422）。
 
-#### T6 — 部署与入口防护（O6）
-| 子任务 | 内容 | 改动点 |
+#### T6 — 部署与入口防护（O6）✅ 已完成
+| 子任务 | 内容 | 落地 |
 |---|---|---|
-| T6.1 | 替换 `allowAllRateLimiter`：key 含不可逆客户端来源 + 路由类别 + Campaign；不同端点不同配额 | `src/middleware/rate-limit.ts:16-25` |
-| T6.2 | `api/index.ts` 严格请求体上限（JSON + Webhook）；附件仍走 Private Blob 直传 | `src/index.ts` |
-| T6.3 | 新增 `/health/ready`（配置 + DB 连通性）；`/health/live` 去掉 `phase:skeleton` | `src/app.ts:136-140` |
-| T6.4 | `vercel.json` buildCommand `pnpm typecheck` → `pnpm build`；测试在 CI 独立 | `vercel.json:5` |
-| T6.5 | `api.example.invalid` Problem Type + OpenAPI production server → 配置控制的稳定域名 | `src/app.ts` 多处 + openapi config |
+| T6.1 | 默认 `InMemoryRateLimiter` 替换 allow-all：key = 不可逆哈希（客户端来源 + 路由类别 + pepper）；7 类路由独立配额 | `src/middleware/rate-limit.ts`（`deriveRateLimitKey`/`routeCategoryForPath`/`InMemoryRateLimiter`） |
+| T6.2 | JSON 请求体上限 256 KiB、Webhook 512 KiB → 413；附件仍走 Private Blob 直传 | `src/middleware/body-limit.ts`（Content-Length 检查，不消费流） |
+| T6.3 | `/health/live` 移除 `phase:skeleton`；新增 `/health/ready`（配置检查 + 可注入 readyCheck） | `src/app.ts` |
+| T6.4 | `vercel.json` buildCommand `pnpm typecheck` → `pnpm build` | `vercel.json:5` |
+| T6.5 | `PROBLEM_BASE_URL` 配置驱动 Problem Type URI 与 OpenAPI production server；全部 `api.example.invalid` 硬编码替换 | `configureProblemTypeBase` / `buildOpenApiConfig`（7 文件） |
 
 ---
 

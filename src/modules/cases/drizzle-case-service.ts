@@ -325,18 +325,25 @@ export class DrizzleCaseService implements CaseService {
           draftId: documentUploads.draftId,
           category: documentUploads.category,
           uploadStatus: documentUploads.uploadStatus,
+          scanStatus: documentUploads.scanStatus,
         })
         .from(documentUploads)
         .where(inArray(documentUploads.id, command.body.documentIds))
         .for('update');
+      // T5.5/O5 (D5): a claim may only attach documents that are verified AND
+      // scan-clean. `verified` proves media-type reconciliation, not safety —
+      // the malware gate is separate and mandatory.
       if (
         selectedDocuments.length !== command.body.documentIds.length ||
         selectedDocuments.some(
-          (document) => document.draftId !== locked.draftId || document.uploadStatus !== 'verified',
+          (document) =>
+            document.draftId !== locked.draftId ||
+            document.uploadStatus !== 'verified' ||
+            document.scanStatus !== 'clean',
         )
       ) {
         throw new ClaimValidationError(
-          'Every selected Document must be verified and owned by the active Claim Draft.',
+          'Every selected Document must be verified, scan-clean, and owned by the active Claim Draft.',
         );
       }
 

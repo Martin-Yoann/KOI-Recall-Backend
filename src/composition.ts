@@ -5,6 +5,7 @@ import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
 import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-draft-service.js';
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
+import { DrizzleCommunicationService } from './modules/communications/drizzle-communication-service.js';
 import type { CommunicationService } from './modules/communications/service.js';
 import { DrizzleDocumentService } from './modules/documents/drizzle-document-service.js';
 import type { DocumentService } from './modules/documents/service.js';
@@ -78,6 +79,7 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
       },
       communications: {
         queueClaimConfirmation: () => unavailable('Claim confirmation queueing'),
+        recordDeliveryEvent: () => unavailable('Provider delivery event recording'),
       },
     },
     platform: {
@@ -109,6 +111,7 @@ export function createApplicationRegistry(
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
       documents: new DrizzleDocumentService(handle.db, blob, (work) => handle.transaction(work)),
+      communications: new DrizzleCommunicationService(handle.db),
       ...(crypto instanceof NotImplementedCryptoAdapter
         ? {}
         : { cases: new DrizzleCaseService(handle, crypto) }),
