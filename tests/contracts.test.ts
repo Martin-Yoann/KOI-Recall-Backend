@@ -10,7 +10,7 @@ const baseClaim = {
     firstName: 'Taylor',
     lastName: 'Example',
     email: 'taylor@example.com',
-    mailingAddress: {
+    currentDeliveryAddress: {
       line1: '100 Example Street',
       city: 'Austin',
       state: 'TX',
@@ -26,6 +26,7 @@ const baseClaim = {
       flavor: 'Peach',
       lotCode: 'ML-2406-A',
       dateCode: '06/2024',
+      identificationMode: 'product_identifiers' as const,
       purchaseChannel: 'amazon' as const,
     },
   ],

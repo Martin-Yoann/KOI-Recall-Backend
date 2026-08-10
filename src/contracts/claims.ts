@@ -1,15 +1,24 @@
 import { z } from '@hono/zod-openapi';
 
 import { addressSchema, isoDate, isoDateTime, uuid } from './common.js';
+import { productIdentifierSchema, purchaseEvidenceSchema } from './product-checks.js';
 
+/**
+ * A claimed product (M3 / T4.1): the legacy four fields are now optional
+ * recognition signals, order fields live under purchaseEvidence (corroboration,
+ * never an identifier), and identificationMode says which intake path ran.
+ */
 export const claimedProductSchema = z
   .object({
     campaignProductId: uuid,
     quantity: z.number().int().min(1).max(100),
-    shape: z.string().min(1).max(80),
-    flavor: z.string().min(1).max(80),
-    lotCode: z.string().min(1).max(80),
-    dateCode: z.string().min(1).max(40),
+    shape: z.string().max(80).optional(),
+    flavor: z.string().max(80).optional(),
+    lotCode: z.string().max(80).optional(),
+    dateCode: z.string().max(40).optional(),
+    identifiers: z.array(productIdentifierSchema).max(20).optional(),
+    purchaseEvidence: purchaseEvidenceSchema.optional(),
+    identificationMode: z.enum(['product_identifiers', 'purchase_evidence', 'unknown']),
     purchaseChannel: z.enum(['amazon', 'tiktok', 'koi', 'retailer', 'gift', 'other']),
     purchaseDate: isoDate.optional(),
     orderNumber: z.string().max(120).optional(),
@@ -55,11 +64,15 @@ export const claimSubmissionRequestSchema = z
       lastName: z.string().trim().min(1).max(100),
       email: z.string().email().max(254),
       phone: z.string().max(40).optional(),
-      mailingAddress: addressSchema,
+      // M3/T4.1: current delivery address for Replacement fulfilment, optional
+      // at the contract layer — the service enforces it per Remedy (D4/D8).
+      // The original order address lives inside purchaseEvidence and is never
+      // auto-copied here.
+      currentDeliveryAddress: addressSchema.optional(),
     }),
     products: z.array(claimedProductSchema).min(1).max(20),
     remedyCode: z.string().min(1).max(60),
-    documentIds: z.array(uuid).min(2).max(20),
+    documentIds: z.array(uuid).max(20),
     consents: z
       .array(
         z.object({

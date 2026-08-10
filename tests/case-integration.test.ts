@@ -565,10 +565,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       ...command,
       body: {
         ...command.body,
-        consumer: {
-          ...command.body.consumer,
-          mailingAddress: { ...command.body.consumer.mailingAddress },
-        },
+        consumer: { ...command.body.consumer },
       },
     });
 
@@ -585,7 +582,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(serialized).not.toContain(idempotencyKey);
     expect(serialized).not.toContain(fixture!.draftToken);
     expect(serialized).not.toContain(command.body.consumer.email);
-    expect(serialized).not.toContain(command.body.consumer.mailingAddress.line1);
+    expect(serialized).not.toContain(command.body.consumer.currentDeliveryAddress?.line1 ?? '');
     expect(serialized).not.toContain(command.body.products[0]!.orderNumber!);
   });
 

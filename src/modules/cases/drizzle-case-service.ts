@@ -81,6 +81,21 @@ function isPostgresUniqueConstraint(error: unknown, constraint: string): boolean
   return false;
 }
 
+/**
+ * Maps a claimed product's intake mode + matcher result onto the versioned
+ * Evidence Profile (ADR-0003 M3, D3). The profile decides which evidence
+ * categories are required and whether proof of purchase can be waived.
+ */
+function deriveEvidenceProfile(
+  mode: ClaimSubmissionRequest['products'][number]['identificationMode'],
+  result: 'potential_match' | 'not_matched' | 'manual_review',
+): 'exact_order_match' | 'order_evidence' | 'identifier_match' | 'manual_review' | 'incident' {
+  if (mode === 'purchase_evidence' && result === 'potential_match') return 'exact_order_match';
+  if (mode === 'purchase_evidence') return 'order_evidence';
+  if (mode === 'product_identifiers' && result === 'potential_match') return 'identifier_match';
+  return 'manual_review';
+}
+
 interface EncryptedProduct {
   orderNumber?: Ciphertext;
   orderNumberLookupHash?: string;
@@ -202,7 +217,10 @@ export class DrizzleCaseService implements CaseService {
       }
 
       const [remedy] = await tx
-        .select({ id: campaignRemedyOptions.id })
+        .select({
+          id: campaignRemedyOptions.id,
+          requiresMailingAddress: campaignRemedyOptions.requiresMailingAddress,
+        })
         .from(campaignRemedyOptions)
         .where(
           and(
@@ -217,6 +235,50 @@ export class DrizzleCaseService implements CaseService {
           'The selected Remedy is not active for the pinned Campaign Version.',
         );
       }
+      // M3/T4.1 (D4/D8): the contract allows omitting the address; the service
+      // enforces it per Remedy. Refund may omit it; Replacement (or any remedy
+      // flagged requiresMailingAddress) must supply currentDeliveryAddress.
+      if (remedy.requiresMailingAddress && !command.body.consumer.currentDeliveryAddress) {
+        throw new ClaimValidationError(
+          'currentDeliveryAddress is required for the selected Remedy.',
+        );
+      }
+
+      // Evaluate product identification BEFORE evidence rules so the Evidence
+      // Profile (T4.2) can relax requirements (e.g. exact order match waives
+      // proof of purchase). M3: claimed-product fields are optional recognition
+      // signals — the legacy four-field matcher gets empty strings for absent
+      // ones and stays total through the M1–M4 dual-read window.
+      const productLots = await tx
+        .select({
+          campaignProductId: campaignProductLots.campaignProductId,
+          lotCode: campaignProductLots.lotCode,
+          dateCode: campaignProductLots.dateCode,
+          eligibilityStatus: campaignProductLots.eligibilityStatus,
+        })
+        .from(campaignProductLots)
+        .where(inArray(campaignProductLots.campaignProductId, submittedProductIds));
+      const productEvaluations = command.body.products.map((product) => ({
+        product,
+        evaluation: evaluateProductCheck(
+          {
+            shape: product.shape ?? '',
+            flavor: product.flavor ?? '',
+            lotCode: product.lotCode ?? '',
+            dateCode: product.dateCode ?? '',
+          },
+          ownedProducts.filter((ownedProduct) => ownedProduct.id === product.campaignProductId),
+          productLots.filter((lot) => lot.campaignProductId === product.campaignProductId),
+        ),
+      }));
+      const evidenceProfiles = productEvaluations.map(({ product, evaluation }) =>
+        deriveEvidenceProfile(product.identificationMode, evaluation.result),
+      );
+      // O3.1: an exact order match (or order evidence) may waive proof of
+      // purchase; a manual_review product still needs the manual profile.
+      const waivesProofOfPurchase = evidenceProfiles.some(
+        (profile) => profile === 'exact_order_match' || profile === 'order_evidence',
+      );
 
       const selectedDocuments = await tx
         .select({
@@ -252,10 +314,13 @@ export class DrizzleCaseService implements CaseService {
         const count = selectedDocuments.filter(
           (document) => document.category === rule.category,
         ).length;
+        // T4.2/ADR-0003 M3: an exact order match (or credible order evidence)
+        // waives the proof-of-purchase minimum — the order itself is the
+        // purchase proof. Upper bounds still apply to every category.
+        const waivedByOrderMatch = waivesProofOfPurchase && rule.category === 'proof_of_purchase';
         if (
-          count < rule.minimumFiles ||
           count > rule.maximumFiles ||
-          (rule.required && count === 0)
+          (!waivedByOrderMatch && (count < rule.minimumFiles || (rule.required && count === 0)))
         ) {
           throw new ClaimValidationError(
             'Selected Documents do not satisfy the pinned Campaign evidence requirements.',
@@ -263,23 +328,6 @@ export class DrizzleCaseService implements CaseService {
         }
       }
 
-      const productLots = await tx
-        .select({
-          campaignProductId: campaignProductLots.campaignProductId,
-          lotCode: campaignProductLots.lotCode,
-          dateCode: campaignProductLots.dateCode,
-          eligibilityStatus: campaignProductLots.eligibilityStatus,
-        })
-        .from(campaignProductLots)
-        .where(inArray(campaignProductLots.campaignProductId, submittedProductIds));
-      const productEvaluations = command.body.products.map((product) => ({
-        product,
-        evaluation: evaluateProductCheck(
-          product,
-          ownedProducts.filter((ownedProduct) => ownedProduct.id === product.campaignProductId),
-          productLots.filter((lot) => lot.campaignProductId === product.campaignProductId),
-        ),
-      }));
       const hasIncident = command.body.incidentAnswer !== 'no';
       const caseStatus =
         command.body.incidentAnswer === 'unsure' ||
@@ -331,22 +379,41 @@ export class DrizzleCaseService implements CaseService {
         phoneEncrypted: encrypted.phone?.value,
         addressEncrypted: encrypted.address.value,
         addressLookupHash: encrypted.addressLookupHash,
-        countryCode: command.body.consumer.mailingAddress.countryCode,
+        countryCode: command.body.consumer.currentDeliveryAddress?.countryCode ?? 'US',
       });
       await tx.insert(claimedProducts).values(
         productEvaluations.map(({ product, evaluation }, index) => ({
           caseId,
           campaignProductId: product.campaignProductId,
           quantity: product.quantity,
-          shape: product.shape,
-          flavor: product.flavor,
-          lotCode: product.lotCode,
-          dateCode: product.dateCode,
+          // M3/T4.1: legacy columns remain NOT NULL until M4; store empty for
+          // absent optional signals so the dual-read window stays compatible.
+          shape: product.shape ?? '',
+          flavor: product.flavor ?? '',
+          lotCode: product.lotCode ?? '',
+          dateCode: product.dateCode ?? '',
           purchaseChannel: product.purchaseChannel,
           purchaseDate: product.purchaseDate,
           orderNumberEncrypted: encrypted.products[index]?.orderNumber?.value,
           orderNumberLookupHash: encrypted.products[index]?.orderNumberLookupHash,
           checkResult: evaluation.result,
+          // M3/T4.1 audit columns (T2): how the product was identified and why.
+          // Stable reason codes only — never the legacy human message.
+          identificationMode: product.identificationMode,
+          reasonCodes:
+            evaluation.result === 'potential_match'
+              ? ['identifier.single_match']
+              : evaluation.result === 'manual_review'
+                ? ['input.insufficient_signals']
+                : ['identifier.no_match'],
+          inputSnapshot: {
+            shape: product.shape ?? null,
+            flavor: product.flavor ?? null,
+            lotCode: product.lotCode ?? null,
+            dateCode: product.dateCode ?? null,
+            identifiers: product.identifiers ?? null,
+            purchaseEvidence: product.purchaseEvidence ?? null,
+          },
         })),
       );
       await tx.insert(caseConsents).values(
@@ -525,7 +592,13 @@ export class DrizzleCaseService implements CaseService {
   }
 
   private async encryptSubmission(body: ClaimSubmissionRequest): Promise<EncryptedSubmission> {
-    const normalizedAddress = normalizeAddress({ ...body.consumer.mailingAddress });
+    // M3/T4.1: the delivery address is optional at the contract layer. When
+    // absent (e.g. Refund, or manual_review with no address yet), store an
+    // empty canonical address so case_consumers' NOT NULL columns stay intact
+    // and the record remains auditable. `countryCode` defaults to US.
+    const normalizedAddress = normalizeAddress(
+      body.consumer.currentDeliveryAddress ? { ...body.consumer.currentDeliveryAddress } : {},
+    );
     const normalizedEmail = normalizeEmail(body.consumer.email);
     const [
       firstName,

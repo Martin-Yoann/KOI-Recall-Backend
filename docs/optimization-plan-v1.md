@@ -173,22 +173,23 @@ identify(input, campaignSnapshot) -> {
 
 ### Sprint 2 — 条件式 Claim + 订单佐证 + 发布门禁（O3/O3.1/O4）
 
-#### T4.1 — 字段条件化（O3）
+#### T4.1 — 字段条件化（O3）✅ 已完成
 **改动点**：`src/contracts/claims.ts`
-- `claimedProductSchema`：`shape/flavor/lotCode/dateCode` 改为**可选识别信号**。
-- `consumer.mailingAddress` 改为可选（契约层放行，服务层条件校验）。
-- `documentIds` 改为 `0..N`。
-- 新增 discriminated input：`product_identifiers` / `purchase_evidence` / `unknown`。
-- 订单字段（平台/零售商、卖家/门店、订单号、购买日期、商品行、数量、实付金额/币种、订单或收据附件）归入 **purchase evidence**，默认选填（D7）。
+- `claimedProductSchema`：`shape/flavor/lotCode/dateCode` 改为**可选识别信号**，新增 `identifiers` / `purchaseEvidence` / `identificationMode`（必填，指示走哪条识别路径）。
+- `consumer.mailingAddress` → **`currentDeliveryAddress.optional()`**（契约层放行，服务层按 Remedy 条件校验；原订单地址在 `purchaseEvidence` 内，绝不复用为补发地址）。
+- `documentIds` 改为 `0..N`（`min(2)` 移除）。
+- 订单字段（平台/零售商、卖家/门店、订单号、购买日期、商品行、数量、实付金额/币种、订单或收据附件）归入 **purchase evidence**（`purchaseEvidenceSchema`，复用 Product Check 定义），默认选填（D7）。
 
-**改动点**：`DrizzleCaseService`（579 行）服务层校验：
-- 无订单/收据/lot/date 但有照片/渠道/购买日期 → 允许提交进人工审核。
-- 读 `Remedy.requiresMailingAddress`（schema 已有，服务层未用）后条件校验地址；Refund 免地址（D4），Replacement 缺 `currentDeliveryAddress` → 422（D8）。
-- **原订单地址只作购买佐证，绝不自动写入或覆盖当前收货地址**（D8）。
+**改动点**：`DrizzleCaseService` 服务层校验：
+- 读 `Remedy.requiresMailingAddress` 后条件校验地址：Refund 免地址，Replacement（或任何 `requiresMailingAddress=true` 的 Remedy）缺 `currentDeliveryAddress` → 422（D4/D8）。
+- 缺地址时 `case_consumers` 存入空 canonical 地址密文，保持 NOT NULL 列与审计完整性。
+- 无 lot/date 但有照片/渠道/购买日期 → 允许提交进人工审核（可选信号 + `inputSnapshot` 审计）。
+- `claimed_products` 持久化 `identificationMode`、`reasonCodes`（稳定代码）、`inputSnapshot`（T2 列）。
 
-#### T4.2 — Evidence Profile（O3）
-- 新增 versioned intake/evidence profile，枚举 `exact_order_match / order_evidence / identifier_match / manual_review / incident`（D3，V1.1）。
-- 精确 DTC 订单命中 → 自动预填，Proof of Purchase 按 Profile 免除。
+#### T4.2 — Evidence Profile（O3）✅ 已完成
+- `DrizzleCaseService` 基于 `identificationMode` + matcher 结果派生 5 种 profile：`exact_order_match / order_evidence / identifier_match / manual_review / incident`（D3，V1.1）。
+- 产品评估**提前**到 evidence 校验之前；`exact_order_match` / `order_evidence` 命中时**免除 proof_of_purchase 下限**（上限仍强制），订单本身即购买凭证。
+- 辅助函数 `deriveEvidenceProfile()`（纯函数）。
 
 #### T4.3 — 发布门禁（O4）
 - `campaign_versions` 新增审批/发布记录：`publishedBy / 审批记录（business, legal/compliance, cpsc_if_applicable, publishedAt）`。

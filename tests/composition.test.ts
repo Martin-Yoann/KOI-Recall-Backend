@@ -34,7 +34,7 @@ const validCommand: ClaimSubmissionCommand = {
       firstName: 'Taylor',
       lastName: 'Example',
       email: 'taylor@example.com',
-      mailingAddress: {
+      currentDeliveryAddress: {
         line1: '100 Example Street',
         city: 'Austin',
         state: 'TX',
@@ -50,6 +50,7 @@ const validCommand: ClaimSubmissionCommand = {
         flavor: 'Peach',
         lotCode: 'ML-2406-A',
         dateCode: '06/2024',
+        identificationMode: 'product_identifiers',
         purchaseChannel: 'amazon',
       },
     ],

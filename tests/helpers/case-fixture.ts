@@ -98,7 +98,7 @@ export async function createClaimFixture(
       lastName: 'Example',
       email: 'taylor@example.com',
       phone: '+1-555-010-2026',
-      mailingAddress: {
+      currentDeliveryAddress: {
         line1: '100 Example Street',
         line2: 'Unit 4',
         city: 'Austin',
@@ -115,6 +115,7 @@ export async function createClaimFixture(
         flavor: 'Peach',
         lotCode: 'ML-2406-A',
         dateCode: '06/2024',
+        identificationMode: 'product_identifiers',
         purchaseChannel: 'amazon',
         purchaseDate: '2026-07-15',
         orderNumber: 'ORDER-10001',
