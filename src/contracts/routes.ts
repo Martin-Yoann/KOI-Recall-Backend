@@ -164,16 +164,25 @@ export const submitClaimRoute = createRoute({
   },
 });
 
-export const openApiConfig = {
-  openapi: '3.1.0' as const,
-  info: {
-    title: 'KOI Recall Consumer API',
-    version: '1.0.0',
-    description:
-      'Phase 1 contract for public campaign content, product checks, evidence uploads, and recall claim submission.',
-  },
-  servers: [
-    { url: 'http://localhost:3000', description: 'Local development' },
-    { url: 'https://api.example.invalid', description: 'Placeholder production API domain' },
-  ],
-};
+/**
+ * Builds the OpenAPI document config. The production server URL is
+ * config-controlled (T6.5/O6) so the published contract advertises the stable
+ * deployment domain instead of the placeholder.
+ */
+export function buildOpenApiConfig(problemBaseUrl: string) {
+  return {
+    openapi: '3.1.0' as const,
+    info: {
+      title: 'KOI Recall Consumer API',
+      version: '1.0.0',
+      description:
+        'Phase 1 contract for public campaign content, product checks, evidence uploads, and recall claim submission.',
+    },
+    servers: [
+      { url: 'http://localhost:3000', description: 'Local development' },
+      { url: problemBaseUrl, description: 'Production API domain' },
+    ],
+  };
+}
+
+export const openApiConfig = buildOpenApiConfig('https://api.example.invalid');

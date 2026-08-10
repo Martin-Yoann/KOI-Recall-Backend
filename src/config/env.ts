@@ -11,6 +11,8 @@ const environmentSchema = z.object({
   CRON_SECRET: z.string().optional(),
   FIELD_ENCRYPTION_KEY: z.string().optional(),
   HASH_PEPPER: z.string().optional(),
+  /** Stable production domain used in Problem Details URIs (T6.5/O6). */
+  PROBLEM_BASE_URL: z.string().url().default('https://api.example.invalid'),
 });
 
 type EnvironmentVariables = z.infer<typeof environmentSchema>;

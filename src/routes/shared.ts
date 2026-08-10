@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import type { Context } from 'hono';
 
 import type { AppEnv } from '../middleware/request-context.js';
+import { problemType } from '../shared/errors.js';
 
 /**
  * 501 Problem Details body for a contract-complete capability that the Phase 1
@@ -9,7 +10,7 @@ import type { AppEnv } from '../middleware/request-context.js';
  */
 export function problem(requestId: string, capability: string) {
   return {
-    type: 'https://api.example.invalid/problems/not-implemented',
+    type: problemType('not-implemented'),
     title: 'Not Implemented',
     status: 501,
     detail: `${capability} is contract-complete but not implemented in this Phase 1 skeleton.`,
@@ -20,7 +21,7 @@ export function problem(requestId: string, capability: string) {
 export function notFound(context: Context<AppEnv>, resource: string): never {
   return context.json(
     {
-      type: 'https://api.example.invalid/problems/not-found',
+      type: problemType('not-found'),
       title: 'Not Found',
       status: 404,
       detail: `${resource} was not found or is not publicly available.`,
@@ -34,7 +35,7 @@ export function notFound(context: Context<AppEnv>, resource: string): never {
 export function dependencyUnavailable(context: Context<AppEnv>, capability: string): never {
   return context.json(
     {
-      type: 'https://api.example.invalid/problems/dependency-unavailable',
+      type: problemType('dependency-unavailable'),
       title: 'Dependency Unavailable',
       status: 503,
       detail: `${capability} could not be completed because a required dependency is unavailable.`,

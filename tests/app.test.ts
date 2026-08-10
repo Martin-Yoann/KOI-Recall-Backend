@@ -24,8 +24,33 @@ describe('HTTP application shell', () => {
     await expect(response.json()).resolves.toEqual({
       status: 'ok',
       service: 'koi-recall-api',
-      phase: 'skeleton',
     });
+  });
+
+  it('serves readiness based on required configuration', async () => {
+    const configured = await testApp().request('/health/ready');
+    expect(configured.status).toBe(503); // no DATABASE_URL in test config
+
+    const readyApp = createApp({
+      config: loadConfig({
+        DATABASE_URL: 'postgresql://user:pass@localhost:5432/koi_recall',
+        CORS_ALLOWED_ORIGINS: 'https://consumer.example.com',
+      }),
+    });
+    const ready = await readyApp.request('/health/ready');
+    expect(ready.status).toBe(200);
+    await expect(ready.json()).resolves.toEqual({ status: 'ok', service: 'koi-recall-api' });
+  });
+
+  it('honours an injected ready check', async () => {
+    const app = createApp({
+      config: loadConfig({ CORS_ALLOWED_ORIGINS: 'https://consumer.example.com' }),
+      readyCheck: () => Promise.resolve(false),
+    });
+    const response = await app.request('/health/ready');
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as Record<string, unknown>;
+    expect(body).toMatchObject({ title: 'Not Ready', status: 503 });
   });
 
   it('replaces an unsafe request id', async () => {

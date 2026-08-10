@@ -1,4 +1,12 @@
-const PROBLEM_TYPE_BASE = 'https://api.example.invalid/problems/';
+// T6.5 (O6): the problem-type base is config-controlled. `createApp` calls
+// configureProblemTypeBase() with the deployment's stable domain; the default
+// keeps tests and local dev on the placeholder without any change.
+let PROBLEM_TYPE_BASE = 'https://api.example.invalid/problems/';
+
+/** Reconfigures the problem-type base URL (T6.5/O6). Must end with `/`. */
+export function configureProblemTypeBase(base: string): void {
+  PROBLEM_TYPE_BASE = base.endsWith('/') ? base : `${base}/`;
+}
 
 /**
  * Base class for service errors that map to a specific HTTP Problem Details

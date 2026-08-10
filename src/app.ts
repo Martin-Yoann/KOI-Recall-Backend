@@ -6,9 +6,14 @@ import { secureHeaders } from 'hono/secure-headers';
 
 import { createDefaultRegistry, type ApplicationRegistry } from './composition.js';
 import { loadConfig, type AppConfig } from './config/env.js';
-import { openApiConfig } from './contracts/toc.js';
+import { buildOpenApiConfig } from './contracts/toc.js';
 import {
-  allowAllRateLimiter,
+  bodyLimit,
+  DEFAULT_JSON_BODY_LIMIT,
+  DEFAULT_WEBHOOK_BODY_LIMIT,
+} from './middleware/body-limit.js';
+import {
+  InMemoryRateLimiter,
   rateLimitMiddleware,
   type RateLimiter,
 } from './middleware/rate-limit.js';
@@ -21,23 +26,36 @@ import { registerInternalJobRoutes } from './routes/internal-jobs.js';
 import { registerProductCheckRoutes } from './routes/product-checks.js';
 import { registerWebhookRoutes } from './routes/webhooks.js';
 import { problem } from './routes/shared.js';
-import { HttpProblemError, NotImplementedServiceError } from './shared/errors.js';
+import {
+  configureProblemTypeBase,
+  HttpProblemError,
+  NotImplementedServiceError,
+  problemType,
+} from './shared/errors.js';
 
 export interface AppDependencies {
   config?: AppConfig;
   rateLimiter?: RateLimiter;
   registry?: ApplicationRegistry;
+  /**
+   * Liveness/readiness probe. Defaults to checking that the required
+   * configuration (DATABASE_URL) is present; deployments may inject a real
+   * database connectivity check (O6/T6.3).
+   */
+  readyCheck?: () => Promise<boolean>;
 }
 
 export function createApp(dependencies: AppDependencies = {}) {
   const config = dependencies.config ?? loadConfig();
   const registry = dependencies.registry ?? createDefaultRegistry(config);
+  // T6.5 (O6): Problem Details type URIs carry the deployment's stable domain.
+  configureProblemTypeBase(config.PROBLEM_BASE_URL);
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, context) => {
       if (result.success) return;
       return context.json(
         {
-          type: 'https://api.example.invalid/problems/validation-error',
+          type: problemType('validation-error'),
           title: 'Invalid Request',
           status: 400,
           detail: 'The request did not satisfy the API contract.',
@@ -71,11 +89,36 @@ export function createApp(dependencies: AppDependencies = {}) {
       maxAge: 600,
     }),
   );
-  app.use('/v1/*', rateLimitMiddleware(dependencies.rateLimiter ?? allowAllRateLimiter));
+  // T6.1 (O6): default to a real fixed-window limiter keyed on the hashed
+  // client source + route category; tests may inject a custom limiter.
+  app.use('/v1/*', rateLimitMiddleware(dependencies.rateLimiter ?? new InMemoryRateLimiter()));
+  // T6.2 (O6): strict body caps — JSON/claim bodies are small; provider
+  // webhooks get a slightly larger allowance. Attachments never pass through
+  // here (they go straight to Private Blob).
+  app.use('/v1/*', bodyLimit(DEFAULT_JSON_BODY_LIMIT));
+  app.use('/webhooks/*', bodyLimit(DEFAULT_WEBHOOK_BODY_LIMIT));
 
-  app.get('/health/live', (context) =>
-    context.json({ status: 'ok', service: 'koi-recall-api', phase: 'skeleton' }),
-  );
+  // T6.3 (O6): liveness no longer claims a skeleton phase; readiness checks
+  // the required configuration (and, when injected, real connectivity).
+  app.get('/health/live', (context) => context.json({ status: 'ok', service: 'koi-recall-api' }));
+  const readyCheck =
+    dependencies.readyCheck ?? (() => Promise.resolve(config.DATABASE_URL !== undefined));
+  app.get('/health/ready', async (context) => {
+    const ready = await readyCheck();
+    return ready
+      ? context.json({ status: 'ok', service: 'koi-recall-api' }, 200)
+      : context.json(
+          {
+            type: problemType('dependency-unavailable'),
+            title: 'Not Ready',
+            status: 503,
+            detail: 'Required configuration or dependencies are not ready.',
+            requestId: context.get('requestId'),
+          },
+          503,
+          { 'Content-Type': 'application/problem+json' },
+        );
+  });
 
   // Route handlers live in src/routes/*; app.ts only wires them in declaration
   // order so the OpenAPI path listing and registration stay centralized here.
@@ -86,12 +129,12 @@ export function createApp(dependencies: AppDependencies = {}) {
   registerInternalJobRoutes(app);
   registerWebhookRoutes(app, registry);
 
-  app.doc('/openapi.json', openApiConfig);
+  app.doc('/openapi.json', buildOpenApiConfig(config.PROBLEM_BASE_URL));
 
   app.notFound((context) =>
     context.json(
       {
-        type: 'https://api.example.invalid/problems/not-found',
+        type: problemType('not-found'),
         title: 'Not Found',
         status: 404,
         detail: 'The requested API route does not exist.',
@@ -129,7 +172,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     });
     return context.json(
       {
-        type: 'https://api.example.invalid/problems/internal-error',
+        type: problemType('internal-error'),
         title: 'Internal Server Error',
         status: 500,
         detail: 'The server could not complete the request.',

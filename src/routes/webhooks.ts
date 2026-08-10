@@ -3,7 +3,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { ApplicationRegistry } from '../composition.js';
 import type { AppEnv } from '../middleware/request-context.js';
 import { consoleSafeLogger } from '../platform/observability/logger.js';
-import { isConnectionError } from '../shared/errors.js';
+import { isConnectionError, problemType } from '../shared/errors.js';
 import { dependencyUnavailable, deriveProviderEventId, problem } from './shared.js';
 
 /**
@@ -23,7 +23,7 @@ export function registerWebhookRoutes(app: OpenAPIHono<AppEnv>, registry: Applic
     } catch {
       return context.json(
         {
-          type: 'https://api.example.invalid/problems/validation-error',
+          type: problemType('validation-error'),
           title: 'Invalid Request',
           status: 400,
           detail: 'The webhook payload was not valid JSON.',
@@ -56,7 +56,7 @@ export function registerWebhookRoutes(app: OpenAPIHono<AppEnv>, registry: Applic
       });
       return context.json(
         {
-          type: 'https://api.example.invalid/problems/validation-error',
+          type: problemType('validation-error'),
           title: 'Invalid Request',
           status: 400,
           detail: 'The webhook payload could not be verified or processed.',
