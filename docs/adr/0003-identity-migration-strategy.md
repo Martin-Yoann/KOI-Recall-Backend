@@ -1,7 +1,7 @@
 # ADR-0003：身份模型与条件式 Claim 的迁移策略
 
 - **状态**：Accepted（2026-08-07 评审通过，进入 Sprint 1 实施）
-- **日期**：2026-08-07
+- **日期**：2026-08-07（2026-08-07 依优化方案 V1.1 订单佐证补充修订）
 - **决策者**：技术
 - **关联**：优化规划 `docs/optimization-plan-v1.md`（§6 数据与 API 迁移方案）；ADR-0001、ADR-0002
 - **替代方案**：见 §6
@@ -50,21 +50,22 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 
 **兼容策略**：预生产环境直接更新 v1（尚无稳定外部消费者）；运行 `pnpm openapi:generate` + `pnpm types:frontend` 重生成。`openapi:check` 必须绿。
 
-**退出条件**：订单 / 标识符 / unknown 三条 Product Check 路径通过 HTTP 测试；reasonCodes 可审计。
+**退出条件**：product_identifiers / purchase_evidence / unknown 三条 Product Check 路径通过 HTTP 测试；reasonCodes 可审计。
 
 ### 2.3 阶段 M3 — 服务层条件化（Claim 跟进）
 
 **契约 + 服务变更**：
-- `claimedProductSchema`：`shape/flavor/lotCode/dateCode` 改为 `.optional()`；`consumer.mailingAddress` 改为可选；`documentIds` 改为 `0..N`；新增 discriminated input。
+- `claimedProductSchema`：`shape/flavor/lotCode/dateCode` 改为 `.optional()`；`consumer.mailingAddress` 改为可选；`documentIds` 改为 `0..N`；新增 discriminated input；订单字段归入 purchase evidence（默认选填、加密保存、HMAC 重复检测）。
 - `DrizzleCaseService` 服务层条件校验：
   - 读 `Remedy.requiresMailingAddress`（schema 已有，`index.ts:253`，服务层当前未用）→ Refund 免地址，Replacement 缺地址返回 422。
   - 无 lot/date 但有照片/渠道/购买日期 → 允许提交进 `manual_review`。
-  - Evidence Profile 生效（exact_order_match / identifier_match / manual_review / incident）。
+  - Evidence Profile 生效（exact_order_match / order_evidence / identifier_match / manual_review / incident）。
+  - `purchaseCorroboration`、`riskFlags` 生效；当前收货地址与原订单地址**分离**（原订单地址仅作佐证，绝不自动覆盖补发地址）。
 - DB 层：`claimed_products` 的 `shape/flavor/lotCode/dateCode` 由 `NOT NULL` 改为 nullable。
 
 **兼容策略**：服务层**短暂同时接受**旧 flat 字段一个周期（过渡容错），但新提交优先走新路径。
 
-**退出条件**：四条消费者路径（精确订单 / 无凭证 / 人工审核 / Incident）+ Remedy 地址条件，通过 DB + HTTP 集成测试。
+**退出条件**：五条消费者路径（精确订单 / 订单佐证 / 无凭证 / 补充资料 / Incident）+ Remedy 地址条件 + 原订单地址不复用补发，通过 DB + HTTP 集成测试；订单敏感字段的加密、HMAC 查询、日志脱敏和授权查看均有集成测试。
 
 ### 2.4 阶段 M4 — 收尾（删旧列 / 加约束）
 
@@ -140,4 +141,4 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 
 - **驱动**：`docs/optimization-plan-v1.md` §4（T2/T3/T4）+ §6（迁移方案表）。
 - **依赖**：ADR-0001（新表结构）、ADR-0002（reason code 契约，M2 切换目标）。
-- **Decision Gate**：D1（粒度）影响 M1 新表字段；D3（Evidence Profile）影响 M3 服务层校验；D4（Remedy/地址）影响 M3 地址条件。默认值下按本 ADR 推进，确认后局部调整对应阶段。
+- **Decision Gate**：D1（粒度）影响 M1 新表字段；D3（Evidence Profile，V1.1 含 `order_evidence`）影响 M3 服务层校验；D4（Remedy/地址）影响 M3 地址条件；D7（订单佐证字段默认性）与 D8（退款金额与补发地址）影响 M3 订单佐证与地址分离。默认值下按本 ADR 推进，确认后局部调整对应阶段。

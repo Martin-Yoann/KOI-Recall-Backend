@@ -1,7 +1,7 @@
 # ADR-0001：真实商品身份模型（Product Identity Model）
 
 - **状态**：Accepted（2026-08-07 评审通过，进入 Sprint 1 实施）
-- **日期**：2026-08-07
+- **日期**：2026-08-07（2026-08-07 依优化方案 V1.1 同步 `identification_mode` 枚举命名）
 - **决策者**：技术 + 业务商品数据
 - **关联**：优化规划 `docs/optimization-plan-v1.md`（O1 / T2，Decision Gate D1）
 - **替代方案**：见 §6
@@ -75,7 +75,7 @@ campaign_products          消费者可见产品 / 款式
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `matched_variant_ids` | uuid[] | 命中的候选 Variant（多值即歧义） |
-| `identification_mode` | enum `{order, product_identifiers, unknown}` | 消费者走哪条识别路径 |
+| `identification_mode` | enum `{product_identifiers, purchase_evidence, unknown}` | 消费者走哪条识别路径（V1.1：购买佐证单独成 `purchase_evidence`，不混入识别） |
 | `reason_codes` | text[] | 来自 Policy 的可审计原因码 |
 | `input_snapshot` | jsonb | 消费者原始输入快照（避免只留最终结论） |
 
@@ -87,7 +87,7 @@ campaign_products          消费者可见产品 / 款式
 
 1. **表达真实歧义**：Identifier 可重复 + 多候选转人工，是对“JSM-18A/D 共享 UPC”这一事实的忠实建模，而非用唯一约束掩盖。
 2. **可审计**：`claimed_products` 保留 `matched_variant_ids`（多值）、`identification_mode`、`reason_codes` 与输入快照，使每一笔 Claim 的识别过程可追溯，而非只存一个布尔 `check_result`。
-3. **契约自由**：Variant/Identifier 分离后，消费者输入可走 order / identifiers / unknown 三态，不再被 `shape/flavor/lot/date` 四元组锁死。
+3. **契约自由**：Variant/Identifier 分离后，消费者输入可走 product_identifiers / purchase_evidence / unknown 三态，不再被 `shape/flavor/lot/date` 四元组锁死。
 4. **不破坏 Campaign Version 所有权**：所有新表仍挂在 `campaign_version_id` 之下，使某次发布使用的身份数据不被后续发布悄悄替换。
 
 ---

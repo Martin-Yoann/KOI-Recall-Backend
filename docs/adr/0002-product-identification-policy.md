@@ -1,9 +1,9 @@
 # ADR-0002：统一商品识别策略 seam（ProductIdentificationPolicy）
 
 - **状态**：Accepted（2026-08-07 评审通过，进入 Sprint 1 实施）
-- **日期**：2026-08-07
+- **日期**：2026-08-07（2026-08-07 依优化方案 V1.1 订单佐证补充修订）
 - **决策者**：技术
-- **关联**：优化规划 `docs/optimization-plan-v1.md`（O2 / T3）；ADR-0001（身份模型）
+- **关联**：优化规划 `docs/optimization-plan-v1.md`（O2 / T3，含 O3.1 订单佐证）；ADR-0001（身份模型）
 - **替代方案**：见 §6
 
 ---
@@ -34,6 +34,8 @@
 
 新增一个**深模块** `ProductIdentificationPolicy`，作为商品识别的唯一决策点。调用方只提交识别信号 + 版本化规则快照，得到结构化结果。
 
+> **核心原则（V1.1）**：产品身份识别回答“是否属于本次召回范围”；购买订单佐证回答“这次申请是否有可信购买线索”。两者**分别评估**，各自输出原因码与快照——订单佐证可提升可信度，但**不被误当作产品 Identifier**。
+
 ### 2.1 目标接口
 
 ```ts
@@ -41,11 +43,11 @@
 identify(input: IdentificationInput, snapshot: CampaignSnapshot): IdentificationResult
 
 interface IdentificationInput {
-  mode: 'order' | 'product_identifiers' | 'unknown';
+  mode: 'product_identifiers' | 'purchase_evidence' | 'unknown';
   campaignSlug: string;
-  // mode=order: 订单号 + 渠道 + 购买日期
-  // mode=product_identifiers: upc/gtin/model/style/lot/date 等可空信号
-  // mode=unknown: 仅照片/渠道/购买日期
+  // mode=product_identifiers: upc/gtin/model/style/lot/date 等可空识别信号
+  // mode=purchase_evidence: 订单号/平台/卖家/日期/商品行/金额 + 订单或收据附件（佐证，非识别）
+  // mode=unknown: 仅照片/渠道/购买日期，无任何代码或订单信息
   signals: ProductSignals;
 }
 
@@ -55,14 +57,18 @@ interface IdentificationResult {
   matchedVariantIds: string[];      // 0|1|多 命中（多即歧义）
   requiredEvidenceProfile: string;  // 交给 ADR 的 Evidence Profile
   checkedCampaignVersion: number;
+  // 购买佐证（V1.1）：独立于识别，仅影响队列/补充资料要求，绝不静默拒绝合法消费者
+  purchaseCorroboration?: 'verified' | 'partial' | 'not_provided' | 'conflict';
+  riskFlags?: string[];             // duplicate_order | duplicate_document | identifier_order_conflict | evidence_insufficient …
 }
 ```
 
 **关键约束**：
 - 多候选（`matchedVariantIds.length > 1`）→ 一律 `manual_review`，**不武断选一个**。
-- 无任何代码/收据时返回 `manual_review`，**绝不拒绝**消费者继续。
+- 无任何代码/收据/订单信息时返回 `manual_review`，**绝不拒绝**消费者继续。
 - **Policy 不输出人类文案**——只输出 `reasonCodes`；消费者可见 message 由已批准的 Campaign Localization 按 `messageKey` 渲染。
 - **Policy 不输出安全/危险结论**——`not_matched` 仅表示“当前输入未找到已列明匹配”，**绝不等于 safe**。
+- **`riskFlags` 只能改变队列或要求补充资料**（转 `request_information` / `manual_review`），**不能静默拒绝合法消费者**；单一截图或单一数值不得直接触发自动补救（O3.1）。
 
 ### 2.2 调用约定
 
@@ -71,7 +77,7 @@ interface IdentificationResult {
 | Product Check 路由 | `identify()` 给消费者初步结果（非最终裁决） |
 | Claim Submission (`DrizzleCaseService`) | 基于 **pinned Campaign Version** 再调一次 `identify()` 复核，确保提交时与发布时规则一致 |
 
-两者**必须调用同一 Policy 实例**，消除双 triage 漂移。
+两者**必须调用同一 Policy 实例**，消除双 triage 漂移。Phase 1 先采集消费者提交的订单佐证，并可查询受控导入订单索引；**不提前承诺实时 Marketplace/OMS 连接**（实际出现第二个外部 Adapter 时，再建立远程 Port）。
 
 ### 2.3 模块结构
 
@@ -91,9 +97,11 @@ matcher 现有的三个 message 常量下线，替换为稳定 reason code，例
 
 | 旧 message | 新 reasonCode | 含义 |
 |---|---|---|
-| `POTENTIAL_MATCH_MESSAGE` | `identifier.single_match` 或 `order.exact_match` | 唯一命中 |
+| `POTENTIAL_MATCH_MESSAGE` | `identifier.single_match` | 唯一命中 |
 | `MANUAL_REVIEW_MESSAGE` | `identifier.ambiguous_multi_match` 或 `input.insufficient_signals` | 多候选或信号不足 |
 | `NOT_MATCHED_MESSAGE` | `identifier.no_match` | 无命中 |
+
+> 订单命中（`order_evidence` Profile）属于购买佐证维度，不再混入识别原因码——其结果体现在 `purchaseCorroboration` 与 `riskFlags`（O3.1）。
 
 最终 code 表由 Sprint 1 契约样例定稿（见优化规划 Sprint 0 产出）。
 
@@ -104,7 +112,8 @@ matcher 现有的三个 message 常量下线，替换为稳定 reason code，例
 1. **单一决策点**：消除 matcher 与 CaseService 双 triage，使 Product Check 与 Claim 判定永远一致且可审计。
 2. **深模块**：调用方只关心 `identify(input, snapshot)`，归一化/多信号/歧义/Evidence Profile 等复杂度内部消化——这正是 `DrizzleCaseService` 已验证有效的“大实现、小接口”模式的复用。
 3. **文案与逻辑解耦**：reason code 稳定、可审计、可批量归类；人类文案走 Localization 审批，避免未经批准的“安全”措辞外泄。
-4. **契约自由**：三态输入（order/identifiers/unknown）让无包装代码的消费者也能提交进人工审核，对应业务反馈的核心诉求。
+4. **契约自由**：三态输入（product_identifiers / purchase_evidence / unknown）让无包装代码的消费者也能提交进人工审核，对应业务反馈的核心诉求。
+5. **识别与佐证分离（V1.1）**：产品身份识别与购买订单佐证分开建模、各自输出原因码与快照，避免单一截图或单一数值直接触发自动补救，且使通用截图绕过可被反滥用规则识别。
 
 ---
 
@@ -131,14 +140,15 @@ matcher 现有的三个 message 常量下线，替换为稳定 reason code，例
 
 以纯函数单测为主（无需 DB）：
 
-- `order` 模式：精确命中订单 → `potential_match` + `order.exact_match`。
 - `product_identifiers` 模式：
   - 单一 UPC 命中 → `potential_match` + `identifier.single_match`，`matchedVariantIds.length === 1`。
   - 同一 UPC 命中 2 Variant → `manual_review` + `identifier.ambiguous_multi_match`，`matchedVariantIds.length === 2`。
   - 无命中 → `not_matched` + `identifier.no_match`。
-- `unknown` 模式（无代码/收据）→ `manual_review` + `input.insufficient_signals`。
+- `purchase_evidence` 模式：精确订单命中 → `purchaseCorroboration: verified`，`requiredEvidenceProfile` 指向 `order_evidence`/`exact_order_match`；同一规范化订单号重复出现 → `riskFlags` 含 `duplicate_order` 且进入人工审核（**不以单一信号直接拒绝**）。
+- `unknown` 模式（无代码/收据/订单）→ `manual_review` + `input.insufficient_signals`。
+- 只有通用截图、无 Lot/Date 且无订单佐证 → `manual_review` 或 `request_information`，**绝不自动批准**（O3.1）。
 - 断言返回值**不含**任何 `safe` / `safe to use` 字样。
-- 集成测试：Product Check 与 Claim Submit 同输入 → 同 `reasonCodes`。
+- 集成测试：Product Check 与 Claim Submit 同输入 → 同 `reasonCodes`；订单敏感字段（订单号、金额、地址、收据）不出现在应用日志 / Outbox payload / 默认导出。
 
 ---
 
@@ -157,5 +167,5 @@ matcher 现有的三个 message 常量下线，替换为稳定 reason code，例
 
 - **驱动**：`docs/optimization-plan-v1.md` §4 T3（O2）。
 - **依赖**：ADR-0001（Policy 在 Variant/Identifier 模型上运行；多候选即歧义）。
-- **下游**：ADR-0003（迁移 M2 阶段契约切 reasonCodes）；优化规划 Sprint 2 的 Evidence Profile（T4.2）消费 `requiredEvidenceProfile`。
-- **Decision Gate**：D2（订单来源）影响 `mode=order` 的 `signals` 形态——本 ADR 采用“受控导入表”默认值，实际出现第二个 Adapter 时再建外部 seam。
+- **下游**：ADR-0003（迁移 M2 阶段契约切 reasonCodes）；优化规划 Sprint 2 的 Evidence Profile（T4.2）消费 `requiredEvidenceProfile`；O3.1 订单佐证（T4.4）消费 `purchaseCorroboration` / `riskFlags`。
+- **Decision Gate**：D2（订单来源）影响 `mode=purchase_evidence` 的 `signals` 形态——本 ADR 采用“受控导入表”默认值，实际出现第二个 Adapter 时再建外部 seam。D7（订单佐证字段默认性）决定 Intake 选填字段；D8（退款金额与补发地址）约束 `riskFlags` 的下游处置。
