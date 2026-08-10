@@ -11,17 +11,18 @@
 
 ## 1. 设计目标回顾
 
-| 目标 | 当前缺陷 | 本草案对策 |
-|---|---|---|
-| 三态识别输入 | `productCheckRequestSchema` 锁死 `shape/flavor/lotCode/dateCode` 全必填 | discriminated union：`product_identifiers` / `purchase_evidence` / `unknown` |
-| 识别与佐证分离（V1.1） | 订单字段与产品标识符混在一起会误导审核 | 产品身份识别与购买订单佐证**分开建模**；Policy 输出 `purchaseCorroboration` / `riskFlags` |
-| 消除硬编码文案 | matcher 三常量 + 响应 `message: z.string()` | `messageKey` + `reasonCodes: string[]`，文案交 Localization |
-| 条件式 Claim | `claimedProductSchema` 四字段全必填、`documentIds.min(2)`、`mailingAddress` 必填 | 字段全可选；服务层按 Evidence Profile + Remedy 校验 |
-| 地址分离（V1.1） | 无区分原订单地址与当前收货地址 | `currentDeliveryAddress` 与原订单地址分开；原订单地址仅作佐证，不自动覆盖补发地址 |
-| 安全措辞门禁 | `not_matched` 文案可能被误读为安全 | 契约层不出现 `safe`；messageKey 受控枚举 |
-| 可审计 | 响应只回布尔 `result` | 返回 `matchedVariantIds` + `reasonCodes` + `identificationMode` + `purchaseCorroboration` + `riskFlags` |
+| 目标                   | 当前缺陷                                                                         | 本草案对策                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| 三态识别输入           | `productCheckRequestSchema` 锁死 `shape/flavor/lotCode/dateCode` 全必填          | discriminated union：`product_identifiers` / `purchase_evidence` / `unknown`                            |
+| 识别与佐证分离（V1.1） | 订单字段与产品标识符混在一起会误导审核                                           | 产品身份识别与购买订单佐证**分开建模**；Policy 输出 `purchaseCorroboration` / `riskFlags`               |
+| 消除硬编码文案         | matcher 三常量 + 响应 `message: z.string()`                                      | `messageKey` + `reasonCodes: string[]`，文案交 Localization                                             |
+| 条件式 Claim           | `claimedProductSchema` 四字段全必填、`documentIds.min(2)`、`mailingAddress` 必填 | 字段全可选；服务层按 Evidence Profile + Remedy 校验                                                     |
+| 地址分离（V1.1）       | 无区分原订单地址与当前收货地址                                                   | `currentDeliveryAddress` 与原订单地址分开；原订单地址仅作佐证，不自动覆盖补发地址                       |
+| 安全措辞门禁           | `not_matched` 文案可能被误读为安全                                               | 契约层不出现 `safe`；messageKey 受控枚举                                                                |
+| 可审计                 | 响应只回布尔 `result`                                                            | 返回 `matchedVariantIds` + `reasonCodes` + `identificationMode` + `purchaseCorroboration` + `riskFlags` |
 
 **约束（来自 ADR-0002 §2.1，写入契约层）**：
+
 - `matchedVariantIds.length > 1` 时 `result` 必须 `manual_review`（由 Policy 保证，契约 `superRefine` 二次校验）。
 - 响应**不含** `message`、不含任何 `safe` 字样。
 - `riskFlags` 只能改变队列或要求补充资料，**不能静默拒绝合法消费者**（O3.1）。
@@ -51,7 +52,7 @@ const purchaseEvidenceSchema = z
     lineItemTitle: z.string().trim().max(240).optional(),
     lineItemSku: z.string().trim().max(120).optional(),
     quantity: z.number().int().min(1).max(100).optional(),
-    amountPaidMinor: z.number().int().min(0).optional(),   // 最小货币单位整数
+    amountPaidMinor: z.number().int().min(0).optional(), // 最小货币单位整数
     currency: z.string().length(3).optional(),
     receiptDocumentIds: z.array(uuid).max(10).optional(),
   })
@@ -91,13 +92,14 @@ export const productCheckRequestSchema = z
 ```
 
 **Before**（原 `toc.ts:117-124`，现 `src/contracts/product-checks.ts`）：
+
 ```ts
 z.object({
   shape: z.string().min(1).max(80),
   flavor: z.string().min(1).max(80),
   lotCode: z.string().min(1).max(80),
   dateCode: z.string().min(1).max(40),
-})
+});
 ```
 
 **差异**：四字段平铺 → 三态 discriminated union；旧字段全部下沉为 `product_identifiers` 模式下的可选 identifier 条目。**V1.1**：原 `order` 模式重构为 `purchase_evidence`——订单字段（平台/卖家/金额/收据）独立成 `purchaseEvidenceSchema`，明确是购买佐证而非产品 Identifier；`purchase_evidence` 与 `unknown` 模式均可选附 `purchaseEvidence`。
@@ -118,9 +120,7 @@ export const productCheckResponseSchema = z
       'product_check.not_matched',
     ]),
     // V1.1：购买佐证（独立于识别，仅影响队列/补充资料要求，绝不静默拒绝）
-    purchaseCorroboration: z
-      .enum(['verified', 'partial', 'not_provided', 'conflict'])
-      .optional(),
+    purchaseCorroboration: z.enum(['verified', 'partial', 'not_provided', 'conflict']).optional(),
     riskFlags: z.array(z.string().min(1).max(80)).optional(),
     checkedCampaignVersion: z.number().int().positive(),
     disclaimer: z.literal('This check is preliminary and is not a final eligibility decision.'),
@@ -148,6 +148,7 @@ export const productCheckResponseSchema = z
 **Before**（原 `toc.ts:126-133`，现 `src/contracts/product-checks.ts`）：`{ result, message, checkedCampaignVersion, disclaimer }`。
 
 **差异**：
+
 - `message: string` → `messageKey: enum`（受控，禁止自由文案）。
 - 新增 `reasonCodes` / `matchedVariantIds` / `identificationMode`。
 - **V1.1** 新增 `purchaseCorroboration` / `riskFlags`——购买佐证独立评估，`riskFlags` 只能转人工或要求补充资料，不能静默拒绝。
@@ -155,12 +156,12 @@ export const productCheckResponseSchema = z
 
 **reason code 与 messageKey 映射**（ADR-0002 §2.4）：
 
-| reasonCode | messageKey | result |
-|---|---|---|
-| `identifier.single_match` | `product_check.potential_match` | potential_match |
-| `identifier.ambiguous_multi_match` | `product_check.manual_review.ambiguous` | manual_review |
-| `input.insufficient_signals` | `product_check.manual_review.insufficient_signals` | manual_review |
-| `identifier.no_match` | `product_check.not_matched` | not_matched |
+| reasonCode                         | messageKey                                         | result          |
+| ---------------------------------- | -------------------------------------------------- | --------------- |
+| `identifier.single_match`          | `product_check.potential_match`                    | potential_match |
+| `identifier.ambiguous_multi_match` | `product_check.manual_review.ambiguous`            | manual_review   |
+| `input.insufficient_signals`       | `product_check.manual_review.insufficient_signals` | manual_review   |
+| `identifier.no_match`              | `product_check.not_matched`                        | not_matched     |
 
 > 订单命中结果（`exact_order_match` / `order_evidence` Profile）属于购买佐证维度，体现在 `purchaseCorroboration` 与 `riskFlags`，不再混入识别原因码（V1.1）。
 > `riskFlags` 枚举（O3.1）：`duplicate_order` / `duplicate_document` / `identifier_order_conflict` / `evidence_insufficient`。
@@ -208,11 +209,11 @@ export const claimSubmissionRequestSchema = z
       email: z.string().email().max(254),
       phone: z.string().max(40).optional(),
       // V1.1：当前收货地址（用于 Replacement 补发），与原订单地址分离
-      currentDeliveryAddress: addressSchema.optional(),   // 契约放行，服务层按 Remedy 校验
+      currentDeliveryAddress: addressSchema.optional(), // 契约放行，服务层按 Remedy 校验
     }),
     products: z.array(claimedProductSchema).min(1).max(20),
     remedyCode: z.string().min(1).max(60),
-    documentIds: z.array(uuid).max(20),            // min(2) → max(20)，0 即允许
+    documentIds: z.array(uuid).max(20), // min(2) → max(20)，0 即允许
     consents: z
       .array(
         z.object({
@@ -233,6 +234,7 @@ export const claimSubmissionRequestSchema = z
 **Before**：`mailingAddress: addressSchema`（必填）、`documentIds: z.array(uuid).min(2).max(20)`。
 
 **差异**：
+
 - `mailingAddress` → `currentDeliveryAddress.optional()`（**V1.1 改名**）：契约层放行，**校验下沉到服务层**（读 `Remedy.requiresMailingAddress`；Refund 免地址，Replacement 缺 `currentDeliveryAddress` → 422）。
 - **原订单地址只作购买佐证**（在 `purchaseEvidence` 内），**绝不自动写入或覆盖** `currentDeliveryAddress`（D8）。
 - `documentIds` 下限 `min(2)` → 去掉：证据数量由 Evidence Profile 决定（精确订单命中可免除 Proof of Purchase）。
@@ -264,7 +266,7 @@ const publicVariantSchema = z
     identifiers: z.array(
       z.object({
         type: z.enum(['sku', 'unit_upc', 'gtin14', 'model', 'style']),
-        value: z.string(),   // 展示用 raw_value；不做唯一性暗示
+        value: z.string(), // 展示用 raw_value；不做唯一性暗示
       }),
     ),
   })
@@ -321,12 +323,12 @@ pnpm types:frontend       # 重生成 src/generated/toc-v1.d.ts，并提交
 
 ## 7. 与 ADR / 规划的映射
 
-| 本草案节 | 驱动 ADR | 规划任务 | 迁移阶段 |
-|---|---|---|---|
-| §2 Product Check | ADR-0002 | T3 | M2 |
-| §3 Claim | ADR-0002, ADR-0003 | T4.1, T4.2, T4.4（O3.1） | M3 |
-| §4 Campaign products | ADR-0001 | T2 | M1 配套 |
-| §5 OpenAPI 同步 | ADR-0003 §2.2/2.3 | T1 | M2/M3 |
+| 本草案节             | 驱动 ADR           | 规划任务                 | 迁移阶段 |
+| -------------------- | ------------------ | ------------------------ | -------- |
+| §2 Product Check     | ADR-0002           | T3                       | M2       |
+| §3 Claim             | ADR-0002, ADR-0003 | T4.1, T4.2, T4.4（O3.1） | M3       |
+| §4 Campaign products | ADR-0001           | T2                       | M1 配套  |
+| §5 OpenAPI 同步      | ADR-0003 §2.2/2.3  | T1                       | M2/M3    |
 
 ---
 

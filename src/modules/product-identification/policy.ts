@@ -126,6 +126,7 @@ export const REASON_CODES = {
   IDENTIFIER_AMBIGUOUS_MULTI_MATCH: 'identifier.ambiguous_multi_match',
   IDENTIFIER_NO_MATCH: 'identifier.no_match',
   INPUT_INSUFFICIENT_SIGNALS: 'input.insufficient_signals',
+  LOT_MANUAL_REVIEW: 'lot.manual_review',
   PURCHASE_EVIDENCE_VERIFIED: 'purchase_evidence.verified',
   PURCHASE_EVIDENCE_PARTIAL: 'purchase_evidence.partial',
   PURCHASE_EVIDENCE_CONFLICT: 'purchase_evidence.conflict',
@@ -174,8 +175,8 @@ export function identify(
 
   // Legacy four-field dual-read path (M1–M3): shape/flavor/lot/date matching
   // against flat attributes and lot rows, exactly as the old matcher did.
-  const legacyMatched = matchLegacy(input.signals, snapshot);
-  for (const variantId of legacyMatched) matchedVariantIds.add(variantId);
+  const legacyMatch = matchLegacy(input.signals, snapshot);
+  for (const variantId of legacyMatch.matchedVariantIds) matchedVariantIds.add(variantId);
 
   if (matchedVariantIds.size === 0) {
     if (
@@ -193,22 +194,26 @@ export function identify(
   }
 
   const result: IdentificationResult = {
-    result:
-      matchedVariantIds.size > 1
+    result: legacyMatch.manualReview
+      ? 'manual_review'
+      : matchedVariantIds.size > 1
         ? 'manual_review'
         : matchedVariantIds.size === 1
           ? 'potential_match'
           : sawInsufficient
             ? 'manual_review'
             : 'not_matched',
-    reasonCodes:
-      matchedVariantIds.size > 1
+    reasonCodes: legacyMatch.manualReview
+      ? [REASON_CODES.LOT_MANUAL_REVIEW]
+      : matchedVariantIds.size > 1
         ? [REASON_CODES.IDENTIFIER_AMBIGUOUS_MULTI_MATCH]
         : matchedVariantIds.size === 1
           ? [REASON_CODES.IDENTIFIER_SINGLE_MATCH]
           : reasonCodes,
     matchedVariantIds: [...matchedVariantIds],
-    requiredEvidenceProfile: deriveEvidenceProfile(input.mode, matchedVariantIds.size),
+    requiredEvidenceProfile: legacyMatch.manualReview
+      ? 'manual_review'
+      : deriveEvidenceProfile(input.mode, matchedVariantIds.size),
     checkedCampaignVersion: snapshot.versionNumber,
   };
 
@@ -222,9 +227,15 @@ export function identify(
   return result;
 }
 
-function matchLegacy(signals: ProductSignals, snapshot: CampaignSnapshot): string[] {
+function matchLegacy(
+  signals: ProductSignals,
+  snapshot: CampaignSnapshot,
+): { matchedVariantIds: string[]; manualReview: boolean } {
   const matched = new Set<string>();
-  if (!signals.shape && !signals.flavor && !signals.lotCode && !signals.dateCode) return [];
+  let manualReview = false;
+  if (!signals.shape && !signals.flavor && !signals.lotCode && !signals.dateCode) {
+    return { matchedVariantIds: [], manualReview };
+  }
 
   const norm = (value: string | undefined) => (value ?? '').toLowerCase();
   const shape = norm(signals.shape);
@@ -248,11 +259,12 @@ function matchLegacy(signals: ProductSignals, snapshot: CampaignSnapshot): strin
     if (lotMatches.length === 0) continue;
     for (const lot of lotMatches) {
       if (lot.eligibilityStatus === 'affected' || lot.eligibilityStatus === 'manual_review') {
+        if (lot.eligibilityStatus === 'manual_review') manualReview = true;
         for (const variant of product.variants) matched.add(variant.id);
       }
     }
   }
-  return [...matched];
+  return { matchedVariantIds: [...matched], manualReview };
 }
 
 function hasNoSignals(signals: ProductSignals): boolean {
@@ -287,8 +299,9 @@ function deriveEvidenceProfile(
 
 /**
  * V1.1/O3.1 — purchase corroboration, independent of identity. Presence of an
- * order number plus amount => verified (partial without amount); an order
- * number that matches nothing in a snapshot-scoped signal is at most partial.
+ * Self-reported order details are at most partial until an authoritative
+ * order-index adapter confirms them. `verified` is reserved for that future
+ * server-side match and must never be inferred from client-selected fields.
  * Conflict detection (identifier vs order line) is surfaced as a risk flag,
  * never as a rejection.
  */
@@ -307,10 +320,7 @@ function evaluateCorroboration(input: IdentificationInput): {
 
   let status: PurchaseCorroboration;
   let reasonCode: string | undefined;
-  if (hasOrderNumber && hasAmount) {
-    status = 'verified';
-    reasonCode = REASON_CODES.PURCHASE_EVIDENCE_VERIFIED;
-  } else if (hasOrderNumber || hasDocument) {
+  if (hasOrderNumber || hasDocument) {
     status = 'partial';
     reasonCode = REASON_CODES.PURCHASE_EVIDENCE_PARTIAL;
   } else {

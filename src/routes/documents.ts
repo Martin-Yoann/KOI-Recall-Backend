@@ -16,10 +16,7 @@ import { dependencyUnavailable, notFound } from './shared.js';
  * Registers the claim-draft creation and direct-upload document routes
  * (draft creation, upload-token minting, and draft document deletion).
  */
-export function registerDocumentRoutes(
-  app: OpenAPIHono<AppEnv>,
-  registry: ApplicationRegistry,
-) {
+export function registerDocumentRoutes(app: OpenAPIHono<AppEnv>, registry: ApplicationRegistry) {
   app.openapi(createClaimDraftRoute, async (context) => {
     let draft;
     try {

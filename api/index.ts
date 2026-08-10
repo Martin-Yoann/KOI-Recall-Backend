@@ -37,10 +37,7 @@ function buildWebRequest(req: IncomingMessage, body?: string): Request {
   return new Request(url, { method, headers: webHeaders });
 }
 
-export default async function handler(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<void> {
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const body = await readBody(req);
   const webReq = buildWebRequest(req, body);
   const response = await app.fetch(webReq);

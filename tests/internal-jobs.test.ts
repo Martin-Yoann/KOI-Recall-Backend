@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from '../src/app.js';
+import { createPlaceholderRegistry } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
 import { requireCronSecret } from '../src/routes/internal-jobs.js';
 
@@ -32,17 +33,23 @@ describe('internal job CRON_SECRET auth (T5.2/O5)', () => {
   });
 
   it('accepts the configured secret and runs the job handler', async () => {
+    const registry = createPlaceholderRegistry();
+    registry.jobs = {
+      drainOutbox: () => Promise.resolve({ claimed: 2, succeeded: 1, failed: 1 }),
+      cleanupDrafts: () => Promise.resolve({ deleted: 0, pending: 0 }),
+    };
     const app = createApp({
       config: loadConfig({
         CORS_ALLOWED_ORIGINS: 'https://consumer.example.com',
         CRON_SECRET: 'super-secret',
       }),
+      registry,
     });
     const response = await app.request('/internal/jobs/outbox', {
       headers: { Authorization: 'Bearer super-secret' },
     });
-    // Default handler is not-implemented -> 501; the gate passed (not 401).
-    expect(response.status).toBe(501);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ claimed: 2, succeeded: 1, failed: 1 });
   });
 
   it('rejects when no CRON_SECRET is configured', async () => {

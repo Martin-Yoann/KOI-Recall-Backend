@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config/env.js';
@@ -46,14 +46,18 @@ describe('InMemoryRateLimiter (T6.1/O6)', () => {
   });
 
   it('resets after the window elapses', async () => {
-    const limiter = new InMemoryRateLimiter({ claims: 1 }, 1);
-    const key = `claims:${deriveRateLimitKey('203.0.113.7', 'claims', 'pepper')}`;
+    vi.useFakeTimers();
+    try {
+      const limiter = new InMemoryRateLimiter({ claims: 1 }, 1_000);
+      const key = `claims:${deriveRateLimitKey('203.0.113.7', 'claims', 'pepper')}`;
 
-    await expect(limiter.check(key)).resolves.toMatchObject({ allowed: true });
-    await expect(limiter.check(key)).resolves.toMatchObject({ allowed: false });
-    // 2ms later the 1ms window has reset.
-    await new Promise((resolve) => setTimeout(resolve, 5));
-    await expect(limiter.check(key)).resolves.toMatchObject({ allowed: true });
+      await expect(limiter.check(key)).resolves.toMatchObject({ allowed: true });
+      await expect(limiter.check(key)).resolves.toMatchObject({ allowed: false });
+      await vi.advanceTimersByTimeAsync(1_001);
+      await expect(limiter.check(key)).resolves.toMatchObject({ allowed: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

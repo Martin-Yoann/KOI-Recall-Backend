@@ -71,7 +71,8 @@ describe.skipIf(!enabled)('DrizzleOutboxWorker (database integration)', () => {
     expect(result.claimed).toBe(1);
     // No communication exists for the fake id, so the event is failed/dead.
     const [row] = await db.select().from(outboxEvents).where(eq(outboxEvents.id, inserted!.id));
-    expect(['failed', 'dead_letter']).toContain(row?.status);
+    expect(['pending', 'dead_letter']).toContain(row?.status);
+    expect(row?.attempts).toBe(1);
     expect(row?.lastErrorCode).toBe('communication_not_found');
 
     await db.delete(outboxEvents).where(eq(outboxEvents.id, inserted!.id));

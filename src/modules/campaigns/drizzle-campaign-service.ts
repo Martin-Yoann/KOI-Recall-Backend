@@ -1,6 +1,6 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import type { Database } from '../../db/client.js';
+import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
   campaignEvidenceRequirements,
   campaignLocalizations,
@@ -21,7 +21,11 @@ import type {
 } from './service.js';
 import { mapToCampaignView } from './mapper.js';
 
-export function buildPublishedVersionQuery(db: Database, campaignId: string, versionId: string) {
+export function buildPublishedVersionQuery(
+  db: DatabaseExecutor,
+  campaignId: string,
+  versionId: string,
+) {
   return db
     .select({ versionNumber: campaignVersions.versionNumber })
     .from(campaignVersions)
@@ -41,10 +45,10 @@ export function buildPublishedVersionQuery(db: Database, campaignId: string, ver
  * production and node-postgres locally with no branching.
  */
 export class DrizzleCampaignService implements CampaignService {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly handle: Pick<DatabaseHandle, 'db' | 'transaction'>) {}
 
   async getPublishedCampaign(query: PublishedCampaignQuery): Promise<CampaignView | null> {
-    const db = this.db;
+    const db = this.handle.db;
 
     const [campaign] = await db
       .select({
@@ -162,55 +166,55 @@ export class DrizzleCampaignService implements CampaignService {
     versionNumber: number;
     publishedAt: string;
   }> {
-    const db = this.db;
+    return this.handle.transaction(async (db) => {
+      const [campaign] = await db
+        .select({ id: recallCampaigns.id })
+        .from(recallCampaigns)
+        .where(eq(recallCampaigns.slug, input.campaignSlug))
+        .limit(1);
+      if (!campaign) throw new CampaignValidationError('Campaign was not found.');
 
-    const [campaign] = await db
-      .select({ id: recallCampaigns.id })
-      .from(recallCampaigns)
-      .where(eq(recallCampaigns.slug, input.campaignSlug))
-      .limit(1);
-    if (!campaign) {
-      throw new CampaignValidationError('Campaign was not found.');
-    }
+      const [version] = await db
+        .select({
+          id: campaignVersions.id,
+          status: campaignVersions.status,
+        })
+        .from(campaignVersions)
+        .where(
+          and(
+            eq(campaignVersions.campaignId, campaign.id),
+            eq(campaignVersions.versionNumber, input.versionNumber),
+          ),
+        )
+        .limit(1);
+      if (!version) throw new CampaignValidationError('Campaign Version was not found.');
+      if (version.status !== 'draft') {
+        throw new CampaignValidationError('Only a draft Campaign Version can be published.');
+      }
 
-    const [version] = await db
-      .select({
-        id: campaignVersions.id,
-        status: campaignVersions.status,
-      })
-      .from(campaignVersions)
-      .where(
-        and(
-          eq(campaignVersions.campaignId, campaign.id),
-          eq(campaignVersions.versionNumber, input.versionNumber),
-        ),
-      )
-      .limit(1);
-    if (!version) {
-      throw new CampaignValidationError('Campaign Version was not found.');
-    }
-    if (version.status !== 'draft') {
-      throw new CampaignValidationError('Only a draft Campaign Version can be published.');
-    }
+      await this.assertPublishGate(db, input, version.id);
 
-    await this.assertPublishGate(input, version.id);
+      const publishedAt = new Date();
+      const [published] = await db
+        .update(campaignVersions)
+        .set({
+          status: 'published',
+          publishedAt,
+          publishedBy: input.publishedBy,
+          approvals: input.approvals,
+        })
+        .where(and(eq(campaignVersions.id, version.id), eq(campaignVersions.status, 'draft')))
+        .returning({ id: campaignVersions.id });
+      if (!published) {
+        throw new CampaignValidationError('Only a draft Campaign Version can be published.');
+      }
+      await db
+        .update(recallCampaigns)
+        .set({ publishedVersionId: version.id, status: 'active' })
+        .where(eq(recallCampaigns.id, campaign.id));
 
-    const publishedAt = new Date();
-    await db
-      .update(campaignVersions)
-      .set({
-        status: 'published',
-        publishedAt,
-        publishedBy: input.publishedBy,
-        approvals: input.approvals,
-      })
-      .where(eq(campaignVersions.id, version.id));
-    await db
-      .update(recallCampaigns)
-      .set({ publishedVersionId: version.id, status: 'active' })
-      .where(eq(recallCampaigns.id, campaign.id));
-
-    return { versionNumber: input.versionNumber, publishedAt: publishedAt.toISOString() };
+      return { versionNumber: input.versionNumber, publishedAt: publishedAt.toISOString() };
+    });
   }
 
   /**
@@ -219,9 +223,11 @@ export class DrizzleCampaignService implements CampaignService {
    * required approvals must all be present. Throws CampaignValidationError on
    * the first missing piece so the publish action never half-applies.
    */
-  private async assertPublishGate(input: PublishVersionInput, versionId: string): Promise<void> {
-    const db = this.db;
-
+  private async assertPublishGate(
+    db: DatabaseExecutor,
+    input: PublishVersionInput,
+    versionId: string,
+  ): Promise<void> {
     const [products] = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(campaignProducts)

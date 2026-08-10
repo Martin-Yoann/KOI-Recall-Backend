@@ -17,6 +17,12 @@
     "skipLibCheck": true,
     "types": ["node", "pg", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts", "api/**/*.ts", "drizzle.config.ts"],
+  "include": [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "tests/**/*.ts",
+    "api/**/*.ts",
+    "drizzle.config.ts"
+  ],
   "exclude": ["node_modules", "dist"]
 }

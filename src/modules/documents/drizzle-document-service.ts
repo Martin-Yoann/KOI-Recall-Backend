@@ -44,6 +44,7 @@ export class DrizzleDocumentService implements DocumentService {
     private readonly db: Database,
     private readonly blob: PrivateBlobPort,
     private readonly transaction: DatabaseHandle['transaction'],
+    private readonly malwareScanRequired = false,
   ) {}
 
   async authorizeUpload(input: AuthorizeUploadInput): Promise<AuthorizedUpload> {
@@ -285,6 +286,12 @@ export class DrizzleDocumentService implements DocumentService {
               : rejected
                 ? 'rejected'
                 : 'verified',
+            scanStatus:
+              deletionRequested || rejected
+                ? 'not_run'
+                : this.malwareScanRequired
+                  ? 'pending'
+                  : 'not_run',
             ...(deletionRequested || rejected ? { categorySlot: null } : {}),
             storagePathname: completion.pathname,
             detectedMimeType: completion.detectedMimeType,

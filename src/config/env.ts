@@ -7,7 +7,12 @@ const environmentSchema = z.object({
   BLOB_READ_WRITE_TOKEN: z.string().optional(),
   BLOB_WEBHOOK_CALLBACK_URL: z.string().optional(),
   RESEND_API_KEY: z.string().optional(),
+  RESEND_FROM_EMAIL: z.string().email().optional(),
   RESEND_WEBHOOK_SECRET: z.string().optional(),
+  MALWARE_SCAN_REQUIRED: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   CRON_SECRET: z.string().optional(),
   /** Single-role Admin API key (T8/O10). When absent, admin routes are 501. */
   ADMIN_API_KEY: z.string().optional(),

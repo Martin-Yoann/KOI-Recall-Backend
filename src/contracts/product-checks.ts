@@ -96,11 +96,11 @@ export const productCheckResponseSchema = z
         message: 'result must be manual_review when matchedVariantIds.length > 1.',
       });
     }
-    if (value.result !== 'potential_match' && value.matchedVariantIds.length === 1) {
+    if (value.result === 'not_matched' && value.matchedVariantIds.length > 0) {
       context.addIssue({
         code: 'custom',
         path: ['matchedVariantIds'],
-        message: 'single matched variant must yield potential_match.',
+        message: 'not_matched must not include matched variants.',
       });
     }
   })

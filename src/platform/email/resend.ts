@@ -1,8 +1,4 @@
-import type {
-  EmailSendResult,
-  TransactionalEmail,
-  TransactionalEmailPort,
-} from './port.js';
+import type { EmailSendResult, TransactionalEmail, TransactionalEmailPort } from './port.js';
 
 const RESEND_API_URL = 'https://api.resend.com/emails';
 

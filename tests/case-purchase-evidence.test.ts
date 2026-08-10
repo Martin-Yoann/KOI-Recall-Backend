@@ -16,9 +16,9 @@ function product(purchaseEvidence: ClaimedProduct['purchaseEvidence']): ClaimedP
 }
 
 describe('purchase corroboration and risk flags (O3.1/T4.4)', () => {
-  it('is verified when order number and amount are present', () => {
+  it('remains partial without an authoritative order-index match', () => {
     const p = product({ orderNumber: 'ORD-1', amountPaidMinor: 1990, currency: 'USD' });
-    expect(deriveCorroboration(p)).toBe('verified');
+    expect(deriveCorroboration(p)).toBe('partial');
     expect(deriveRiskFlags(p)).toBeNull();
   });
 

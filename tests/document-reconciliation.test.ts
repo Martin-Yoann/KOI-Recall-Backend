@@ -18,6 +18,7 @@ class FakeReconciliationDatabase {
   readonly document = {
     declaredMimeType: 'image/jpeg',
     uploadStatus: 'authorized',
+    scanStatus: 'pending',
     storagePathname: 'drafts/draft/document/product.jpg',
   };
 
@@ -107,6 +108,9 @@ class FakeReconciliationDatabase {
               if (typeof values.storagePathname === 'string') {
                 this.document.storagePathname = values.storagePathname;
               }
+              if (typeof values.scanStatus === 'string') {
+                this.document.scanStatus = values.scanStatus;
+              }
               return Promise.resolve();
             }
             if (table === webhookEvents) {
@@ -143,13 +147,14 @@ const event = {
   payload: { type: 'blob.upload-completed' },
 };
 
-function serviceWith(fake: FakeReconciliationDatabase) {
+function serviceWith(fake: FakeReconciliationDatabase, malwareScanRequired = false) {
   const transaction: DatabaseHandle['transaction'] = (work) =>
     work(fake as unknown as DatabaseExecutor);
   return new DrizzleDocumentService(
     fake as unknown as Database,
     new NotImplementedPrivateBlobAdapter(),
     transaction,
+    malwareScanRequired,
   );
 }
 
@@ -166,6 +171,15 @@ describe('DrizzleDocumentService upload reconciliation', () => {
     expect(fake.webhook.status).toBe('processed');
   });
 
+  it('keeps the scan pending when malware scanning is required', async () => {
+    const fake = new FakeReconciliationDatabase();
+
+    await serviceWith(fake, true).reconcileCompletedUpload(completion, event);
+
+    expect(fake.document.uploadStatus).toBe('verified');
+    expect(fake.document.scanStatus).toBe('pending');
+  });
+
   it('reprocesses a failed webhook delivery instead of treating it as completed', async () => {
     const fake = new FakeReconciliationDatabase();
     fake.failNextDocumentUpdate = true;
@@ -178,6 +192,7 @@ describe('DrizzleDocumentService upload reconciliation', () => {
 
     await expect(service.reconcileCompletedUpload(completion, event)).resolves.toBe(true);
     expect(fake.document.uploadStatus).toBe('verified');
+    expect(fake.document.scanStatus).toBe('not_run');
     expect(fake.webhook.status).toBe('processed');
   });
 

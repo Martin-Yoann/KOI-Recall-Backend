@@ -121,6 +121,8 @@ describe('application composition', () => {
 
     expect(registry.services.cases).toBeInstanceOf(DrizzleCaseService);
     expect(registry.platform.crypto).toBe(crypto);
+    expect(registry.jobs?.drainOutbox).toBeTypeOf('function');
+    expect(registry.jobs?.cleanupDrafts).toBeTypeOf('function');
   });
 
   it.each([

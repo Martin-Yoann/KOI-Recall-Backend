@@ -42,27 +42,27 @@ campaign_products          消费者可见产品 / 款式
 
 ### 2.1 `campaign_product_variants`
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | uuid PK | |
-| `campaign_product_id` | uuid FK→`campaign_products`（cascade） | 归属产品 |
-| `model` | varchar(120) | 物理型号，如 `JSM-18A` |
-| `style` | varchar(120), nullable | 风格/包装版本 |
-| `applicable_from` / `applicable_to` | date, nullable | 适用日期区间 |
-| `attributes` | jsonb | 仅放可扩展属性，不承载核心标识 |
+| 字段                                | 类型                                   | 说明                           |
+| ----------------------------------- | -------------------------------------- | ------------------------------ |
+| `id`                                | uuid PK                                |                                |
+| `campaign_product_id`               | uuid FK→`campaign_products`（cascade） | 归属产品                       |
+| `model`                             | varchar(120)                           | 物理型号，如 `JSM-18A`         |
+| `style`                             | varchar(120), nullable                 | 风格/包装版本                  |
+| `applicable_from` / `applicable_to` | date, nullable                         | 适用日期区间                   |
+| `attributes`                        | jsonb                                  | 仅放可扩展属性，不承载核心标识 |
 
 - 唯一索引：`(campaign_product_id, model)`——同一产品内 Model 不重复。
 - 索引：`(campaign_product_id)`。
 
 ### 2.2 `campaign_product_identifiers`
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `id` | uuid PK | |
-| `variant_id` | uuid FK→`campaign_product_variants`（cascade） | 归属 Variant |
-| `identifier_type` | enum `{sku, unit_upc, gtin14, model, style, other}` | |
-| `raw_value` | varchar(160) | 原始输入，保留大小写/格式 |
-| `normalized_value` | varchar(160) | 归一化后值（大写、去分隔符等） |
+| 字段               | 类型                                                | 说明                           |
+| ------------------ | --------------------------------------------------- | ------------------------------ |
+| `id`               | uuid PK                                             |                                |
+| `variant_id`       | uuid FK→`campaign_product_variants`（cascade）      | 归属 Variant                   |
+| `identifier_type`  | enum `{sku, unit_upc, gtin14, model, style, other}` |                                |
+| `raw_value`        | varchar(160)                                        | 原始输入，保留大小写/格式      |
+| `normalized_value` | varchar(160)                                        | 归一化后值（大写、去分隔符等） |
 
 - **不设全局唯一约束**——歧义本身是业务事实（D1）。
 - 唯一索引：`(variant_id, identifier_type, normalized_value)`——同一 Variant 不重复录入同一标识符。
@@ -72,12 +72,12 @@ campaign_products          消费者可见产品 / 款式
 
 新增（保留现有列，见 ADR-0003 双读策略）：
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `matched_variant_ids` | uuid[] | 命中的候选 Variant（多值即歧义） |
+| 字段                  | 类型                                                     | 说明                                                                         |
+| --------------------- | -------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `matched_variant_ids` | uuid[]                                                   | 命中的候选 Variant（多值即歧义）                                             |
 | `identification_mode` | enum `{product_identifiers, purchase_evidence, unknown}` | 消费者走哪条识别路径（V1.1：购买佐证单独成 `purchase_evidence`，不混入识别） |
-| `reason_codes` | text[] | 来自 Policy 的可审计原因码 |
-| `input_snapshot` | jsonb | 消费者原始输入快照（避免只留最终结论） |
+| `reason_codes`        | text[]                                                   | 来自 Policy 的可审计原因码                                                   |
+| `input_snapshot`      | jsonb                                                    | 消费者原始输入快照（避免只留最终结论）                                       |
 
 现有 `shape/flavor/lotCode/dateCode` 列在 M3 后改为 nullable，M4 回填后删除。
 
@@ -95,16 +95,19 @@ campaign_products          消费者可见产品 / 款式
 ## 4. 后果（Consequences）
 
 ### 正面
+
 - Product Check 与 Claim Submission 可复用同一识别策略（ADR-0002），输出一致的 reason code。
 - 新增 Identifier 类型（如未来 batch code）只需扩 enum，不改表结构。
 - 消费者在无包装代码场景下也能提交并进入可解释的人工审核队列。
 
 ### 负面 / 代价
+
 - **写入复杂度上升**：Importer/Seed 必须同时写 product → variant → identifier 三层。Seed 的 `attributes:{shapes,flavors}` demo 形态需迁移。
 - **查询歧义处理**：必须在 Policy 层（ADR-0002）规定“多候选 → manual_review”，不能在 SQL 层随意 `LIMIT 1`。
 - **迁移期双读**：M1 阶段旧 `lot/shape/flavor` 列保留，新旧结构并存（ADR-0003）。
 
 ### 规约
+
 - Identifier 值**禁止设置全局唯一约束**（违反则丢失歧义信息）。
 - 任何读取标识符的代码必须用 `normalized_value` 比对，`raw_value` 仅作展示。
 - 索引建在 `(identifier_type, normalized_value)` 上。
@@ -124,12 +127,12 @@ campaign_products          消费者可见产品 / 款式
 
 ## 6. 替代方案（Alternatives Considered）
 
-| 方案 | 否决理由 |
-|---|---|
-| **A. 继续用 `attributes` jsonb 存 UPC/Model** | 无法建类型化索引；多值歧义无法高效查询；违反“JSONB 不承载需约束/查询的核心字段”约定（`docs/phase-1/02-database-design.md` §1） |
-| **B. Identifier 设全局唯一约束** | 直接丢失“同一 UPC 对应多 Model”的业务事实，与项目核心目标冲突 |
-| **C. 为每个 identifier_type 建独立列（sku、upc、gtin…）** | 列爆炸；新增类型要改 schema；且无法表达“一个 Variant 有多个 UPC”的多值语义 |
-| **D. 用单表 `product_aliases` 平铺** | 丢失 Variant 这一层物理型号维度，无法回答“这个 UPC 是哪个 Model” |
+| 方案                                                      | 否决理由                                                                                                                       |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| **A. 继续用 `attributes` jsonb 存 UPC/Model**             | 无法建类型化索引；多值歧义无法高效查询；违反“JSONB 不承载需约束/查询的核心字段”约定（`docs/phase-1/02-database-design.md` §1） |
+| **B. Identifier 设全局唯一约束**                          | 直接丢失“同一 UPC 对应多 Model”的业务事实，与项目核心目标冲突                                                                  |
+| **C. 为每个 identifier_type 建独立列（sku、upc、gtin…）** | 列爆炸；新增类型要改 schema；且无法表达“一个 Variant 有多个 UPC”的多值语义                                                     |
+| **D. 用单表 `product_aliases` 平铺**                      | 丢失 Variant 这一层物理型号维度，无法回答“这个 UPC 是哪个 Model”                                                               |
 
 ---
 

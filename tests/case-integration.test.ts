@@ -482,12 +482,24 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const service = new DrizzleCaseService(handle!, crypto);
     const normalizedEmail = 'taylor@example.com';
     const baseBody = fixture!.body({ incidentAnswer: 'no' });
+    const sensitivePurchaseOrder = 'PRIVATE-PURCHASE-9001';
     const result = await service.submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
       body: {
         ...baseBody,
         consumer: { ...baseBody.consumer, email: 'Taylor@Example.COM' },
+        products: [
+          {
+            ...baseBody.products[0]!,
+            purchaseEvidence: {
+              orderNumber: sensitivePurchaseOrder,
+              sellerOrStore: 'Private Store Name',
+              amountPaidMinor: 1990,
+              currency: 'USD',
+            },
+          },
+        ],
       },
     });
 
@@ -501,6 +513,10 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(aggregate.draft?.status).toBe('submitted');
     expect(aggregate.consumers).toHaveLength(1);
     expect(aggregate.products).toHaveLength(1);
+    expect(aggregate.products[0]?.purchaseEvidenceEncrypted).toBeTruthy();
+    expect(aggregate.products[0]?.inputSnapshot).toMatchObject({
+      purchaseEvidenceProvided: true,
+    });
     expect(aggregate.documents.every((row) => row.uploadStatus === 'linked')).toBe(true);
     expect(aggregate.consents).toHaveLength(2);
     expect(aggregate.snapshots).toHaveLength(1);
@@ -552,6 +568,8 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(stored).not.toContain('taylor@example.com');
     expect(stored).not.toContain('100 Example Street');
     expect(stored).not.toContain('ORDER-10001');
+    expect(stored).not.toContain(sensitivePurchaseOrder);
+    expect(stored).not.toContain('Private Store Name');
     expect(stored).not.toContain(fixture!.draftToken);
   });
 

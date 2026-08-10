@@ -150,6 +150,35 @@ describe('ProductIdentificationPolicy.identify (ADR-0002)', () => {
     expect(result.matchedVariantIds).toContain(VARIANT_A);
   });
 
+  it('routes an explicitly manual-review lot to manual review even with one variant', () => {
+    const snapshot: CampaignSnapshot = {
+      ...simpleSnapshot(),
+      lots: [
+        {
+          productId: PRODUCT_ID,
+          lotCode: 'MANUAL-LOT',
+          dateCode: '08/2026',
+          eligibilityStatus: 'manual_review',
+        },
+      ],
+    };
+
+    const result = identify(
+      {
+        mode: 'product_identifiers',
+        campaignSlug: 'music-lollipop-demo-2026',
+        signals: { shape: 'Bear', flavor: 'Peach', lotCode: 'MANUAL-LOT', dateCode: '08/2026' },
+      },
+      snapshot,
+    );
+
+    expect(result).toMatchObject({
+      result: 'manual_review',
+      matchedVariantIds: [VARIANT_A],
+      requiredEvidenceProfile: 'manual_review',
+    });
+  });
+
   it('never emits safe/safe-to-use wording', () => {
     const results = [
       identify(
@@ -180,8 +209,8 @@ describe('ProductIdentificationPolicy.identify (ADR-0002)', () => {
     );
 
     // Corroboration is present even though no identifier matched.
-    expect(result.purchaseCorroboration).toBe('verified');
-    expect(result.reasonCodes).toContain(REASON_CODES.PURCHASE_EVIDENCE_VERIFIED);
+    expect(result.purchaseCorroboration).toBe('partial');
+    expect(result.reasonCodes).toContain(REASON_CODES.PURCHASE_EVIDENCE_PARTIAL);
   });
 
   it('flags evidence_insufficient instead of rejecting when order lacks amount', () => {

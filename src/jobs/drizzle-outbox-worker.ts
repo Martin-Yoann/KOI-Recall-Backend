@@ -56,25 +56,32 @@ export class DrizzleOutboxWorker implements OutboxWorker {
     let failed = 0;
     for (const id of claimedIds) {
       try {
-        await this.processEvent(id);
-        succeeded += 1;
-      } catch {
+        const outcome = await this.processEvent(id);
+        if (outcome === 'succeeded') succeeded += 1;
+        else failed += 1;
+      } catch (error) {
+        const [event] = await this.db
+          .select({ attempts: outboxEvents.attempts })
+          .from(outboxEvents)
+          .where(eq(outboxEvents.id, id))
+          .limit(1);
+        if (event) await this.fail(id, event.attempts, errorCode(error));
         failed += 1;
       }
     }
     return { claimed: claimedIds.length, succeeded, failed };
   }
 
-  private async processEvent(id: string): Promise<void> {
+  private async processEvent(id: string): Promise<'succeeded' | 'failed'> {
     const db = this.db;
 
     const [event] = await db.select().from(outboxEvents).where(eq(outboxEvents.id, id)).limit(1);
-    if (!event) return;
+    if (!event) return 'failed';
 
     const payload = event.payload as { communicationId?: string };
     if (!payload.communicationId) {
       await this.fail(id, event.attempts, 'communication_id_missing');
-      return;
+      return 'failed';
     }
 
     const [communication] = await db
@@ -84,7 +91,7 @@ export class DrizzleOutboxWorker implements OutboxWorker {
       .limit(1);
     if (!communication) {
       await this.fail(id, event.attempts, 'communication_not_found');
-      return;
+      return 'failed';
     }
 
     const [template] = await db
@@ -98,7 +105,7 @@ export class DrizzleOutboxWorker implements OutboxWorker {
       .limit(1);
     if (!template) {
       await this.fail(id, event.attempts, 'template_not_found');
-      return;
+      return 'failed';
     }
 
     const recipient = await this.crypto.decrypt({
@@ -128,18 +135,26 @@ export class DrizzleOutboxWorker implements OutboxWorker {
         })
         .where(eq(communications.id, communication.id));
     });
+    return 'succeeded';
   }
 
   private async fail(id: string, currentAttempts: number, errorCode: string): Promise<void> {
-    const nextAttempts = currentAttempts + 1;
     await this.db
       .update(outboxEvents)
       .set({
-        status: nextAttempts >= MAX_ATTEMPTS ? 'dead_letter' : 'failed',
-        attempts: nextAttempts,
+        status: currentAttempts >= MAX_ATTEMPTS ? 'dead_letter' : 'pending',
         lastErrorCode: errorCode,
-        availableAt: new Date(Date.now() + Math.min(1000 * 2 ** nextAttempts, 60_000)),
+        availableAt: new Date(Date.now() + Math.min(1000 * 2 ** currentAttempts, 60_000)),
+        lockedAt: null,
       })
       .where(eq(outboxEvents.id, id));
   }
+}
+
+function errorCode(error: unknown): string {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    const code = (error as { code?: unknown }).code;
+    if (typeof code === 'string' && code.length > 0) return code.slice(0, 100);
+  }
+  return (error instanceof Error ? error.name : 'unknown').slice(0, 100);
 }

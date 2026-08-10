@@ -15,6 +15,10 @@ import type { IncidentService } from './modules/incidents/service.js';
 import { DrizzleProductCheckService } from './modules/product-checks/drizzle-product-check-service.js';
 import type { ProductCheckService } from './modules/product-checks/service.js';
 import type { AppConfig } from './config/env.js';
+import { DrizzleDraftCleanupWorker } from './jobs/draft-cleanup-worker.js';
+import { DrizzleOutboxWorker } from './jobs/drizzle-outbox-worker.js';
+import type { DraftCleanupResult } from './routes/internal-jobs.js';
+import type { OutboxJobResult } from './jobs/outbox.js';
 import { NotImplementedPrivateBlobAdapter } from './platform/blob/not-implemented.js';
 import type { PrivateBlobPort } from './platform/blob/port.js';
 import { VercelBlobAdapter } from './platform/blob/vercel-blob.js';
@@ -26,6 +30,7 @@ import {
 } from './platform/crypto/node-sensitive-data-crypto.js';
 import type { SensitiveDataCryptoPort } from './platform/crypto/port.js';
 import { NotImplementedEmailAdapter } from './platform/email/not-implemented.js';
+import { ResendEmailAdapter } from './platform/email/resend.js';
 import type { TransactionalEmailPort } from './platform/email/port.js';
 import { NotImplementedServiceError } from './shared/errors.js';
 
@@ -49,6 +54,10 @@ export interface PlatformAdapters {
 export interface ApplicationRegistry {
   services: ApplicationServices;
   platform: PlatformAdapters;
+  jobs?: {
+    drainOutbox: () => Promise<OutboxJobResult>;
+    cleanupDrafts: () => Promise<DraftCleanupResult>;
+  };
 }
 
 function unavailable<T>(capability: string): Promise<T> {
@@ -105,24 +114,47 @@ export function createApplicationRegistry(
   handle: DatabaseHandle,
   blob: PrivateBlobPort = new NotImplementedPrivateBlobAdapter(),
   crypto: SensitiveDataCryptoPort = new NotImplementedCryptoAdapter(),
+  email: TransactionalEmailPort = new NotImplementedEmailAdapter(),
+  malwareScanRequired = false,
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   return {
     services: {
       ...placeholder.services,
-      campaigns: new DrizzleCampaignService(handle.db),
+      campaigns: new DrizzleCampaignService(handle),
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
-      documents: new DrizzleDocumentService(handle.db, blob, (work) => handle.transaction(work)),
+      documents: new DrizzleDocumentService(
+        handle.db,
+        blob,
+        (work) => handle.transaction(work),
+        malwareScanRequired,
+      ),
       communications: new DrizzleCommunicationService(handle.db),
       ...(crypto instanceof NotImplementedCryptoAdapter
         ? {}
         : {
-            cases: new DrizzleCaseService(handle, crypto),
+            cases: new DrizzleCaseService(
+              handle,
+              crypto,
+              undefined,
+              undefined,
+              malwareScanRequired,
+            ),
             admin: new DrizzleAdminService(handle.db, crypto),
           }),
     },
-    platform: { ...placeholder.platform, blob, crypto },
+    platform: { ...placeholder.platform, blob, crypto, email },
+    jobs: {
+      drainOutbox:
+        crypto instanceof NotImplementedCryptoAdapter || email instanceof NotImplementedEmailAdapter
+          ? () => unavailable('Outbox processing')
+          : () => new DrizzleOutboxWorker(handle.db, email, crypto).runBatch(),
+      cleanupDrafts:
+        blob instanceof NotImplementedPrivateBlobAdapter
+          ? () => unavailable('Draft cleanup')
+          : () => new DrizzleDraftCleanupWorker(handle.db, blob).runBatch(),
+    },
   };
 }
 
@@ -167,6 +199,11 @@ function createBlobAdapter(config: AppConfig): PrivateBlobPort {
   );
 }
 
+function createEmailAdapter(config: AppConfig): TransactionalEmailPort {
+  if (!config.RESEND_API_KEY || !config.RESEND_FROM_EMAIL) return new NotImplementedEmailAdapter();
+  return new ResendEmailAdapter(config.RESEND_API_KEY, config.RESEND_FROM_EMAIL);
+}
+
 /**
  * Selects the default registry from configuration: a real database-backed
  * registry when `DATABASE_URL` is present (local Postgres or Neon, auto-detected
@@ -183,5 +220,7 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     createDatabase(config.DATABASE_URL),
     createBlobAdapter(config),
     crypto,
+    createEmailAdapter(config),
+    config.MALWARE_SCAN_REQUIRED,
   );
 }

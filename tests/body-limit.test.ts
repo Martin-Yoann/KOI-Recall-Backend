@@ -35,6 +35,19 @@ describe('request body limit (T6.2/O6)', () => {
     expect(body).toMatchObject({ title: 'Payload Too Large', status: 413 });
   });
 
+  it('rejects an oversized streamed body without Content-Length', async () => {
+    const body = JSON.stringify({ data: 'x'.repeat(300 * 1024) });
+    const response = await app.request(
+      new Request('http://localhost/v1/recall-campaigns/music-lollipop-demo-2026/product-checks', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Transfer-Encoding': 'chunked' },
+        body,
+      }),
+    );
+
+    expect(response.status).toBe(413);
+  });
+
   it('accepts a small JSON body', async () => {
     const response = await requestWithLength(
       '/v1/recall-campaigns/music-lollipop-demo-2026/product-checks',

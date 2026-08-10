@@ -22,7 +22,7 @@ describe.skipIf(!enabled)('DrizzleCampaignService (database integration)', () =>
   });
 
   it('returns the seeded published campaign with products and evidence rules', async () => {
-    const service = new DrizzleCampaignService(handle!.db);
+    const service = new DrizzleCampaignService(handle!);
     const campaign = await service.getPublishedCampaign({
       slug: 'music-lollipop-demo-2026',
       locale: 'en-US',
@@ -40,7 +40,7 @@ describe.skipIf(!enabled)('DrizzleCampaignService (database integration)', () =>
   });
 
   it('returns null for an unknown slug', async () => {
-    const service = new DrizzleCampaignService(handle!.db);
+    const service = new DrizzleCampaignService(handle!);
     const campaign = await service.getPublishedCampaign({
       slug: 'no-such-campaign',
       locale: 'en-US',

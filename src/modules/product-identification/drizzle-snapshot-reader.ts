@@ -1,6 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm';
 
-import type { Database } from '../../db/client.js';
+import type { DatabaseExecutor } from '../../db/client.js';
 import {
   campaignProductIdentifiers,
   campaignProductLots,
@@ -25,7 +25,7 @@ export interface CampaignSnapshotReader {
 }
 
 export class DrizzleCampaignSnapshotReader implements CampaignSnapshotReader {
-  constructor(private readonly db: Database) {}
+  constructor(private readonly db: DatabaseExecutor) {}
 
   async readPublished(campaignSlug: string): Promise<CampaignSnapshot | null> {
     const db = this.db;

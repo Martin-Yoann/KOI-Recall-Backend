@@ -50,7 +50,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   const config = dependencies.config ?? loadConfig();
   const registry = dependencies.registry ?? createDefaultRegistry(config);
   // T6.5 (O6): Problem Details type URIs carry the deployment's stable domain.
-  configureProblemTypeBase(config.PROBLEM_BASE_URL);
+  configureProblemTypeBase(`${config.PROBLEM_BASE_URL.replace(/\/$/, '')}/problems/`);
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, context) => {
       if (result.success) return;
@@ -129,8 +129,8 @@ export function createApp(dependencies: AppDependencies = {}) {
   registerDocumentRoutes(app, registry);
   registerClaimRoutes(app, registry);
   registerInternalJobRoutes(app, config.CRON_SECRET, {
-    drainOutbox: notImplementedJobHandler('Outbox processing'),
-    cleanupDrafts: notImplementedJobHandler('Draft cleanup'),
+    drainOutbox: registry.jobs?.drainOutbox ?? notImplementedJobHandler('Outbox processing'),
+    cleanupDrafts: registry.jobs?.cleanupDrafts ?? notImplementedJobHandler('Draft cleanup'),
   });
   registerWebhookRoutes(app, registry, config);
 

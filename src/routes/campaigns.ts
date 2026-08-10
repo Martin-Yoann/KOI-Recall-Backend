@@ -10,10 +10,7 @@ import { dependencyUnavailable, notFound } from './shared.js';
  * Registers the public campaign and product-check routes. Kept as a pure
  * registration function so app.ts only assembles middleware and wiring.
  */
-export function registerCampaignRoutes(
-  app: OpenAPIHono<AppEnv>,
-  registry: ApplicationRegistry,
-) {
+export function registerCampaignRoutes(app: OpenAPIHono<AppEnv>, registry: ApplicationRegistry) {
   app.openapi(getCampaignRoute, async (context) => {
     let campaign;
     try {

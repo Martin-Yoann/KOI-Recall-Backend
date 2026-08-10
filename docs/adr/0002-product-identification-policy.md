@@ -19,12 +19,12 @@
 
 ### 1.2 问题
 
-| 问题 | 后果 |
-|---|---|
-| 输入锁死为四字段 | 真实消费者无 lot/date、只有照片/UPC/订单号时无法识别 |
-| 两处独立 triage | Product Check 与 Claim 的判定可能漂移，难以审计一致 |
-| 硬编码 message | 消费者文案未经批准的 Localization 流程；且 `not_matched` 文案可能被误解为“安全” |
-| 输出无 reason code | 人工审核无法批量归类，运营队列不可执行 |
+| 问题               | 后果                                                                            |
+| ------------------ | ------------------------------------------------------------------------------- |
+| 输入锁死为四字段   | 真实消费者无 lot/date、只有照片/UPC/订单号时无法识别                            |
+| 两处独立 triage    | Product Check 与 Claim 的判定可能漂移，难以审计一致                             |
+| 硬编码 message     | 消费者文案未经批准的 Localization 流程；且 `not_matched` 文案可能被误解为“安全” |
+| 输出无 reason code | 人工审核无法批量归类，运营队列不可执行                                          |
 
 `evaluateProductCheck` 是纯函数这一点**是良好基础**——本 ADR 保留其纯函数特性，只升级它的输入/输出契约。
 
@@ -64,6 +64,7 @@ interface IdentificationResult {
 ```
 
 **关键约束**：
+
 - 多候选（`matchedVariantIds.length > 1`）→ 一律 `manual_review`，**不武断选一个**。
 - 无任何代码/收据/订单信息时返回 `manual_review`，**绝不拒绝**消费者继续。
 - **Policy 不输出人类文案**——只输出 `reasonCodes`；消费者可见 message 由已批准的 Campaign Localization 按 `messageKey` 渲染。
@@ -72,9 +73,9 @@ interface IdentificationResult {
 
 ### 2.2 调用约定
 
-| 调用方 | 用法 |
-|---|---|
-| Product Check 路由 | `identify()` 给消费者初步结果（非最终裁决） |
+| 调用方                                  | 用法                                                                                    |
+| --------------------------------------- | --------------------------------------------------------------------------------------- |
+| Product Check 路由                      | `identify()` 给消费者初步结果（非最终裁决）                                             |
 | Claim Submission (`DrizzleCaseService`) | 基于 **pinned Campaign Version** 再调一次 `identify()` 复核，确保提交时与发布时规则一致 |
 
 两者**必须调用同一 Policy 实例**，消除双 triage 漂移。Phase 1 先采集消费者提交的订单佐证，并可查询受控导入订单索引；**不提前承诺实时 Marketplace/OMS 连接**（实际出现第二个外部 Adapter 时，再建立远程 Port）。
@@ -95,11 +96,11 @@ src/modules/product-identification/
 
 matcher 现有的三个 message 常量下线，替换为稳定 reason code，例如：
 
-| 旧 message | 新 reasonCode | 含义 |
-|---|---|---|
-| `POTENTIAL_MATCH_MESSAGE` | `identifier.single_match` | 唯一命中 |
-| `MANUAL_REVIEW_MESSAGE` | `identifier.ambiguous_multi_match` 或 `input.insufficient_signals` | 多候选或信号不足 |
-| `NOT_MATCHED_MESSAGE` | `identifier.no_match` | 无命中 |
+| 旧 message                | 新 reasonCode                                                      | 含义             |
+| ------------------------- | ------------------------------------------------------------------ | ---------------- |
+| `POTENTIAL_MATCH_MESSAGE` | `identifier.single_match`                                          | 唯一命中         |
+| `MANUAL_REVIEW_MESSAGE`   | `identifier.ambiguous_multi_match` 或 `input.insufficient_signals` | 多候选或信号不足 |
+| `NOT_MATCHED_MESSAGE`     | `identifier.no_match`                                              | 无命中           |
 
 > 订单命中（`order_evidence` Profile）属于购买佐证维度，不再混入识别原因码——其结果体现在 `purchaseCorroboration` 与 `riskFlags`（O3.1）。
 
@@ -120,16 +121,19 @@ matcher 现有的三个 message 常量下线，替换为稳定 reason code，例
 ## 4. 后果（Consequences）
 
 ### 正面
+
 - Product Check 与 Claim 复用同一策略与 reason code，行为一致。
 - 消费者文案由版本化配置产生，matcher 不再硬编码英文。
 - 人工审核队列可按 reason code 批量归类（运营入口 O10 依赖于此）。
 
 ### 负面 / 代价
+
 - `evaluateProductCheck` 的现有调用方（`DrizzleProductCheckService`）与 CaseService 内联匹配逻辑都要改调用，是一次**集中的契约迁移**。
 - reason code 表需要与 Localization key 一同维护，新增一道（轻量的）配置映射。
 - 现有 matcher 的纯函数测试需改写为针对 `policy.identify()` 的测试（旧测试在新接口覆盖后删除）。
 
 ### 规约
+
 - `policy.ts` **禁止**直接读 DB——所有数据通过 `CampaignSnapshot` 参数传入。
 - `matchedVariantIds.length > 1` 时**禁止**返回 `potential_match`。
 - Policy 返回值**禁止**包含任何面向消费者的英文 message 字符串。
@@ -154,12 +158,12 @@ matcher 现有的三个 message 常量下线，替换为稳定 reason code，例
 
 ## 6. 替代方案（Alternatives Considered）
 
-| 方案 | 否决理由 |
-|---|---|
-| **A. 保留 matcher 纯函数，仅扩字段** | 仍留下 CaseService 内联 triage 双决策点；无法收拢 Evidence Profile、reason code |
-| **B. 把识别做成 CaseService 的私有方法** | Product Check 路由无法复用；违反“Product Check 与 Claim 同一策略”要求 |
-| **C. Policy 直接输出英文 message** | 绕过 Localization 审批；无法避免 `not_matched` 被误读为安全 |
-| **D. 多候选用相似度评分选最优** | 引入主观阈值；与“歧义是业务事实、转人工”的原则冲突，且无审批依据 |
+| 方案                                     | 否决理由                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------- |
+| **A. 保留 matcher 纯函数，仅扩字段**     | 仍留下 CaseService 内联 triage 双决策点；无法收拢 Evidence Profile、reason code |
+| **B. 把识别做成 CaseService 的私有方法** | Product Check 路由无法复用；违反“Product Check 与 Claim 同一策略”要求           |
+| **C. Policy 直接输出英文 message**       | 绕过 Localization 审批；无法避免 `not_matched` 被误读为安全                     |
+| **D. 多候选用相似度评分选最优**          | 引入主观阈值；与“歧义是业务事实、转人工”的原则冲突，且无审批依据                |
 
 ---
 

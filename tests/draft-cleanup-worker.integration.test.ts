@@ -2,12 +2,14 @@
 // Runs only when RUN_DB_INTEGRATION=true AND DATABASE_URL is set.
 import 'dotenv/config';
 
+import { randomUUID } from 'node:crypto';
+
 import { eq } from 'drizzle-orm';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import type { DatabaseHandle } from '../src/db/client.js';
 import { createDatabase } from '../src/db/client.js';
-import { documentUploads } from '../src/db/schema/index.js';
+import { claimDrafts, documentUploads } from '../src/db/schema/index.js';
 import { DrizzleDraftCleanupWorker } from '../src/jobs/draft-cleanup-worker.js';
 import type {
   PrivateBlobPort,
@@ -36,6 +38,18 @@ class RecordingBlob implements PrivateBlobPort {
   }
 }
 
+async function createDocumentOwner(): Promise<string> {
+  const draftId = randomUUID();
+  await handle!.db.insert(claimDrafts).values({
+    id: draftId,
+    campaignId: '2bdac8b0-73d8-4e38-a7e2-98fd5608788a',
+    campaignVersionId: '85eafab1-a5bd-4d57-a697-38bce973deab',
+    tokenHash: randomUUID(),
+    expiresAt: new Date(Date.now() + 60_000),
+  });
+  return draftId;
+}
+
 describe.skipIf(!enabled)('DrizzleDraftCleanupWorker (database integration)', () => {
   afterAll(async () => {
     await handle?.close();
@@ -49,10 +63,11 @@ describe.skipIf(!enabled)('DrizzleDraftCleanupWorker (database integration)', ()
   it('deletes an expired document and its blob object', async () => {
     const db = handle!.db;
     const blob = new RecordingBlob();
+    const draftId = await createDocumentOwner();
     const [inserted] = await db
       .insert(documentUploads)
       .values({
-        draftId: null,
+        draftId,
         caseId: null,
         category: 'product_photo',
         categorySlot: null,
@@ -79,15 +94,17 @@ describe.skipIf(!enabled)('DrizzleDraftCleanupWorker (database integration)', ()
     expect(row?.uploadStatus).toBe('deleted');
 
     await db.delete(documentUploads).where(eq(documentUploads.id, inserted!.id));
+    await db.delete(claimDrafts).where(eq(claimDrafts.id, draftId));
   });
 
   it('keeps deletion_pending when the blob deletion fails', async () => {
     const db = handle!.db;
     const blob = new RecordingBlob(true);
+    const draftId = await createDocumentOwner();
     const [inserted] = await db
       .insert(documentUploads)
       .values({
-        draftId: null,
+        draftId,
         caseId: null,
         category: 'proof_of_purchase',
         categorySlot: null,
@@ -113,5 +130,6 @@ describe.skipIf(!enabled)('DrizzleDraftCleanupWorker (database integration)', ()
     expect(row?.uploadStatus).toBe('deletion_pending');
 
     await db.delete(documentUploads).where(eq(documentUploads.id, inserted!.id));
+    await db.delete(claimDrafts).where(eq(claimDrafts.id, draftId));
   });
 });

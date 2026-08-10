@@ -32,6 +32,7 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 ### 2.1 阶段 M1 — 新增结构（双读起点）
 
 **数据库变更**：
+
 - 新增 `campaign_product_variants`、`campaign_product_identifiers`（见 ADR-0001 §2.1–2.2）。
 - `claimed_products` **新增** nullable 列：`matched_variant_ids uuid[]`、`identification_mode`、`reason_codes text[]`、`input_snapshot jsonb`。
 - **保留**旧 `shape/flavor/lotCode/dateCode` NOT NULL 与 `campaign_products.attributes`。
@@ -44,6 +45,7 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 ### 2.2 阶段 M2 — 契约切 reasonCodes（Product Check 优先）
 
 **契约变更**（`src/contracts/`）：
+
 - `productCheckRequestSchema` 改为 **discriminated input**：`order` / `product_identifiers` / `unknown` 三态。
 - `productCheckResponseSchema`：`message` → `messageKey` + `reasonCodes: string[]`，新增 `matchedVariantIds`。
 - Claim 契约此阶段**暂不动**，避免一次切两端。
@@ -55,6 +57,7 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 ### 2.3 阶段 M3 — 服务层条件化（Claim 跟进）
 
 **契约 + 服务变更**：
+
 - `claimedProductSchema`：`shape/flavor/lotCode/dateCode` 改为 `.optional()`；`consumer.mailingAddress` 改为可选；`documentIds` 改为 `0..N`；新增 discriminated input；订单字段归入 purchase evidence（默认选填、加密保存、HMAC 重复检测）。
 - `DrizzleCaseService` 服务层条件校验：
   - 读 `Remedy.requiresMailingAddress`（schema 已有，`index.ts:253`，服务层当前未用）→ Refund 免地址，Replacement 缺地址返回 422。
@@ -72,6 +75,7 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 **前置**：确认 M3 全量上线、历史数据回填完毕（旧 `attributes.shapes/flavors` 与旧 lot 列已映射到新 Variant/Identifier）。
 
 **变更**：
+
 - 移除 `DrizzleCaseService` 与 matcher 中所有旧字段读取。
 - 删除 `claimed_products` 的 `shape/flavor/lotCode/dateCode` 列。
 - 视需要给 `campaign_product_identifiers` 加业务层校验（**仍不加全局唯一**，见 ADR-0001）。
@@ -95,16 +99,19 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 ## 4. 后果（Consequences）
 
 ### 正面
+
 - 迁移期内生产始终可读可写，无停机窗口。
 - 每阶段对应优化规划的一个 Sprint，节奏可追踪。
 - M4 后代码与契约彻底脱离 Demo 四字段模型。
 
 ### 负面 / 代价
+
 - **双写/双读带来短期代码复杂度**：Importer 与 Seed 在 M1–M3 期间维护两套写入路径。
 - **过渡字段容错**：M3 服务层短暂接受旧 flat 字段，需要明确的弃用时间表，否则容错代码会长期残留。
 - **回填脚本是一次性运维成本**：M4 前需编写并验证回填脚本。
 
 ### 规约
+
 - **M4 删列前必须确认回填完成**——以回填校验报告为前置门禁，不可凭判断跳过。
 - 每个阶段的迁移由 `drizzle-kit generate` 生成，**禁止手写 SQL 迁移**绕过工具。
 - M2/M3 的契约变更必须同步重生成 `src/generated/toc-v1.d.ts` 并提交。
@@ -113,12 +120,12 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 
 ## 5. 验证（Verification）
 
-| 阶段 | 关键验证 |
-|---|---|
-| M1 | 新表 DDL 通过 `pnpm db:check`；Importer 双写后新旧读一致；S01 数据集在新结构可表达 |
-| M2 | `pnpm openapi:check` 绿；Product Check 三态路径 HTTP 测试通过；`reasonCodes` 字段存在 |
-| M3 | `RUN_DB_INTEGRATION=true` 下四条消费者路径集成测试通过；Remedy 地址条件校验生效 |
-| M4 | `grep` 确认旧字段无残留；回填校验报告归档；迁移正向应用与回滚均可在干净库上执行 |
+| 阶段 | 关键验证                                                                              |
+| ---- | ------------------------------------------------------------------------------------- |
+| M1   | 新表 DDL 通过 `pnpm db:check`；Importer 双写后新旧读一致；S01 数据集在新结构可表达    |
+| M2   | `pnpm openapi:check` 绿；Product Check 三态路径 HTTP 测试通过；`reasonCodes` 字段存在 |
+| M3   | `RUN_DB_INTEGRATION=true` 下四条消费者路径集成测试通过；Remedy 地址条件校验生效       |
+| M4   | `grep` 确认旧字段无残留；回填校验报告归档；迁移正向应用与回滚均可在干净库上执行       |
 
 每阶段都跑优化规划 §5 的回归验收场景（尤其“同一 SKU/UPC 多型号 → manual_review”）。
 
@@ -126,12 +133,12 @@ M1 新增（加表/加列，保留旧约束）  →  M2 契约切 reasonCodes
 
 ## 6. 替代方案（Alternatives Considered）
 
-| 方案 | 否决理由 |
-|---|---|
-| **A. 一次性大爆炸（big-bang）** | schema + 契约 + 服务层同时切，回滚几乎不可能；生产数据中断风险高 |
-| **B. 创建 v2 API，v1 冻结** | 当前尚无稳定外部消费者，过早引入 v2 仅为兼容虚构 Demo，徒增维护面（优化规划 §6 明示） |
-| **C. 只加新表，永不删旧列** | 长期双轨，代码与契约永远背 Demo 模型包袱，违反“不写死”的完成定义 |
-| **D. 先删列再加新结构** | 历史_case 立刻不可读，直接破坏数据可审计性 |
+| 方案                            | 否决理由                                                                              |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| **A. 一次性大爆炸（big-bang）** | schema + 契约 + 服务层同时切，回滚几乎不可能；生产数据中断风险高                      |
+| **B. 创建 v2 API，v1 冻结**     | 当前尚无稳定外部消费者，过早引入 v2 仅为兼容虚构 Demo，徒增维护面（优化规划 §6 明示） |
+| **C. 只加新表，永不删旧列**     | 长期双轨，代码与契约永远背 Demo 模型包袱，违反“不写死”的完成定义                      |
+| **D. 先删列再加新结构**         | 历史_case 立刻不可读，直接破坏数据可审计性                                            |
 
 > 若已确认存在第三方依赖现有 OpenAPI，则 **B（v2）转为必选**——届时先确认调用方，再按 v2 路径单独评估。当前默认值下选四阶段在线迁移。
 

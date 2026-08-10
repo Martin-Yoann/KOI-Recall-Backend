@@ -6,11 +6,11 @@
 
 ## 索引
 
-| ADR | 标题 | 状态 | 关联 |
-|---|---|---|---|
-| [0001](0001-product-identity-model.md) | 真实商品身份模型（Variant / Identifier 分层） | Accepted | O1 / T2 / D1 |
-| [0002](0002-product-identification-policy.md) | 统一商品识别策略 seam（ProductIdentificationPolicy） | Accepted | O2 / T3 / D2 |
-| [0003](0003-identity-migration-strategy.md) | 身份模型与条件式 Claim 的四阶段在线迁移策略 | Accepted | §6 / D1 / D3 / D4 |
+| ADR                                           | 标题                                                 | 状态     | 关联              |
+| --------------------------------------------- | ---------------------------------------------------- | -------- | ----------------- |
+| [0001](0001-product-identity-model.md)        | 真实商品身份模型（Variant / Identifier 分层）        | Accepted | O1 / T2 / D1      |
+| [0002](0002-product-identification-policy.md) | 统一商品识别策略 seam（ProductIdentificationPolicy） | Accepted | O2 / T3 / D2      |
+| [0003](0003-identity-migration-strategy.md)   | 身份模型与条件式 Claim 的四阶段在线迁移策略          | Accepted | §6 / D1 / D3 / D4 |
 
 三者的关系：**ADR-0001** 定义“数据是什么”，**ADR-0002** 定义“如何识别”，**ADR-0003** 定义“如何从现状过渡过去”。它们共同支撑优化规划 `docs/optimization-plan-v1.md` 的 Sprint 0–2。
 

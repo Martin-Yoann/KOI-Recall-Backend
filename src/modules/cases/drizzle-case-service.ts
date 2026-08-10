@@ -11,7 +11,6 @@ import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
   campaignEvidenceRequirements,
   campaignMessageTemplates,
-  campaignProductLots,
   campaignProducts,
   campaignRemedyOptions,
   campaignVersions,
@@ -38,7 +37,8 @@ import {
   isUniqueViolationWithConstraint,
   ResourceNotFoundError,
 } from '../../shared/errors.js';
-import { evaluateProductCheck } from '../product-checks/matcher.js';
+import { DrizzleCampaignSnapshotReader } from '../product-identification/drizzle-snapshot-reader.js';
+import { identify } from '../product-identification/policy.js';
 import { hashDraftToken } from '../claim-drafts/tokens.js';
 import {
   canonicalJson,
@@ -54,23 +54,9 @@ const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_UNIQUE_CONSTRAINT = 'idempotency_records_endpoint_key_uidx';
 const CASE_REFERENCE_ATTEMPTS = 3;
 /**
- * Maps a claimed product's intake mode + matcher result onto the versioned
- * Evidence Profile (ADR-0003 M3, D3). The profile decides which evidence
- * categories are required and whether proof of purchase can be waived.
- */
-function deriveEvidenceProfile(
-  mode: ClaimSubmissionRequest['products'][number]['identificationMode'],
-  result: 'potential_match' | 'not_matched' | 'manual_review',
-): 'exact_order_match' | 'order_evidence' | 'identifier_match' | 'manual_review' | 'incident' {
-  if (mode === 'purchase_evidence' && result === 'potential_match') return 'exact_order_match';
-  if (mode === 'purchase_evidence') return 'order_evidence';
-  if (mode === 'product_identifiers' && result === 'potential_match') return 'identifier_match';
-  return 'manual_review';
-}
-
-/**
  * O3.1/T4.4: purchase corroboration from the claimed product's purchase trail.
- * verified = order number + amount; partial = order number or receipt only;
+ * Phase 1 has no authoritative order index, so client-supplied details are
+ * partial at most; `verified` is reserved for a future server-side match.
  * not_provided = no purchase trail at all; conflict = input flagged inconsistent.
  */
 export function deriveCorroboration(
@@ -81,8 +67,7 @@ export function deriveCorroboration(
   const hasOrder = Boolean(evidence.orderNumber);
   const hasAmount = typeof evidence.amountPaidMinor === 'number' && evidence.amountPaidMinor > 0;
   const hasDocument = Boolean(evidence.receiptDocumentIds?.length);
-  if (hasOrder && hasAmount) return 'verified';
-  if (hasOrder || hasDocument) return 'partial';
+  if (hasOrder || hasAmount || hasDocument) return 'partial';
   return 'not_provided';
 }
 
@@ -132,6 +117,7 @@ export class DrizzleCaseService implements CaseService {
     private readonly crypto: SensitiveDataCryptoPort,
     private readonly referenceGenerator: () => string = generateCaseReference,
     private readonly beforeIdempotencyInsert: () => Promise<void> = () => Promise.resolve(),
+    private readonly malwareScanRequired = false,
   ) {}
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
@@ -255,40 +241,46 @@ export class DrizzleCaseService implements CaseService {
         );
       }
 
-      // Evaluate product identification BEFORE evidence rules so the Evidence
-      // Profile (T4.2) can relax requirements (e.g. exact order match waives
-      // proof of purchase). M3: claimed-product fields are optional recognition
-      // signals — the legacy four-field matcher gets empty strings for absent
-      // ones and stays total through the M1–M4 dual-read window.
-      const productLots = await tx
-        .select({
-          campaignProductId: campaignProductLots.campaignProductId,
-          lotCode: campaignProductLots.lotCode,
-          dateCode: campaignProductLots.dateCode,
-          eligibilityStatus: campaignProductLots.eligibilityStatus,
-        })
-        .from(campaignProductLots)
-        .where(inArray(campaignProductLots.campaignProductId, submittedProductIds));
-      const productEvaluations = command.body.products.map((product) => ({
-        product,
-        evaluation: evaluateProductCheck(
-          {
-            shape: product.shape ?? '',
-            flavor: product.flavor ?? '',
-            lotCode: product.lotCode ?? '',
-            dateCode: product.dateCode ?? '',
-          },
-          ownedProducts.filter((ownedProduct) => ownedProduct.id === product.campaignProductId),
-          productLots.filter((lot) => lot.campaignProductId === product.campaignProductId),
-        ),
-      }));
-      const evidenceProfiles = productEvaluations.map(({ product, evaluation }) =>
-        deriveEvidenceProfile(product.identificationMode, evaluation.result),
+      const campaignSnapshot = await new DrizzleCampaignSnapshotReader(tx).readPinned(
+        command.campaignSlug,
+        locked.campaignVersionId,
       );
-      // O3.1: an exact order match (or order evidence) may waive proof of
-      // purchase; a manual_review product still needs the manual profile.
-      const waivesProofOfPurchase = evidenceProfiles.some(
-        (profile) => profile === 'exact_order_match' || profile === 'order_evidence',
+      if (!campaignSnapshot) {
+        throw new ClaimValidationError('The pinned Campaign Version is not available.');
+      }
+      const productEvaluations = command.body.products.map((product) => {
+        const productSnapshot = {
+          ...campaignSnapshot,
+          products: campaignSnapshot.products.filter(
+            (snapshotProduct) => snapshotProduct.id === product.campaignProductId,
+          ),
+          lots: campaignSnapshot.lots.filter((lot) => lot.productId === product.campaignProductId),
+        };
+        return {
+          product,
+          evaluation: identify(
+            {
+              mode: product.identificationMode,
+              campaignSlug: command.campaignSlug,
+              signals: {
+                ...(product.identifiers
+                  ? { identifiers: product.identifiers.map((identifier) => identifier.value) }
+                  : {}),
+                ...(product.shape ? { shape: product.shape } : {}),
+                ...(product.flavor ? { flavor: product.flavor } : {}),
+                ...(product.lotCode ? { lotCode: product.lotCode } : {}),
+                ...(product.dateCode ? { dateCode: product.dateCode } : {}),
+                purchaseEvidence: product.purchaseEvidence,
+              },
+            },
+            productSnapshot,
+          ),
+        };
+      });
+      // Only a real, authoritative order-index match can waive proof for every
+      // product in the claim. Self-reported purchase evidence never does.
+      const waivesProofOfPurchase = productEvaluations.every(
+        ({ evaluation }) => evaluation.requiredEvidenceProfile === 'exact_order_match',
       );
 
       const selectedDocuments = await tx
@@ -311,11 +303,12 @@ export class DrizzleCaseService implements CaseService {
           (document) =>
             document.draftId !== locked.draftId ||
             document.uploadStatus !== 'verified' ||
-            document.scanStatus !== 'clean',
+            (document.scanStatus !== 'clean' &&
+              (this.malwareScanRequired || document.scanStatus !== 'not_run')),
         )
       ) {
         throw new ClaimValidationError(
-          'Every selected Document must be verified, scan-clean, and owned by the active Claim Draft.',
+          'Every selected Document must be verified, satisfy the configured malware-scan policy, and be owned by the active Claim Draft.',
         );
       }
 
@@ -416,21 +409,16 @@ export class DrizzleCaseService implements CaseService {
           orderNumberLookupHash: encrypted.products[index]?.orderNumberLookupHash,
           checkResult: evaluation.result,
           // M3/T4.1 audit columns (T2): how the product was identified and why.
-          // Stable reason codes only — never the legacy human message.
+          matchedVariantIds: evaluation.matchedVariantIds,
           identificationMode: product.identificationMode,
-          reasonCodes:
-            evaluation.result === 'potential_match'
-              ? ['identifier.single_match']
-              : evaluation.result === 'manual_review'
-                ? ['input.insufficient_signals']
-                : ['identifier.no_match'],
+          reasonCodes: evaluation.reasonCodes,
           inputSnapshot: {
             shape: product.shape ?? null,
             flavor: product.flavor ?? null,
             lotCode: product.lotCode ?? null,
             dateCode: product.dateCode ?? null,
             identifiers: product.identifiers ?? null,
-            purchaseEvidence: product.purchaseEvidence ?? null,
+            purchaseEvidenceProvided: product.purchaseEvidence !== undefined,
           },
           // O3.1/T4.4: persist the AEAD-encrypted purchase trail and its
           // normalized HMAC; corroboration/risk flags are audited alongside.
@@ -438,8 +426,8 @@ export class DrizzleCaseService implements CaseService {
           purchaseEvidenceKeyVersion:
             encrypted.products[index]?.purchaseEvidence?.keyVersion ?? null,
           purchaseEvidenceLookupHash: encrypted.products[index]?.purchaseEvidenceLookupHash ?? null,
-          purchaseCorroboration: deriveCorroboration(product),
-          riskFlags: deriveRiskFlags(product),
+          purchaseCorroboration: evaluation.purchaseCorroboration ?? deriveCorroboration(product),
+          riskFlags: evaluation.riskFlags ?? deriveRiskFlags(product),
         })),
       );
       await tx.insert(caseConsents).values(
@@ -670,16 +658,36 @@ export class DrizzleCaseService implements CaseService {
             purchaseEvidence
               ? this.crypto.encrypt(
                   canonicalJson({
-                    orderNumber: purchaseEvidence.orderNumber,
-                    platform: purchaseEvidence.platform,
-                    sellerOrStore: purchaseEvidence.sellerOrStore,
-                    purchaseDate: purchaseEvidence.purchaseDate,
-                    lineItemTitle: purchaseEvidence.lineItemTitle,
-                    lineItemSku: purchaseEvidence.lineItemSku,
-                    quantity: purchaseEvidence.quantity,
-                    amountPaidMinor: purchaseEvidence.amountPaidMinor,
-                    currency: purchaseEvidence.currency,
-                    receiptDocumentIds: purchaseEvidence.receiptDocumentIds,
+                    ...(purchaseEvidence.orderNumber !== undefined
+                      ? { orderNumber: purchaseEvidence.orderNumber }
+                      : {}),
+                    ...(purchaseEvidence.platform !== undefined
+                      ? { platform: purchaseEvidence.platform }
+                      : {}),
+                    ...(purchaseEvidence.sellerOrStore !== undefined
+                      ? { sellerOrStore: purchaseEvidence.sellerOrStore }
+                      : {}),
+                    ...(purchaseEvidence.purchaseDate !== undefined
+                      ? { purchaseDate: purchaseEvidence.purchaseDate }
+                      : {}),
+                    ...(purchaseEvidence.lineItemTitle !== undefined
+                      ? { lineItemTitle: purchaseEvidence.lineItemTitle }
+                      : {}),
+                    ...(purchaseEvidence.lineItemSku !== undefined
+                      ? { lineItemSku: purchaseEvidence.lineItemSku }
+                      : {}),
+                    ...(purchaseEvidence.quantity !== undefined
+                      ? { quantity: purchaseEvidence.quantity }
+                      : {}),
+                    ...(purchaseEvidence.amountPaidMinor !== undefined
+                      ? { amountPaidMinor: purchaseEvidence.amountPaidMinor }
+                      : {}),
+                    ...(purchaseEvidence.currency !== undefined
+                      ? { currency: purchaseEvidence.currency }
+                      : {}),
+                    ...(purchaseEvidence.receiptDocumentIds !== undefined
+                      ? { receiptDocumentIds: purchaseEvidence.receiptDocumentIds }
+                      : {}),
                   }),
                 )
               : Promise.resolve(undefined),

@@ -1,4 +1,5 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import { Webhook } from 'svix';
 
 import type { ApplicationRegistry } from '../composition.js';
 import type { AppConfig } from '../config/env.js';
@@ -98,18 +99,22 @@ export function registerWebhookRoutes(
   });
 
   app.post('/webhooks/resend', async (context) => {
-    // T5.3/O5: validate the shared secret. Resend signs webhooks; we check the
-    // configured secret header so unauthenticated callers cannot mutate state.
-    const presented =
-      context.req.header('X-Resend-Webhook-Secret') ??
-      context.req.header('Authorization')?.replace(/^Bearer\s+/i, '');
-    if (config.RESEND_WEBHOOK_SECRET === undefined || presented !== config.RESEND_WEBHOOK_SECRET) {
+    const rawBody = await context.req.text();
+    const webhookId = context.req.header('svix-id');
+    const webhookTimestamp = context.req.header('svix-timestamp');
+    const webhookSignature = context.req.header('svix-signature');
+    if (
+      config.RESEND_WEBHOOK_SECRET === undefined ||
+      webhookId === undefined ||
+      webhookTimestamp === undefined ||
+      webhookSignature === undefined
+    ) {
       return context.json(
         {
           type: problemType('unauthorized'),
           title: 'Unauthorized',
           status: 401,
-          detail: 'A valid Resend webhook secret is required.',
+          detail: 'A valid Resend webhook signature is required.',
           requestId: context.get('requestId'),
         },
         401,
@@ -119,14 +124,18 @@ export function registerWebhookRoutes(
 
     let parsed: Record<string, unknown>;
     try {
-      parsed = await context.req.json();
+      parsed = new Webhook(config.RESEND_WEBHOOK_SECRET).verify(rawBody, {
+        'svix-id': webhookId,
+        'svix-timestamp': webhookTimestamp,
+        'svix-signature': webhookSignature,
+      }) as Record<string, unknown>;
     } catch {
       return context.json(
         {
           type: problemType('validation-error'),
           title: 'Invalid Request',
           status: 400,
-          detail: 'The webhook payload was not valid JSON.',
+          detail: 'The webhook payload could not be verified.',
           requestId: context.get('requestId'),
         },
         400,
@@ -148,7 +157,7 @@ export function registerWebhookRoutes(
 
     try {
       await registry.services.communications.recordDeliveryEvent({
-        providerEventId: deriveProviderEventId(parsed),
+        providerEventId: webhookId,
         providerMessageId,
         eventType: eventType as never,
         payload: parsed,
