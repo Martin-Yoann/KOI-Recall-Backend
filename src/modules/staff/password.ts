@@ -81,6 +81,7 @@ export function needsRehash(envelope: string): boolean {
 function validatePasswordShape(password: string): void {
   if (typeof password !== 'string') throw new Error('Password must be a string.');
   if (password.length === 0) throw new Error('Password must not be empty.');
+  if (password.length < 12) throw new Error('Password must contain at least 12 characters.');
   if (password.length > 1024) throw new Error('Password must not exceed 1024 characters.');
 }
 

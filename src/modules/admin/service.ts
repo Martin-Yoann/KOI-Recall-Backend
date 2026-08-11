@@ -93,5 +93,9 @@ export interface AdminService {
    * ADR-0004 B8: transition a case status. Throws ClaimValidationError on an
    * illegal transition; ResourceNotFoundError if the case does not exist.
    */
-  transitionCaseStatus(caseReference: string, nextStatus: string): Promise<void>;
+  transitionCaseStatus(
+    caseReference: string,
+    nextStatus: string,
+    actorUserId: string,
+  ): Promise<void>;
 }

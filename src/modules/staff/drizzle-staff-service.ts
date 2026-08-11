@@ -29,6 +29,9 @@ const toStaffUser = (row: typeof staffUsers.$inferSelect): StaffUser => ({
   lastLoginAt: row.lastLoginAt ? row.lastLoginAt.toISOString() : null,
 });
 
+export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
+export const ACCOUNT_LOCK_DURATION_MS = 15 * 60 * 1000;
+
 /**
  * Drizzle-backed staff + session service. Session plaintext tokens are minted
  * here and returned once; only their SHA-256 digest is persisted, mirroring
@@ -53,12 +56,27 @@ export class DrizzleStaffService implements StaffService {
       .limit(1);
     // No such user, disabled, or no password set (future SSO-only): reject uniformly.
     if (!user || user.status !== 'active' || !user.passwordHash) return null;
+    const now = new Date();
+    if (user.lockedUntil && user.lockedUntil.getTime() > now.getTime()) return null;
 
     const ok = await verifyPassword(password, user.passwordHash);
-    if (!ok) return null;
+    if (!ok) {
+      const previousAttempts = user.lockedUntil ? 0 : user.failedLoginAttempts;
+      const failedLoginAttempts = previousAttempts + 1;
+      await this.db
+        .update(staffUsers)
+        .set({
+          failedLoginAttempts,
+          lockedUntil:
+            failedLoginAttempts >= MAX_FAILED_LOGIN_ATTEMPTS
+              ? new Date(now.getTime() + ACCOUNT_LOCK_DURATION_MS)
+              : null,
+        })
+        .where(eq(staffUsers.id, user.id));
+      return null;
+    }
 
     const token = generateSessionToken();
-    const now = new Date();
     const expiresAt = new Date(now.getTime() + DEFAULT_SESSION_LIFETIME_MS);
     const returning = await this.db
       .insert(staffSessions)
@@ -73,7 +91,10 @@ export class DrizzleStaffService implements StaffService {
       })
       .returning({ id: staffSessions.id });
     const session = returning[0];
-    await this.db.update(staffUsers).set({ lastLoginAt: now }).where(eq(staffUsers.id, user.id));
+    await this.db
+      .update(staffUsers)
+      .set({ lastLoginAt: now, failedLoginAttempts: 0, lockedUntil: null })
+      .where(eq(staffUsers.id, user.id));
 
     if (!session) return null;
     return { token, sessionId: session.id, expiresAt: expiresAt.toISOString() };
@@ -146,13 +167,13 @@ export class DrizzleStaffService implements StaffService {
     if (!existing || existing.status !== 'active') return null;
     if (existing.expiresAt.getTime() <= Date.now()) return null;
 
-    // Rotate: revoke the old token, issue a fresh one with a reset ceiling.
+    // Rotate the token without extending the immutable hard expiry ceiling.
     const token = generateSessionToken();
     const now = new Date();
-    const expiresAt = new Date(now.getTime() + DEFAULT_SESSION_LIFETIME_MS);
+    const expiresAt = existing.expiresAt;
     await this.db
       .update(staffSessions)
-      .set({ tokenHash: hashSessionToken(token), issuedAt: now, expiresAt, lastUsedAt: now })
+      .set({ tokenHash: hashSessionToken(token), expiresAt, lastUsedAt: now })
       .where(eq(staffSessions.id, sessionId));
     return { token, sessionId, expiresAt: expiresAt.toISOString() };
   }

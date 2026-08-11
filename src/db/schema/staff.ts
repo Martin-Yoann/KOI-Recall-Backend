@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   check,
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -69,6 +70,8 @@ export const staffUsers = pgTable(
     passwordHash: text('password_hash'),
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true, mode: 'date' }),
     lastLoginAt: timestamp('last_login_at', { withTimezone: true, mode: 'date' }),
+    failedLoginAttempts: integer('failed_login_attempts').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true, mode: 'date' }),
     ...timestamps,
   },
   (table) => [uniqueIndex('staff_users_email_lookup_hash_uidx').on(table.emailLookupHash)],

@@ -147,6 +147,17 @@ function makeAuditFake(): AuditService & { events: AuditEvent[] } {
   };
 }
 
+function makeFailingAuditFake(): AuditService {
+  return {
+    record() {
+      return Promise.reject(new Error('audit unavailable'));
+    },
+    query() {
+      return Promise.resolve([]);
+    },
+  };
+}
+
 function makeAdminFake(): AdminService & { detailTierByRef: Map<string, 'masked' | 'raw'> } {
   const detailTierByRef = new Map<string, 'masked' | 'raw'>();
   return {
@@ -182,6 +193,18 @@ function makeAdminFake(): AdminService & { detailTierByRef: Map<string, 'masked'
   };
 }
 
+function makeAdminTransactions(admin: AdminService, staff: StaffService, audit: AuditService) {
+  return {
+    run: <T>(
+      work: (services: {
+        admin: AdminService;
+        staff: StaffService;
+        audit: AuditService;
+      }) => Promise<T>,
+    ) => work({ admin, staff, audit }),
+  };
+}
+
 function appWith(opts: {
   staff?: StaffService;
   audit?: AuditService;
@@ -195,6 +218,11 @@ function appWith(opts: {
       ...(opts.admin ? { admin: opts.admin } : {}),
       ...(opts.staff ? { staff: opts.staff } : {}),
       ...(opts.audit ? { audit: opts.audit } : {}),
+      ...(opts.admin && opts.staff && opts.audit
+        ? {
+            adminTransactions: makeAdminTransactions(opts.admin, opts.staff, opts.audit),
+          }
+        : {}),
     },
     platform: { ...base.platform, crypto: opts.crypto ?? cryptoFake },
   };
@@ -221,6 +249,32 @@ describe('B-end RBAC (ADR-0004)', () => {
       headers: { Authorization: `Bearer ${ADMIN_KEY}` },
     });
     expect(res.status).toBe(200);
+  });
+
+  it('rejects the legacy ADMIN_API_KEY on net-new staff-management routes', async () => {
+    const app = appWith({
+      admin: makeAdminFake(),
+      staff: makeStaffFake(),
+      audit: makeAuditFake(),
+    });
+    const response = await app.request('/admin/staff', {
+      headers: { Authorization: `Bearer ${ADMIN_KEY}` },
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects the legacy ADMIN_API_KEY on net-new raw-PII routes', async () => {
+    const app = appWith({
+      admin: makeAdminFake(),
+      staff: makeStaffFake(),
+      audit: makeAuditFake(),
+    });
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P', {
+      headers: { Authorization: `Bearer ${ADMIN_KEY}` },
+    });
+
+    expect(response.status).toBe(401);
   });
 
   it('resolves a staff session token and enforces role permissions', async () => {
@@ -269,6 +323,60 @@ describe('B-end RBAC (ADR-0004)', () => {
     expect(denied?.actorUserId).toBe(viewer.id);
   });
 
+  it('audits logout in the same authenticated session flow', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    const user = await staff.createStaffUser({
+      email: 'logout@example.com',
+      displayName: 'Logout',
+      role: 'viewer',
+      password: 'password1234',
+    });
+    const token = (await staff.login('logout@example.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit });
+
+    const response = await app.request('/admin/sessions', {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(204);
+    expect(audit.events).toContainEqual(
+      expect.objectContaining({
+        actorUserId: user.id,
+        action: 'session.revoke',
+        outcome: 'success',
+      }),
+    );
+  });
+
+  it('audits session refresh', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    const user = await staff.createStaffUser({
+      email: 'refresh@example.com',
+      displayName: 'Refresh',
+      role: 'viewer',
+      password: 'password1234',
+    });
+    const token = (await staff.login('refresh@example.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit });
+
+    const response = await app.request('/admin/sessions/refresh', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(200);
+    expect(audit.events).toContainEqual(
+      expect.objectContaining({
+        actorUserId: user.id,
+        action: 'session.refresh',
+        outcome: 'success',
+      }),
+    );
+  });
+
   it('returns masked PII for a reviewer and raw PII for compliance, with raw-view audit', async () => {
     const staff = makeStaffFake();
     const admin = makeAdminFake();
@@ -314,6 +422,117 @@ describe('B-end RBAC (ADR-0004)', () => {
     expect(compBody.case.consumer.piiTier).toBe('raw');
     expect(compBody.case.consumer.firstName).toBe('Jane');
     expect(audit.events.filter((e) => e.action === 'pii.view_raw')).toHaveLength(1);
+  });
+
+  it('fails closed when the raw-PII audit write fails', async () => {
+    const staff = makeStaffFake();
+    await staff.createStaffUser({
+      email: 'compliance@example.com',
+      displayName: 'Compliance',
+      role: 'compliance',
+      password: 'password1234',
+    });
+    const token = (await staff.login('compliance@example.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit: makeFailingAuditFake() });
+
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(500);
+  });
+
+  it('fails closed when the assignment audit write fails', async () => {
+    const staff = makeStaffFake();
+    await staff.createStaffUser({
+      email: 'reviewer@example.com',
+      displayName: 'Reviewer',
+      role: 'reviewer',
+      password: 'password1234',
+    });
+    const token = (await staff.login('reviewer@example.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit: makeFailingAuditFake() });
+
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/assign', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ staffUserId: null }),
+    });
+
+    expect(response.status).toBe(500);
+  });
+
+  it('rejects an invalid staff role before calling the database service', async () => {
+    const staff = makeStaffFake();
+    await staff.createStaffUser({
+      email: 'admin@example.com',
+      displayName: 'Admin',
+      role: 'administrator',
+      password: 'password1234',
+    });
+    const token = (await staff.login('admin@example.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit: makeAuditFake() });
+
+    const response = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'new@example.com',
+        displayName: 'New',
+        role: 'superuser',
+        password: 'password1234',
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    expect(staff.users.size).toBe(1);
+  });
+
+  it('rejects an invalid staff status before calling the database service', async () => {
+    const staff = makeStaffFake();
+    const adminUser = await staff.createStaffUser({
+      email: 'admin-status@example.com',
+      displayName: 'Admin',
+      role: 'administrator',
+      password: 'password1234',
+    });
+    const token = (await staff.login('admin-status@example.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit: makeAuditFake() });
+
+    const response = await app.request(`/admin/staff/${adminUser.id}`, {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'deleted' }),
+    });
+
+    expect(response.status).toBe(422);
+    expect(staff.users.get(adminUser.id)?.status).toBe('active');
+  });
+
+  it('rejects a staff password shorter than twelve characters', async () => {
+    const staff = makeStaffFake();
+    await staff.createStaffUser({
+      email: 'admin-password@example.com',
+      displayName: 'Admin',
+      role: 'administrator',
+      password: 'password1234',
+    });
+    const token = (await staff.login('admin-password@example.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit: makeAuditFake() });
+
+    const response = await app.request('/admin/staff', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'short-password@example.com',
+        displayName: 'Short Password',
+        role: 'viewer',
+        password: 'too-short',
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    expect(staff.users.size).toBe(1);
   });
 
   it('lets an administrator read audit events and manage staff', async () => {

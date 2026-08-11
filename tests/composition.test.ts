@@ -4,6 +4,7 @@ import {
   createApplicationRegistry,
   createDefaultRegistry,
   createPlaceholderRegistry,
+  type ApplicationRegistry,
 } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
 import type { Database, DatabaseHandle } from '../src/db/client.js';
@@ -123,6 +124,43 @@ describe('application composition', () => {
     expect(registry.platform.crypto).toBe(crypto);
     expect(registry.jobs?.drainOutbox).toBeTypeOf('function');
     expect(registry.jobs?.cleanupDrafts).toBeTypeOf('function');
+  });
+
+  it('runs admin writes through the database transaction boundary', async () => {
+    let transactionCalls = 0;
+    const handle: DatabaseHandle = {
+      ...fakeHandle,
+      transaction: async (work) => {
+        transactionCalls += 1;
+        return work({} as never);
+      },
+    };
+    const crypto = new NodeSensitiveDataCrypto(encryptionKey, hashPepper);
+    const registry = createApplicationRegistry(handle, undefined, crypto);
+    const transactions = (
+      registry.services as ApplicationRegistry['services'] & {
+        adminTransactions?: {
+          run<T>(
+            work: (services: { admin: unknown; staff: unknown; audit: unknown }) => Promise<T>,
+          ): Promise<T>;
+        };
+      }
+    ).adminTransactions;
+
+    const result = await transactions?.run((services) =>
+      Promise.resolve({
+        admin: services.admin.constructor.name,
+        staff: services.staff.constructor.name,
+        audit: services.audit.constructor.name,
+      }),
+    );
+
+    expect(transactionCalls).toBe(1);
+    expect(result).toEqual({
+      admin: 'DrizzleAdminService',
+      staff: 'DrizzleStaffService',
+      audit: 'DrizzleAuditService',
+    });
   });
 
   it.each([

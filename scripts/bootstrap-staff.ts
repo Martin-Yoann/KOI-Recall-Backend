@@ -5,6 +5,7 @@ import { createInterface } from 'node:readline';
 import { createDatabase } from '../src/db/client.js';
 import { loadConfig } from '../src/config/env.js';
 import { DrizzleStaffService } from '../src/modules/staff/drizzle-staff-service.js';
+import { promptSecret } from '../src/modules/staff/terminal-prompt.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 
 /**
@@ -21,15 +22,11 @@ import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-d
  * environment (the same secrets the running API uses).
  */
 
-function prompt(question: string, { secret = false } = {}): Promise<string> {
+function prompt(question: string): Promise<string> {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
     rl.question(question, (answer) => {
       rl.close();
-      if (secret) {
-        // Emit a newline so the next prompt is not glued to the masked line.
-        process.stdout.write('\n');
-      }
       resolve(answer.trim());
     });
   });
@@ -51,7 +48,7 @@ async function main() {
     throw new Error('That does not look like an email address.');
   }
   const displayName = await prompt('Display name: ');
-  const password = await prompt('Password (min 12 chars): ', { secret: true });
+  const password = await promptSecret('Password (min 12 chars): ');
   if (password.length < 12) {
     throw new Error('Password must be at least 12 characters.');
   }

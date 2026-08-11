@@ -34,7 +34,7 @@ describe('staff password (node:crypto.scrypt)', () => {
   });
 
   it('is constant-time-ish: wrong-password failure does not throw', async () => {
-    const envelope = await hashPassword('something');
+    const envelope = await hashPassword('something-secure');
     // Just ensure it resolves to false rather than rejecting — timing is
     // delegated to timingSafeEqual on the derived digest.
     await expect(verifyPassword('nope', envelope)).resolves.toBe(false);
@@ -42,6 +42,10 @@ describe('staff password (node:crypto.scrypt)', () => {
 
   it('rejects empty password at hash time', async () => {
     await expect(hashPassword('')).rejects.toThrow(/empty/i);
+  });
+
+  it('rejects passwords shorter than twelve characters at hash time', async () => {
+    await expect(hashPassword('too-short')).rejects.toThrow(/12/i);
   });
 
   it('rejects implausibly long password at hash time', async () => {

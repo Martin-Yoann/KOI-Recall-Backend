@@ -62,6 +62,15 @@ describe('request body limit (T6.2/O6)', () => {
     expect(response.status).toBe(501);
   });
 
+  it('rejects an oversized staff login body with 413', async () => {
+    const response = await requestWithLength(
+      '/admin/sessions',
+      JSON.stringify({ email: 'staff@example.com', password: 'x'.repeat(300 * 1024) }),
+    );
+
+    expect(response.status).toBe(413);
+  });
+
   it('rejects a webhook body larger than the webhook limit with 413', async () => {
     const oversizedPayload = { data: 'x'.repeat(600 * 1024) }; // ~600 KiB past 512 KiB cap
     const response = await requestWithLength(

@@ -62,6 +62,7 @@ export const RATE_LIMIT_QUOTAS: Record<string, number> = {
   claims: 20,
   documents: 120,
   webhooks: 200,
+  'admin-login': 5,
   other: 60,
 };
 
@@ -111,10 +112,20 @@ export class InMemoryRateLimiter implements RateLimiter {
   }
 }
 
-export function rateLimitMiddleware(rateLimiter: RateLimiter) {
+export function rateLimitMiddleware(
+  rateLimiter: RateLimiter,
+  options: {
+    category?: string;
+    methods?: readonly string[];
+  } = {},
+) {
   return createMiddleware<AppEnv>(async (context, next) => {
+    if (options.methods && !options.methods.includes(context.req.method)) {
+      await next();
+      return;
+    }
     const pathname = new URL(context.req.url).pathname;
-    const category = routeCategoryForPath(pathname);
+    const category = options.category ?? routeCategoryForPath(pathname);
     const key = `${category}:${deriveRateLimitKey(
       context.get('clientSource'),
       category,

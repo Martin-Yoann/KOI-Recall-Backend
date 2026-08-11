@@ -1,7 +1,12 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 
-import type { Database } from '../../db/client.js';
-import { caseConsumers, recallCases, reportabilityReviews } from '../../db/schema/index.js';
+import type { DatabaseExecutor } from '../../db/client.js';
+import {
+  caseConsumers,
+  caseEvents,
+  recallCases,
+  reportabilityReviews,
+} from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import { piiTierFor } from '../staff/permissions.js';
 import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
@@ -46,7 +51,7 @@ const QUEUE_STATUS: Record<AdminQueue, readonly CaseStatus[]> = {
  */
 export class DrizzleAdminService implements AdminService {
   constructor(
-    private readonly db: Database,
+    private readonly db: DatabaseExecutor,
     private readonly crypto: SensitiveDataCryptoPort,
   ) {}
 
@@ -164,44 +169,6 @@ export class DrizzleAdminService implements AdminService {
     row: typeof caseConsumers.$inferSelect,
     tier: 'masked' | 'raw',
   ): Promise<CaseDetailConsumer> {
-    if (tier === 'raw') {
-      const firstName = await this.crypto.decrypt({
-        value: row.firstNameEncrypted,
-        keyVersion: row.keyVersion,
-      });
-      const lastName = await this.crypto.decrypt({
-        value: row.lastNameEncrypted,
-        keyVersion: row.keyVersion,
-      });
-      const email = await this.crypto.decrypt({
-        value: row.emailEncrypted,
-        keyVersion: row.keyVersion,
-      });
-      const phone = row.phoneEncrypted
-        ? await this.crypto.decrypt({ value: row.phoneEncrypted, keyVersion: row.keyVersion })
-        : undefined;
-      const address = row.addressEncrypted
-        ? await this.crypto.decrypt({ value: row.addressEncrypted, keyVersion: row.keyVersion })
-        : undefined;
-      let parsedAddress: Record<string, unknown> | undefined;
-      if (address) {
-        try {
-          parsedAddress = JSON.parse(address) as Record<string, unknown>;
-        } catch {
-          parsedAddress = { raw: address };
-        }
-      }
-      return {
-        piiTier: 'raw',
-        firstName,
-        lastName,
-        email,
-        phone,
-        countryCode: row.countryCode,
-        address: parsedAddress,
-      };
-    }
-    // Masked tier: still decrypt, then mask — masking is cheap and reflects real data.
     const firstName = await this.crypto.decrypt({
       value: row.firstNameEncrypted,
       keyVersion: row.keyVersion,
@@ -228,6 +195,18 @@ export class DrizzleAdminService implements AdminService {
         parsedAddress = { raw: address };
       }
     }
+
+    if (tier === 'raw') {
+      return {
+        piiTier: 'raw',
+        firstName,
+        lastName,
+        email,
+        phone,
+        countryCode: row.countryCode,
+        address: parsedAddress,
+      };
+    }
     return {
       piiTier: 'masked',
       firstName: maskName(firstName),
@@ -249,7 +228,11 @@ export class DrizzleAdminService implements AdminService {
     if (result.length === 0) throw new ResourceNotFoundError('Case was not found.');
   }
 
-  async transitionCaseStatus(caseReference: string, nextStatus: string): Promise<void> {
+  async transitionCaseStatus(
+    caseReference: string,
+    nextStatus: string,
+    actorUserId: string,
+  ): Promise<void> {
     const db = this.db;
     const [caseRow] = await db
       .select({ id: recallCases.id, status: recallCases.status })
@@ -268,5 +251,12 @@ export class DrizzleAdminService implements AdminService {
       .update(recallCases)
       .set({ status: nextStatus as never })
       .where(eq(recallCases.id, caseRow.id));
+    await db.insert(caseEvents).values({
+      caseId: caseRow.id,
+      eventType: 'case.status.transitioned',
+      actorType: 'staff',
+      actorId: actorUserId,
+      data: { previousStatus: caseRow.status, nextStatus },
+    });
   }
 }

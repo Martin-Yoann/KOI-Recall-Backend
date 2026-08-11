@@ -1,10 +1,10 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 
-import type { ApplicationRegistry } from '../composition.js';
+import type { AdminTransactionRunner, ApplicationRegistry } from '../composition.js';
 import type { AuditService } from '../modules/staff/audit-service.js';
 import type { Permission } from '../modules/staff/permissions.js';
-import { hasPermission } from '../modules/staff/permissions.js';
+import { hasPermission, STAFF_ROLES } from '../modules/staff/permissions.js';
 import type { StaffRole } from '../modules/staff/permissions.js';
 import type { StaffService } from '../modules/staff/service.js';
 import type { StaffPrincipal } from '../modules/staff/service.js';
@@ -12,7 +12,8 @@ import type { SensitiveDataCryptoPort } from '../platform/crypto/port.js';
 import type { AppEnv } from '../middleware/request-context.js';
 import { requestIpHash, requestUserAgentHash } from '../middleware/staff-auth.js';
 import { createStaffAuthMiddleware } from '../middleware/staff-auth.js';
-import { problemType } from '../shared/errors.js';
+import { NotImplementedServiceError, problemType } from '../shared/errors.js';
+import { consoleSafeLogger } from '../platform/observability/logger.js';
 
 /**
  * ADR-0004: the B-end (internal-operations) surface. M2 dual-mode: a request
@@ -69,28 +70,49 @@ async function requirePermission(
   context: Context<AppEnv>,
   registry: ApplicationRegistry,
   permission: Permission,
+  options: { allowLegacy?: boolean } = {},
 ): Promise<StaffPrincipal | Response> {
   const principal = context.get('principal');
   if (!principal) {
     return unauthorized(context);
   }
+  if (context.get('legacyAdminKey')) {
+    if (!options.allowLegacy) return unauthorized(context);
+    consoleSafeLogger.info('Deprecated legacy admin key used.', {
+      requestId: context.get('requestId'),
+      method: context.req.method,
+      path: new URL(context.req.url).pathname,
+    });
+    return principal;
+  }
   if (!hasPermission(principal.role, permission)) {
-    // Record the denied attempt for accountability (best-effort; never blocks the 403).
-    await registry.services.audit
-      ?.record({
-        actorUserId: principal.userId,
-        actorRole: principal.role,
-        action: permission,
-        resourceType: 'permission',
-        resourceId: permission,
-        outcome: 'denied',
-        reasonCode: 'insufficient_role',
-        ipAddressHash: await requestIpHash(context, registry.platform.crypto),
-      })
-      .catch(() => undefined);
+    const audit = requireAuditService(registry);
+    await audit.record({
+      actorUserId: principal.userId,
+      actorRole: principal.role,
+      action: permission,
+      resourceType: 'permission',
+      resourceId: permission,
+      outcome: 'denied',
+      reasonCode: 'insufficient_role',
+      ipAddressHash: await requestIpHash(context, registry.platform.crypto),
+      userAgentHash: await requestUserAgentHash(context, registry.platform.crypto),
+    });
     return forbidden(context, permission);
   }
   return principal;
+}
+
+function requireAuditService(registry: ApplicationRegistry): AuditService {
+  const audit = registry.services.audit;
+  if (!audit) throw new NotImplementedServiceError('Admin audit recording');
+  return audit;
+}
+
+function requireAdminTransactions(registry: ApplicationRegistry): AdminTransactionRunner {
+  const transactions = registry.services.adminTransactions;
+  if (!transactions) throw new NotImplementedServiceError('Transactional admin operations');
+  return transactions;
 }
 
 const json = (context: Context<AppEnv>, status: number, body: unknown) =>
@@ -109,6 +131,26 @@ async function bodyRecord(context: Context<AppEnv>): Promise<Record<string, unkn
 
 const asString = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined;
+
+const STAFF_USER_STATUSES = ['active', 'disabled'] as const;
+
+function isStaffRole(value: string | undefined): value is StaffRole {
+  return value !== undefined && STAFF_ROLES.includes(value as StaffRole);
+}
+
+function isStaffUserStatus(value: string | undefined): value is 'active' | 'disabled' {
+  return value !== undefined && STAFF_USER_STATUSES.includes(value as 'active' | 'disabled');
+}
+
+function validationError(context: Context<AppEnv>, detail: string) {
+  return json(context, 422, {
+    type: problemType('validation-error'),
+    title: 'Invalid Request',
+    status: 422,
+    detail,
+    requestId: context.get('requestId'),
+  });
+}
 
 export function registerAdminRoutes(
   app: OpenAPIHono<AppEnv>,
@@ -150,23 +192,43 @@ export function registerAdminRoutes(
 
   app.delete('/admin/sessions', async (context) => {
     const principal = context.get('principal');
-    const staff = registry.services.staff;
-    if (!principal || !staff) return unauthorized(context);
+    if (!principal) return unauthorized(context);
     if (context.get('legacyAdminKey')) {
-      return context.body(null, 204);
+      return unauthorized(context);
     }
-    await staff.revokeSession(principal.sessionId);
+    await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      await staff.revokeSession(principal.sessionId);
+      await audit.record({
+        actorUserId: principal.userId,
+        actorRole: principal.role,
+        action: 'session.revoke',
+        resourceType: 'session',
+        resourceId: principal.sessionId,
+        outcome: 'success',
+      });
+    });
     return context.body(null, 204);
   });
 
   app.post('/admin/sessions/refresh', async (context) => {
     const principal = context.get('principal');
-    const staff = registry.services.staff;
-    if (!principal || !staff) return unauthorized(context);
+    if (!principal) return unauthorized(context);
     if (context.get('legacyAdminKey')) {
       return unauthorized(context);
     }
-    const refreshed = await staff.refreshSession(principal.sessionId);
+    const refreshed = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      const session = await staff.refreshSession(principal.sessionId);
+      if (!session) return null;
+      await audit.record({
+        actorUserId: principal.userId,
+        actorRole: principal.role,
+        action: 'session.refresh',
+        resourceType: 'session',
+        resourceId: principal.sessionId,
+        outcome: 'success',
+      });
+      return session;
+    });
     if (!refreshed) return unauthorized(context);
     return context.json(
       { token: refreshed.token, sessionId: refreshed.sessionId, expiresAt: refreshed.expiresAt },
@@ -188,84 +250,94 @@ export function registerAdminRoutes(
   app.post('/admin/staff', async (context) => {
     const guard = await requirePermission(context, registry, 'staff.manage');
     if (guard instanceof Response) return guard;
-    const staff = registry.services.staff;
-    if (!staff) return json(context, 501, { title: 'Staff service not configured.', status: 501 });
     const body = await bodyRecord(context);
     const email = asString(body.email);
     const password = asString(body.password);
     const displayName = asString(body.displayName);
     const role = asString(body.role);
     if (!email || !password || !displayName || !role) {
-      return json(context, 422, {
-        type: problemType('validation-error'),
-        title: 'Invalid Request',
-        status: 422,
-        detail: 'email, displayName, role, and password are required.',
-        requestId: context.get('requestId'),
-      });
+      return validationError(context, 'email, displayName, role, and password are required.');
     }
-    const created = await staff.createStaffUser({
-      email,
-      displayName,
-      role: role as StaffRole,
-      password,
-    });
-    await registry.services.audit
-      ?.record({
+    if (!isStaffRole(role)) return validationError(context, 'role is invalid.');
+    if (password.length < 12 || password.length > 1024) {
+      return validationError(context, 'password must contain between 12 and 1024 characters.');
+    }
+    const created = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      const user = await staff.createStaffUser({ email, displayName, role, password });
+      await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
         action: 'staff.create',
         resourceType: 'user',
-        resourceId: created.id,
+        resourceId: user.id,
         outcome: 'success',
-      })
-      .catch(() => undefined);
+      });
+      return user;
+    });
     return context.json({ staff: created }, 201);
   });
 
   app.patch('/admin/staff/:id', async (context) => {
     const guard = await requirePermission(context, registry, 'staff.manage');
     if (guard instanceof Response) return guard;
-    const staff = registry.services.staff;
-    if (!staff) return json(context, 501, { title: 'Staff service not configured.', status: 501 });
     const userId = context.req.param('id');
     const body = await bodyRecord(context);
     const role = asString(body.role);
     const status = asString(body.status);
     const displayName = asString(body.displayName);
-    const updated = await staff.updateStaffUser(userId, {
-      ...(role !== undefined ? { role: role as StaffRole } : {}),
-      ...(status !== undefined ? { status: status as 'active' | 'disabled' } : {}),
-      ...(displayName !== undefined ? { displayName } : {}),
-    });
-    await registry.services.audit
-      ?.record({
+    if (role !== undefined && !isStaffRole(role)) {
+      return validationError(context, 'role is invalid.');
+    }
+    if (status !== undefined && !isStaffUserStatus(status)) {
+      return validationError(context, 'status is invalid.');
+    }
+    if (role === undefined && status === undefined && displayName === undefined) {
+      return validationError(context, 'At least one staff field must be supplied.');
+    }
+    const updated = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      const user = await staff.updateStaffUser(userId, {
+        ...(role !== undefined ? { role } : {}),
+        ...(status !== undefined ? { status } : {}),
+        ...(displayName !== undefined ? { displayName } : {}),
+      });
+      await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
         action: 'staff.role.change',
         resourceType: 'user',
         resourceId: userId,
         outcome: 'success',
-        metadata: { role: updated.role, status: updated.status },
-      })
-      .catch(() => undefined);
+        metadata: { role: user.role, status: user.status },
+      });
+      return user;
+    });
     return context.json({ staff: updated }, 200);
   });
 
   app.delete('/admin/sessions/by-user/:id', async (context) => {
     const guard = await requirePermission(context, registry, 'staff.manage');
     if (guard instanceof Response) return guard;
-    const staff = registry.services.staff;
-    if (!staff) return json(context, 501, { title: 'Staff service not configured.', status: 501 });
     const userId = context.req.param('id');
-    await staff.revokeAllSessions(userId);
+    await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      await staff.revokeAllSessions(userId);
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'session.revoke_all',
+        resourceType: 'session',
+        resourceId: userId,
+        outcome: 'success',
+      });
+    });
     return context.body(null, 204);
   });
 
   // ---- Case queue + export (M2 dual-mode: legacy key OR staff session) ----
 
   app.get('/admin/cases', async (context) => {
-    const guard = await requirePermission(context, registry, 'case.queue.read');
+    const guard = await requirePermission(context, registry, 'case.queue.read', {
+      allowLegacy: true,
+    });
     if (guard instanceof Response) return guard;
     const queueParam = context.req.query('queue');
     const queue = (['standard', 'manual_review', 'incident'] as const).includes(
@@ -285,20 +357,20 @@ export function registerAdminRoutes(
   });
 
   app.get('/admin/cases/export', async (context) => {
-    const guard = await requirePermission(context, registry, 'case.export');
+    const guard = await requirePermission(context, registry, 'case.export', { allowLegacy: true });
     if (guard instanceof Response) return guard;
     const cases = await registry.services.admin?.exportCases();
     if (!cases) throw new Error('Admin service is not configured.');
-    await registry.services.audit
-      ?.record({
+    if (!context.get('legacyAdminKey')) {
+      await requireAuditService(registry).record({
         actorUserId: guard.userId,
         actorRole: guard.role,
         action: 'case.export',
         resourceType: 'case',
         outcome: 'success',
         metadata: { rowCount: cases.length },
-      })
-      .catch(() => undefined);
+      });
+    }
     const csv = [
       'caseReference,status,subtype,incidentFlag,submittedAt',
       ...cases.map((c) =>
@@ -332,17 +404,18 @@ export function registerAdminRoutes(
     }
     // Raw PII read: write a pii.view_raw audit event (compliance).
     if (detail.consumer.piiTier === 'raw') {
-      await registry.services.audit
-        ?.record({
-          actorUserId: guard.userId,
-          actorRole: guard.role,
-          action: 'pii.view_raw',
-          resourceType: 'case',
-          resourceId: caseRef,
-          outcome: 'success',
-          reasonCode: 'raw_pii_view',
-        })
-        .catch(() => undefined);
+      await requireAuditService(registry).record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'pii.view_raw',
+        resourceType: 'case',
+        resourceId: caseRef,
+        outcome: 'success',
+        reasonCode: 'raw_pii_view',
+        metadata: {
+          fields: Object.keys(detail.consumer).filter((field) => field !== 'piiTier'),
+        },
+      });
     }
     return context.json({ case: detail }, 200);
   });
@@ -353,9 +426,9 @@ export function registerAdminRoutes(
     const caseRef = context.req.param('caseRef');
     const body = await bodyRecord(context);
     const staffUserId = asString(body.staffUserId) ?? null;
-    await registry.services.admin?.assignCase(caseRef, staffUserId);
-    await registry.services.audit
-      ?.record({
+    await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
+      await admin.assignCase(caseRef, staffUserId);
+      await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
         action: 'case.assign',
@@ -363,8 +436,8 @@ export function registerAdminRoutes(
         resourceId: caseRef,
         outcome: 'success',
         metadata: { assignee: staffUserId },
-      })
-      .catch(() => undefined);
+      });
+    });
     return context.body(null, 204);
   });
 
@@ -383,9 +456,9 @@ export function registerAdminRoutes(
         requestId: context.get('requestId'),
       });
     }
-    await registry.services.admin?.transitionCaseStatus(caseRef, nextStatus);
-    await registry.services.audit
-      ?.record({
+    await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
+      await admin.transitionCaseStatus(caseRef, nextStatus, guard.userId);
+      await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
         action: 'case.status.transition',
@@ -393,30 +466,37 @@ export function registerAdminRoutes(
         resourceId: caseRef,
         outcome: 'success',
         metadata: { nextStatus: body.status },
-      })
-      .catch(() => undefined);
+      });
+    });
     return context.body(null, 204);
   });
 
   // ---- Reportability review close (review.close) ----
 
   app.post('/admin/reportability-reviews/:id/close', async (context) => {
-    const guard = await requirePermission(context, registry, 'review.close');
+    const guard = await requirePermission(context, registry, 'review.close', { allowLegacy: true });
     if (guard instanceof Response) return guard;
     const reviewId = context.req.param('id');
     const body = await bodyRecord(context);
     const cpscReference = asString(body.cpscReference);
     const outcome = asString(body.outcome);
+    const legacyReviewerId = asString(body.reviewerId);
     const rationaleValue = asString(body.rationale) ?? '';
-    await registry.services.admin?.closeReportabilityReview(reviewId, {
+    const reviewerId = context.get('legacyAdminKey') ? (legacyReviewerId ?? '') : guard.userId;
+    const input = {
       outcome: outcome === 'documented_non_reportable' ? 'documented_non_reportable' : 'filed',
-      // reviewerId now sourced from the resolved principal, not the request body.
-      reviewerId: guard.userId,
+      // Staff sessions use the resolved principal; legacy M2 preserves the old body contract.
+      reviewerId,
       rationale: rationaleValue,
       ...(cpscReference ? { cpscReference } : {}),
-    });
-    await registry.services.audit
-      ?.record({
+    } as const;
+    if (context.get('legacyAdminKey')) {
+      await registry.services.admin?.closeReportabilityReview(reviewId, input);
+      return context.body(null, 204);
+    }
+    await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
+      await admin.closeReportabilityReview(reviewId, input);
+      await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
         action: 'review.close',
@@ -424,8 +504,8 @@ export function registerAdminRoutes(
         resourceId: reviewId,
         outcome: 'success',
         metadata: { outcome },
-      })
-      .catch(() => undefined);
+      });
+    });
     return context.body(null, 204);
   });
 

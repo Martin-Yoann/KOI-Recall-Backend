@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 
 import { getTableName } from 'drizzle-orm';
 import { getTableConfig } from 'drizzle-orm/pg-core';
@@ -112,6 +112,24 @@ describe('database design', () => {
     );
     expect(ownershipIndexPosition).toBeGreaterThanOrEqual(0);
     expect(ownershipForeignKeyPosition).toBeGreaterThan(ownershipIndexPosition);
+  });
+
+  it('persists staff login lockout state in schema and migrations', async () => {
+    const staffConfig = getTableConfig(schema.staffUsers);
+    expect(staffConfig.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining(['failed_login_attempts', 'locked_until']),
+    );
+
+    const migrationFiles = (await readdir('drizzle')).filter((file) => file.endsWith('.sql'));
+    const migrations = (
+      await Promise.all(migrationFiles.map((file) => readFile(`drizzle/${file}`, 'utf8')))
+    ).join('\n');
+    expect(migrations).toContain(
+      'ALTER TABLE "staff_users" ADD COLUMN "failed_login_attempts" integer DEFAULT 0 NOT NULL',
+    );
+    expect(migrations).toContain(
+      'ALTER TABLE "staff_users" ADD COLUMN "locked_until" timestamp with time zone',
+    );
   });
 
   it('models product identity with variants and multi-valued identifiers (ADR-0001)', async () => {
