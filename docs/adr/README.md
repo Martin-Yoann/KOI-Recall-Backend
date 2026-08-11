@@ -6,13 +6,16 @@
 
 ## 索引
 
-| ADR                                           | 标题                                                 | 状态     | 关联              |
-| --------------------------------------------- | ---------------------------------------------------- | -------- | ----------------- |
-| [0001](0001-product-identity-model.md)        | 真实商品身份模型（Variant / Identifier 分层）        | Accepted | O1 / T2 / D1      |
-| [0002](0002-product-identification-policy.md) | 统一商品识别策略 seam（ProductIdentificationPolicy） | Accepted | O2 / T3 / D2      |
-| [0003](0003-identity-migration-strategy.md)   | 身份模型与条件式 Claim 的四阶段在线迁移策略          | Accepted | §6 / D1 / D3 / D4 |
+| ADR                                               | 标题                                                                         | 状态     | 关联                                  |
+| ------------------------------------------------- | ---------------------------------------------------------------------------- | -------- | ------------------------------------- |
+| [0001](0001-product-identity-model.md)            | 真实商品身份模型（Variant / Identifier 分层）                                | Accepted | O1 / T2 / D1                          |
+| [0002](0002-product-identification-policy.md)     | 统一商品识别策略 seam（ProductIdentificationPolicy）                         | Accepted | O2 / T3 / D2                          |
+| [0003](0003-identity-migration-strategy.md)       | 身份模型与条件式 Claim 的四阶段在线迁移策略                                  | Accepted | §6 / D1 / D3 / D4                     |
+| [0004](0004-internal-operations-identity-rbac.md) | 内部运营身份与权限模型（Staff 主体 + 固定角色 RBAC + 两级 PII + 跨表面审计） | Accepted | 优化规划 §1 / claim-submission-design |
 
-三者的关系：**ADR-0001** 定义“数据是什么”，**ADR-0002** 定义“如何识别”，**ADR-0003** 定义“如何从现状过渡过去”。它们共同支撑优化规划 `docs/optimization-plan-v1.md` 的 Sprint 0–2。
+ADR-0001/0002/0003 的关系：**0001** 定义”数据是什么”，**0002** 定义”如何识别”，**0003** 定义”如何过渡过去”——三者共同支撑优化规划 Sprint 0–2 的消费者侧改造。
+
+**ADR-0004** 独立承接 B 端运营升级：把优化规划 §1”明确不在本轮实现”中的”多层 RBAC / 字段级遮罩”重新立项，落地具名运营主体、固定角色权限、两级 PII 可见性与跨表面审计——兑现 claim-submission-design 已预告的 admin 审计边界。设计细节见 `docs/superpowers/specs/2026-08-10-b-end-admin-rbac-design.md`。
 
 ## 何时新增 ADR
 

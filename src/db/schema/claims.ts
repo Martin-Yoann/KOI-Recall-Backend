@@ -16,6 +16,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { campaignProducts, campaignVersions, recallCampaigns } from './campaigns.js';
+import { staffUsers } from './staff.js';
 
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -88,12 +89,22 @@ export const recallCases = pgTable(
     submittedAt: timestamp('submitted_at', { withTimezone: true, mode: 'date' })
       .notNull()
       .defaultNow(),
+    /**
+     * ADR-0004: the staff user this case is assigned to. Orthogonal to the
+     * status-derived `queue` (drizzle-admin-service.ts). Nullable so unassigned
+     * cases remain valid; onDelete set null so a deleted assignee keeps history.
+     */
+    assignedToStaffUserId: uuid('assigned_to_staff_user_id').references(() => staffUsers.id, {
+      onDelete: 'set null',
+    }),
+    assignedAt: timestamp('assigned_at', { withTimezone: true, mode: 'date' }),
     ...timestamps,
   },
   (table) => [
     uniqueIndex('recall_cases_public_reference_uidx').on(table.publicReference),
     index('recall_cases_campaign_submitted_idx').on(table.campaignId, table.submittedAt),
     index('recall_cases_campaign_status_idx').on(table.campaignId, table.status),
+    index('recall_cases_assignee_idx').on(table.assignedToStaffUserId, table.status),
     check(
       'recall_cases_public_reference_format_chk',
       sql`${table.publicReference} ~ '^KOI-[A-Z0-9]{4}-[A-Z0-9]{8}$'`,

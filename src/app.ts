@@ -123,7 +123,12 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   // Route handlers live in src/routes/*; app.ts only wires them in declaration
   // order so the OpenAPI path listing and registration stay centralized here.
-  registerAdminRoutes(app, registry, config.ADMIN_API_KEY);
+  registerAdminRoutes(app, registry, {
+    adminApiKey: config.ADMIN_API_KEY,
+    staffService: registry.services.staff,
+    auditService: registry.services.audit,
+    crypto: registry.platform.crypto,
+  });
   registerCampaignRoutes(app, registry);
   registerProductCheckRoutes(app, registry);
   registerDocumentRoutes(app, registry);

@@ -32,6 +32,9 @@ const admin: AdminService = {
   listCases: () => Promise.resolve([summary]),
   exportCases: () => Promise.resolve([summary]),
   closeReportabilityReview: () => Promise.resolve(),
+  getCaseDetail: () => Promise.resolve(null),
+  assignCase: () => Promise.resolve(),
+  transitionCaseStatus: () => Promise.resolve(),
 };
 
 describe('admin routes (T8/O10)', () => {

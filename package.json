@@ -23,7 +23,8 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:check": "drizzle-kit check",
     "db:seed": "tsx src/db/seed.ts",
-    "db:benchmark": "tsx scripts/capacity-benchmark.ts"
+    "db:benchmark": "tsx scripts/capacity-benchmark.ts",
+    "staff:bootstrap": "tsx scripts/bootstrap-staff.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "^1.5.1",
