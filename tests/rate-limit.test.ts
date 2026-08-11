@@ -105,4 +105,25 @@ describe('rate-limit middleware (T6.1/O6)', () => {
     );
     expect(response.headers.get('RateLimit-Limit')).toBe('999');
   });
+
+  it('rate-limits staff login after five attempts from one client', async () => {
+    const app = createApp({
+      config: loadConfig({ CORS_ALLOWED_ORIGINS: 'https://consumer.example.com' }),
+    });
+
+    let response: Response | undefined;
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      response = await app.request('/admin/sessions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Forwarded-For': '203.0.113.199',
+        },
+        body: JSON.stringify({ email: 'missing@example.com', password: 'wrong-password' }),
+      });
+    }
+
+    expect(response?.status).toBe(429);
+    expect(response?.headers.get('RateLimit-Limit')).toBe('5');
+  });
 });

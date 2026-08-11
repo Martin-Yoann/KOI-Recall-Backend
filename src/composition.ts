@@ -5,6 +5,10 @@ import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
 import { DrizzleAdminService } from './modules/admin/drizzle-admin-service.js';
 import type { AdminService } from './modules/admin/service.js';
+import { DrizzleStaffService } from './modules/staff/drizzle-staff-service.js';
+import { DrizzleAuditService } from './modules/staff/drizzle-audit-service.js';
+import type { StaffService } from './modules/staff/service.js';
+import type { AuditService } from './modules/staff/audit-service.js';
 import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-draft-service.js';
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
 import { DrizzleCommunicationService } from './modules/communications/drizzle-communication-service.js';
@@ -43,6 +47,20 @@ export interface ApplicationServices {
   incidents: IncidentService;
   communications: CommunicationService;
   admin?: AdminService;
+  /** ADR-0004: staff identity, sessions, and audit (B-end RBAC). */
+  staff?: StaffService;
+  audit?: AuditService;
+  adminTransactions?: AdminTransactionRunner;
+}
+
+export interface AdminTransactionServices {
+  admin: AdminService;
+  staff: StaffService;
+  audit: AuditService;
+}
+
+export interface AdminTransactionRunner {
+  run<T>(work: (services: AdminTransactionServices) => Promise<T>): Promise<T>;
 }
 
 export interface PlatformAdapters {
@@ -142,6 +160,18 @@ export function createApplicationRegistry(
               malwareScanRequired,
             ),
             admin: new DrizzleAdminService(handle.db, crypto),
+            staff: new DrizzleStaffService(handle.db, crypto),
+            audit: new DrizzleAuditService(handle.db),
+            adminTransactions: {
+              run: (work) =>
+                handle.transaction((tx) =>
+                  work({
+                    admin: new DrizzleAdminService(tx, crypto),
+                    staff: new DrizzleStaffService(tx, crypto),
+                    audit: new DrizzleAuditService(tx),
+                  }),
+                ),
+            },
           }),
     },
     platform: { ...placeholder.platform, blob, crypto, email },

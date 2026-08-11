@@ -90,13 +90,19 @@ export function createApp(dependencies: AppDependencies = {}) {
       maxAge: 600,
     }),
   );
+  const rateLimiter = dependencies.rateLimiter ?? new InMemoryRateLimiter();
   // T6.1 (O6): default to a real fixed-window limiter keyed on the hashed
   // client source + route category; tests may inject a custom limiter.
-  app.use('/v1/*', rateLimitMiddleware(dependencies.rateLimiter ?? new InMemoryRateLimiter()));
+  app.use('/v1/*', rateLimitMiddleware(rateLimiter));
+  app.use(
+    '/admin/sessions',
+    rateLimitMiddleware(rateLimiter, { category: 'admin-login', methods: ['POST'] }),
+  );
   // T6.2 (O6): strict body caps — JSON/claim bodies are small; provider
   // webhooks get a slightly larger allowance. Attachments never pass through
   // here (they go straight to Private Blob).
   app.use('/v1/*', bodyLimit(DEFAULT_JSON_BODY_LIMIT));
+  app.use('/admin/*', bodyLimit(DEFAULT_JSON_BODY_LIMIT));
   app.use('/webhooks/*', bodyLimit(DEFAULT_WEBHOOK_BODY_LIMIT));
 
   // T6.3 (O6): liveness no longer claims a skeleton phase; readiness checks
@@ -123,7 +129,12 @@ export function createApp(dependencies: AppDependencies = {}) {
 
   // Route handlers live in src/routes/*; app.ts only wires them in declaration
   // order so the OpenAPI path listing and registration stay centralized here.
-  registerAdminRoutes(app, registry, config.ADMIN_API_KEY);
+  registerAdminRoutes(app, registry, {
+    adminApiKey: config.ADMIN_API_KEY,
+    staffService: registry.services.staff,
+    auditService: registry.services.audit,
+    crypto: registry.platform.crypto,
+  });
   registerCampaignRoutes(app, registry);
   registerProductCheckRoutes(app, registry);
   registerDocumentRoutes(app, registry);

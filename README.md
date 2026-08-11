@@ -90,6 +90,12 @@ Claim 的姓名、联系方式、地址、订单号、事故叙述和提交快�
 Phase 1 的权限模型只有一种授权后台用户：Admin API 在授权后端边界内解密，允许查看/导出数据；
 本阶段不实现多级权限。不要把数据库直连当作人工查看接口。
 
+> B 端运营升级（ADR-0004）：后台已升级为具名运营主体（`staff_users`）+ 会话令牌 + 固定角色
+> RBAC（`viewer` / `reviewer` / `compliance` / `administrator`）+ 两级 PII（默认脱敏，`compliance`/
+> `administrator` 可看明文并写审计）+ 跨表面审计（`admin_audit_events`）。首个 `administrator` 通过
+> `pnpm staff:bootstrap` 创建，之后以 `POST /admin/sessions` 登录获取会话令牌。迁移期（M2）旧的
+> `ADMIN_API_KEY` 仍被接受作为 `administrator` 角色；M3 切换后仅接受会话令牌。
+
 ## 关键入口
 
 - `src/app.ts`：Hono 应用与中间件注册。

@@ -32,6 +32,9 @@ const admin: AdminService = {
   listCases: () => Promise.resolve([summary]),
   exportCases: () => Promise.resolve([summary]),
   closeReportabilityReview: () => Promise.resolve(),
+  getCaseDetail: () => Promise.resolve(null),
+  assignCase: () => Promise.resolve(),
+  transitionCaseStatus: () => Promise.resolve(),
 };
 
 describe('admin routes (T8/O10)', () => {
@@ -84,6 +87,33 @@ describe('admin routes (T8/O10)', () => {
       },
     );
     expect(response.status).toBe(204);
+  });
+
+  it('preserves the legacy reviewerId during the M2 dual-mode window', async () => {
+    let reviewerId: string | undefined;
+    const legacyAdmin: AdminService = {
+      ...admin,
+      closeReportabilityReview: (_reviewId, input) => {
+        reviewerId = input.reviewerId;
+        return Promise.resolve();
+      },
+    };
+
+    const response = await appWith(legacyAdmin).request(
+      '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer admin-secret' },
+        body: JSON.stringify({
+          outcome: 'documented_non_reportable',
+          reviewerId: '00000000-0000-4000-8000-000000000002',
+          rationale: 'Reviewed and documented as non-reportable.',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(reviewerId).toBe('00000000-0000-4000-8000-000000000002');
   });
 
   it('surfaces 501 when no admin service is wired', async () => {

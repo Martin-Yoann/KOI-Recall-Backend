@@ -95,7 +95,7 @@ jobs:
           DATABASE_URL: postgresql://koi:koi@localhost:5432/koi_recall_test
           RUN_DB_INTEGRATION: 'true'
         run: >-
-          pnpm vitest run
+          pnpm vitest run --no-file-parallelism
           tests/campaign-integration.test.ts
           tests/claim-draft-integration.test.ts
           tests/product-check-integration.test.ts

@@ -1,10 +1,22 @@
 import { createMiddleware } from 'hono/factory';
 
+import type { StaffPrincipal } from '../modules/staff/service.js';
+
 export interface AppEnv {
   Variables: {
     requestId: string;
     /** Best-effort client source (first X-Forwarded-For hop or connection). */
     clientSource: string;
+    /**
+     * ADR-0004: the resolved staff principal, set by staff-auth middleware on
+     * `/admin/*`. Absent on public, cron, and webhook routes.
+     */
+    principal?: StaffPrincipal;
+    /**
+     * Whether the current request authenticated via the legacy `ADMIN_API_KEY`
+     * shared secret (M2 dual-mode). Present only during the M2→M3 transition.
+     */
+    legacyAdminKey?: boolean;
   };
 }
 
