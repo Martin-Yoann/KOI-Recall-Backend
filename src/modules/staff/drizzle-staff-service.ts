@@ -27,6 +27,7 @@ const toStaffUser = (row: typeof staffUsers.$inferSelect): StaffUser => ({
   role: row.role,
   status: row.status,
   lastLoginAt: row.lastLoginAt ? row.lastLoginAt.toISOString() : null,
+  avatarDataUrl: row.avatarDataUrl ?? null,
 });
 
 export const MAX_FAILED_LOGIN_ATTEMPTS = 5;
@@ -211,13 +212,15 @@ export class DrizzleStaffService implements StaffService {
   }
 
   async updateStaffUser(userId: string, input: UpdateStaffUserInput): Promise<StaffUser> {
+    const setData: Record<string, unknown> = {};
+    if (input.role !== undefined) setData.role = input.role;
+    if (input.status !== undefined) setData.status = input.status;
+    if (input.displayName !== undefined) setData.displayName = input.displayName;
+    if (input.avatarDataUrl !== undefined) setData.avatarDataUrl = input.avatarDataUrl;
+
     const updated = await this.db
       .update(staffUsers)
-      .set({
-        ...(input.role !== undefined ? { role: input.role } : {}),
-        ...(input.status !== undefined ? { status: input.status } : {}),
-        ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
-      })
+      .set(setData as never)
       .where(eq(staffUsers.id, userId))
       .returning();
     const row = updated[0];

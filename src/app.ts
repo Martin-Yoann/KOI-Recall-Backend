@@ -54,6 +54,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   const app = new OpenAPIHono<AppEnv>({
     defaultHook: (result, context) => {
       if (result.success) return;
+      const zodError = (result as { error: { issues: Array<{ path: (string | number)[]; message: string }> } }).error;
       return context.json(
         {
           type: problemType('validation-error'),
@@ -61,7 +62,7 @@ export function createApp(dependencies: AppDependencies = {}) {
           status: 400,
           detail: 'The request did not satisfy the API contract.',
           requestId: context.get('requestId'),
-          errors: result.error.issues.map((issue) => ({
+          errors: zodError.issues.map((issue: { path: (string | number)[]; message: string }) => ({
             path: issue.path.join('.'),
             message: issue.message,
           })),

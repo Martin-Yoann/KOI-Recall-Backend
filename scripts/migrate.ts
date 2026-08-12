@@ -1,75 +1,51 @@
+// ============================================================
+// KOI Recall — Database Migration Runner
+// Applies Drizzle-generated migrations to the configured database.
+//
+// Usage:
+//   pnpm db:migrate
+//
+// Prerequisites:
+//   1. DATABASE_URL must be set (env or .env.local)
+//   2. Migrations must have been generated: pnpm db:generate
+// ============================================================
+
 import 'dotenv/config';
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { migrate } from 'drizzle-orm/node-postgres/migrator';
+import { Pool } from 'pg';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
-import { Pool as NeonPool } from '@neondatabase/serverless';
-import { drizzle as neonServerlessDrizzle } from 'drizzle-orm/neon-serverless';
-import { migrate as migrateNeonServerless } from 'drizzle-orm/neon-serverless/migrator';
-import { drizzle as nodePostgresDrizzle } from 'drizzle-orm/node-postgres';
-import { migrate as migrateNodePostgres } from 'drizzle-orm/node-postgres/migrator';
-import { Client, Pool } from 'pg';
+const databaseUrl = process.env.DATABASE_URL;
 
-import { detectDriver } from '../src/db/client.js';
-
-const migrationsFolder = new URL('../drizzle', import.meta.url).pathname;
-
-/**
- * For local node-postgres targets, creates the database named in the connection
- * string if it does not yet exist, so a fresh machine can run `pnpm db:migrate`
- * against an empty Postgres instance. Neon already provides the database.
- */
-async function ensurePostgresDatabase(connectionString: string): Promise<void> {
-  const targetDatabase = new URL(connectionString).pathname.replace(/^\//, '') || 'postgres';
-  const maintenanceUrl = new URL(connectionString);
-  maintenanceUrl.pathname = '/postgres';
-
-  const client = new Client({ connectionString: maintenanceUrl.toString() });
-  try {
-    await client.connect();
-    const result = await client.query<{ exists: boolean }>(
-      'SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = $1) AS exists',
-      [targetDatabase],
-    );
-    if (!result.rows[0]?.exists) {
-      console.log(`Creating database "${targetDatabase}"...`);
-      await client.query(`CREATE DATABASE "${targetDatabase}"`);
-    }
-  } finally {
-    await client.end();
-  }
+if (!databaseUrl) {
+  console.error('ERROR: DATABASE_URL is not set.');
+  console.error('Set it in .env.local or as an environment variable.');
+  process.exit(1);
 }
 
-async function run(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    throw new Error(
-      'DATABASE_URL is required. Set it in .env (local Postgres) or your deployment environment (Neon).',
-    );
-  }
+const migrationsFolder = path.resolve(import.meta.dirname, '../drizzle');
 
-  const driver = detectDriver(databaseUrl);
-  console.log(`Applying migrations via ${driver} driver...`);
+if (!fs.existsSync(migrationsFolder)) {
+  console.error(`ERROR: Migrations folder not found: ${migrationsFolder}`);
+  console.error('Run "pnpm db:generate" first to generate migration files.');
+  process.exit(1);
+}
 
-  if (driver === 'neon-serverless') {
-    const pool = new NeonPool({ connectionString: databaseUrl });
-    try {
-      const db = neonServerlessDrizzle({ client: pool });
-      await migrateNeonServerless(db, { migrationsFolder });
-    } finally {
-      await pool.end();
-    }
-    return;
-  }
+async function run() {
+  console.log('[migrate] Applying migrations...');
 
-  await ensurePostgresDatabase(databaseUrl);
   const pool = new Pool({ connectionString: databaseUrl });
-  try {
-    const db = nodePostgresDrizzle({ client: pool });
-    await migrateNodePostgres(db, { migrationsFolder });
-  } finally {
-    await pool.end();
-  }
+  const db = drizzle(pool);
+
+  await migrate(db, { migrationsFolder });
+
+  await pool.end();
+  console.log('[migrate] Migrations applied successfully.');
 }
 
-run().catch((error) => {
-  console.error(error);
+run().catch((err) => {
+  console.error('[migrate] Migration failed:', err);
   process.exit(1);
 });

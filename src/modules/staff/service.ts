@@ -20,6 +20,7 @@ export interface StaffUser {
   role: StaffRole;
   status: 'active' | 'disabled';
   lastLoginAt: string | null;
+  avatarDataUrl: string | null;
 }
 
 export interface CreateStaffUserInput {
@@ -33,6 +34,7 @@ export interface UpdateStaffUserInput {
   role?: StaffRole;
   status?: 'active' | 'disabled';
   displayName?: string;
+  avatarDataUrl?: string | null;
 }
 
 /** Result of a successful login — the plaintext token is returned once. */

@@ -184,9 +184,72 @@ export function registerAdminRoutes(
     if (!result) {
       return unauthorized(context);
     }
+    const profile = await staff.getStaffUserByEmail(email);
     return context.json(
-      { token: result.token, sessionId: result.sessionId, expiresAt: result.expiresAt },
+      {
+        token: result.token,
+        sessionId: result.sessionId,
+        expiresAt: result.expiresAt,
+        displayName: profile?.displayName ?? email,
+        avatarDataUrl: profile?.avatarDataUrl ?? null,
+      },
       201,
+    );
+  });
+
+  // ---- Update own profile (name, avatar) — requires valid session ----
+
+  app.patch('/admin/profile', async (context) => {
+    const principal = context.get('principal');
+    if (!principal) return unauthorized(context);
+    if (context.get('legacyAdminKey')) return unauthorized(context);
+
+    const body = await bodyRecord(context);
+    const displayName = asString(body.displayName);
+    const avatarDataUrl =
+      body.avatarDataUrl !== undefined
+        ? typeof body.avatarDataUrl === 'string'
+          ? body.avatarDataUrl
+          : null
+        : undefined;
+
+    if (displayName !== undefined && displayName.trim().length === 0) {
+      return validationError(context, 'Display name must not be empty.');
+    }
+
+    if (avatarDataUrl !== undefined && avatarDataUrl !== null) {
+      if (!avatarDataUrl.startsWith('data:image/')) {
+        return validationError(context, 'Avatar must be a data:image/... URL.');
+      }
+      if (avatarDataUrl.length > 800_000) {
+        return validationError(context, 'Avatar image must be under 512 KiB.');
+      }
+    }
+
+    const updated = await requireAdminTransactions(registry).run(
+      async ({ staff, audit }) => {
+        const user = await staff.updateStaffUser(principal.userId, {
+          ...(displayName !== undefined ? { displayName: displayName.trim() } : {}),
+          ...(avatarDataUrl !== undefined ? { avatarDataUrl } : {}),
+        });
+        await audit.record({
+          actorUserId: principal.userId,
+          actorRole: principal.role,
+          action: 'staff.update_profile',
+          resourceType: 'staff',
+          resourceId: principal.userId,
+          outcome: 'success',
+        });
+        return user;
+      },
+    );
+
+    return context.json(
+      {
+        displayName: updated.displayName,
+        avatarDataUrl: updated.avatarDataUrl,
+      },
+      200,
     );
   });
 
@@ -296,7 +359,7 @@ export function registerAdminRoutes(
     }
     const updated = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
       const user = await staff.updateStaffUser(userId, {
-        ...(role !== undefined ? { role } : {}),
+        ...(role !== undefined ? { role: role as StaffRole } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(displayName !== undefined ? { displayName } : {}),
       });

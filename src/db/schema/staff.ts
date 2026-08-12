@@ -66,6 +66,8 @@ export const staffUsers = pgTable(
     displayName: varchar('display_name', { length: 160 }).notNull(),
     role: staffRoleEnum('role').notNull(),
     status: staffUserStatusEnum('status').notNull().default('active'),
+    /** Profile avatar as base64 data-URL (JPEG/PNG/WebP), max 512 KiB. Null = use initials fallback. */
+    avatarDataUrl: text('avatar_data_url'),
     /** `node:crypto.scrypt` encoded hash (ADR-0004 §2.1). Nullable for future SSO-only users. */
     passwordHash: text('password_hash'),
     passwordChangedAt: timestamp('password_changed_at', { withTimezone: true, mode: 'date' }),

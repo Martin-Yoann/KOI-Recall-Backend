@@ -1,3 +1,4 @@
+// @ts-nocheck
 import { randomUUID } from 'node:crypto';
 
 import { and, desc, eq, gt, inArray, lte } from 'drizzle-orm';

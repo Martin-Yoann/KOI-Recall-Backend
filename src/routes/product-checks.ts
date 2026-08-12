@@ -28,7 +28,7 @@ function toIdentificationInput(slug: string, body: ProductCheckRequest): Identif
         mode: 'product_identifiers',
         campaignSlug: slug,
         signals: {
-          identifiers: body.identifiers.map((identifier) => identifier.value),
+          identifiers: body.identifiers.map((identifier: { value: string }) => identifier.value),
           purchaseEvidence: body.purchaseEvidence,
         },
       };
@@ -43,6 +43,12 @@ function toIdentificationInput(slug: string, body: ProductCheckRequest): Identif
         mode: 'unknown',
         campaignSlug: slug,
         signals: { purchaseEvidence: body.purchaseEvidence },
+      };
+    default:
+      return {
+        mode: 'unknown',
+        campaignSlug: slug,
+        signals: {},
       };
   }
 }
