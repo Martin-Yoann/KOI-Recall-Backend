@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { z } from '@hono/zod-openapi';
 
 import { isoDate, uuid } from './common.js';
@@ -71,7 +70,7 @@ export const productCheckRequestSchema = z
 
 export type ProductCheckRequest = z.infer<typeof productCheckRequestSchema>;
 
-export const productCheckResponseSchema = z
+const productCheckResponseObject = z
   .object({
     result: z.enum(['potential_match', 'not_matched', 'manual_review']),
     reasonCodes: z.array(z.string().min(1).max(80)),
@@ -87,8 +86,10 @@ export const productCheckResponseSchema = z
     riskFlags: z.array(z.string().min(1).max(80)).optional(),
     checkedCampaignVersion: z.number().int().positive(),
     disclaimer: z.literal('This check is preliminary and is not a final eligibility decision.'),
-  })
-  .superRefine((value: Record<string, unknown>, context: z.RefinementCtx) => {
+  });
+
+export const productCheckResponseSchema = productCheckResponseObject
+  .superRefine((value: z.infer<typeof productCheckResponseObject>, context: z.RefinementCtx) => {
     // ADR-0002 §2.1: multi-candidate ambiguity must surface as manual_review.
     if (value.matchedVariantIds.length > 1 && value.result !== 'manual_review') {
       context.addIssue({

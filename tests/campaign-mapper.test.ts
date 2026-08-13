@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { mapToCampaignView, type CampaignSource } from '../src/modules/campaigns/mapper.js';
+import type { CampaignView } from '../src/contracts/campaigns.js';
 
 const baseSource: CampaignSource = {
   campaign: {
@@ -104,7 +105,7 @@ describe('campaign mapper', () => {
   });
 
   it('orders products by sort order and reads flavors/shapes from attributes', () => {
-    expect(view.products.map((product) => product.sku)).toEqual([
+    expect(view.products.map((product: CampaignView['products'][number]) => product.sku)).toEqual([
       'OTHER-SKU',
       'MUSIC-LOLLIPOP-DEMO-18G',
     ]);
@@ -131,7 +132,7 @@ describe('campaign mapper', () => {
   });
 
   it('orders evidence requirements by category', () => {
-    expect(view.evidenceRequirements.map((evidence) => evidence.category)).toEqual([
+    expect(view.evidenceRequirements.map((evidence: CampaignView['evidenceRequirements'][number]) => evidence.category)).toEqual([
       'product_photo',
       'proof_of_purchase',
     ]);

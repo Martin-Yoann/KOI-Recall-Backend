@@ -212,15 +212,14 @@ export class DrizzleStaffService implements StaffService {
   }
 
   async updateStaffUser(userId: string, input: UpdateStaffUserInput): Promise<StaffUser> {
-    const setData: Record<string, unknown> = {};
-    if (input.role !== undefined) setData.role = input.role;
-    if (input.status !== undefined) setData.status = input.status;
-    if (input.displayName !== undefined) setData.displayName = input.displayName;
-    if (input.avatarDataUrl !== undefined) setData.avatarDataUrl = input.avatarDataUrl;
-
     const updated = await this.db
       .update(staffUsers)
-      .set(setData as never)
+      .set({
+        ...(input.role !== undefined ? { role: input.role } : {}),
+        ...(input.status !== undefined ? { status: input.status } : {}),
+        ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
+        ...(input.avatarDataUrl !== undefined ? { avatarDataUrl: input.avatarDataUrl } : {}),
+      })
       .where(eq(staffUsers.id, userId))
       .returning();
     const row = updated[0];

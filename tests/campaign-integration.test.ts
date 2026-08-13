@@ -8,6 +8,7 @@ import 'dotenv/config';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
+import type { CampaignView } from '../src/contracts/campaigns.js';
 import { DrizzleCampaignService } from '../src/modules/campaigns/drizzle-campaign-service.js';
 
 const enabled = process.env.RUN_DB_INTEGRATION === 'true' && Boolean(process.env.DATABASE_URL);
@@ -34,7 +35,7 @@ describe.skipIf(!enabled)('DrizzleCampaignService (database integration)', () =>
     expect(campaign!.version).toBe(1);
     expect(campaign!.title).toBe('Music Lollipop Safety Recall');
     expect(campaign!.products[0]!.affectedLots.length).toBeGreaterThan(0);
-    expect(campaign!.evidenceRequirements.map((e) => e.category)).toEqual(
+    expect(campaign!.evidenceRequirements.map((e: CampaignView['evidenceRequirements'][number]) => e.category)).toEqual(
       expect.arrayContaining(['product_photo', 'proof_of_purchase']),
     );
   });

@@ -128,9 +128,14 @@ async function main() {
   console.log('  [1/7] Staff users...');
 
   const staffIds: Record<string, string> = {};
-  const pw1 = await hashPassword('admin123456!@');
-  const pw2 = await hashPassword('review2026!@#');
-  const pw3 = await hashPassword('viewer2026!@#');
+  // Dev-only synthetic credentials — override via env in any shared environment.
+  // When unset, a fresh random password is generated per run and printed below.
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? randomUUID().replace(/-/g, '');
+  const reviewerPassword = process.env.SEED_REVIEWER_PASSWORD ?? randomUUID().replace(/-/g, '');
+  const viewerPassword = process.env.SEED_VIEWER_PASSWORD ?? randomUUID().replace(/-/g, '');
+  const pw1 = await hashPassword(adminPassword);
+  const pw2 = await hashPassword(reviewerPassword);
+  const pw3 = await hashPassword(viewerPassword);
 
   const staffInserted = await db.insert(staffUsers).values([
     {
@@ -431,7 +436,7 @@ async function main() {
 
   const drafts: Array<{ id: string; token: string }> = [];
   for (let i = 0; i < 6; i++) {
-    const campaign = allCampaigns[i % allCampaigns.length];
+    const campaign = allCampaigns[i % allCampaigns.length]!;
     const draftId = randomUUID();
     const token = randomUUID().replace(/-/g, '');
     await db.insert(claimDrafts).values({
@@ -470,16 +475,15 @@ async function main() {
 
   // Generate 18 cases distributed across campaigns and statuses
   for (let i = 0; i < 18; i++) {
-    const campaign = allCampaigns[i % allCampaigns.length];
-    const consumer = consumerData[i % consumerData.length];
-    const status = i < allStatuses.length ? allStatuses[i] : allStatuses[i % allStatuses.length];
+    const campaign = allCampaigns[i % allCampaigns.length]!;
+    const consumer = consumerData[i % consumerData.length]!;
+    const status = i < allStatuses.length ? allStatuses[i]! : allStatuses[i % allStatuses.length]!;
     const caseId = randomUUID();
     const caseRef = randomRef();
 
     const submittedAt = new Date(now - (18 - i) * 2 * DAY);
 
     // Encrypt PII
-    const nameEnc = await encryptPII(`${consumer.first} ${consumer.last}`);
     const emailEnc = await encryptPII(consumer.email);
     const phoneEnc = await encryptPII(consumer.phone);
     const addrEnc = await encryptPII(consumer.addr);
@@ -523,13 +527,13 @@ async function main() {
       caseId,
       campaignProductId: campaign.productId,
       quantity: Math.ceil(Math.random() * 3),
-      shape: shapes[i % shapes.length],
-      flavor: flavors[i % flavors.length],
-      lotCode: lotCodes[i % lotCodes.length],
-      dateCode: (['06/2024', '07/2024', '08/2024', '02/2026', '04/2026', '05/2026'])[i % 6],
-      purchaseChannel: channels[i % channels.length],
+      shape: shapes[i % shapes.length]!,
+      flavor: flavors[i % flavors.length]!,
+      lotCode: lotCodes[i % lotCodes.length]!,
+      dateCode: (['06/2024', '07/2024', '08/2024', '02/2026', '04/2026', '05/2026'])[i % 6]!,
+      purchaseChannel: channels[i % channels.length]!,
       purchaseDate: new Date(submittedAt.getTime() - 30 * DAY).toISOString().split('T')[0],
-      checkResult: checkResults[i % 3],
+      checkResult: checkResults[i % 3]!,
       identificationMode: 'product_identifiers',
       matchedVariantIds: i % 3 !== 1 ? [campaign.variantId] : null,
     }).onConflictDoNothing();
@@ -557,7 +561,7 @@ async function main() {
       status,
       consumer,
       submittedAt,
-      assignedTo: i % 3 === 0 ? 'reviewer@koi-platform.com' : undefined,
+      ...(i % 3 === 0 ? { assignedTo: 'reviewer@koi-platform.com' } : {}),
     });
   }
 
@@ -581,8 +585,8 @@ async function main() {
   ];
 
   for (let i = 0; i < 6; i++) {
-    const c = injuryCases[i];
-    const scenario = injuryScenarios[i];
+    const c = injuryCases[i]!;
+    const scenario = injuryScenarios[i]!;
     const incidentId = randomUUID();
     const reviewId = randomUUID();
 
@@ -636,7 +640,7 @@ async function main() {
       );
       await db.insert(caseEvents).values({
         caseId: c.id,
-        eventType: e === 0 ? 'case.created' : eventTypes[(etIdx + e) % eventTypes.length],
+        eventType: e === 0 ? 'case.created' : eventTypes[(etIdx + e) % eventTypes.length]!,
         actorType: e % 3 === 0 ? 'consumer' : 'staff',
         actorId: e % 3 === 0 ? null : (staffIds['reviewer@koi-platform.com'] ?? null),
         data: { status: c.status, automated: e === 0 } as Record<string, unknown>,
@@ -650,17 +654,17 @@ async function main() {
   // -- Documents --
   let docCount = 0;
   for (let i = 0; i < 10; i++) {
-    const c = caseRecords[i % caseRecords.length];
-    const draft = drafts[i % drafts.length];
+    const c = caseRecords[i % caseRecords.length]!;
+    const draft = drafts[i % drafts.length]!;
     await db.insert(documentUploads).values({
       draftId: draft.id,
       caseId: c.id,
       category: i % 3 === 0 ? 'product_photo' : i % 3 === 1 ? 'proof_of_purchase' : 'incident_evidence',
       categorySlot: 1,
-      storagePathname: `uploads/${c.caseRef}/${['product.jpg', 'receipt.pdf', 'incident-photo.jpg'][i % 3]}`,
-      originalFileName: ['product-photo.jpg', 'amazon-receipt.pdf', 'damage-photo.jpg'][i % 3],
-      declaredMimeType: ['image/jpeg', 'application/pdf', 'image/jpeg'][i % 3],
-      sizeBytes: [2450000, 180000, 3200000][i % 3],
+      storagePathname: `uploads/${c.caseRef}/${['product.jpg', 'receipt.pdf', 'incident-photo.jpg'][i % 3]!}`,
+      originalFileName: ['product-photo.jpg', 'amazon-receipt.pdf', 'damage-photo.jpg'][i % 3]!,
+      declaredMimeType: ['image/jpeg', 'application/pdf', 'image/jpeg'][i % 3]!,
+      sizeBytes: [2450000, 180000, 3200000][i % 3]!,
       uploadStatus: 'linked',
       scanStatus: 'clean',
       uploadedAt: new Date(c.submittedAt.getTime() + 3600000),
@@ -675,10 +679,10 @@ async function main() {
   let commCount = 0;
   // Query existing message templates (from base seed)
   const existingTemplates = await db.select({ id: campaignMessageTemplates.id }).from(campaignMessageTemplates).limit(1);
-  const defaultTemplateId = existingTemplates[0]?.id ?? allCampaigns[0].versionId; // fallback
+  const defaultTemplateId = existingTemplates[0]?.id ?? allCampaigns[0]!.versionId; // fallback
 
   for (let i = 0; i < 12; i++) {
-    const c = caseRecords[i % caseRecords.length];
+    const c = caseRecords[i % caseRecords.length]!;
     const recipientEnc = await encryptPII(`consumer-${i}@email.com`);
     await db.insert(communications).values({
       caseId: c.id,
@@ -717,8 +721,8 @@ async function main() {
   ];
 
   for (let i = 0; i < 45; i++) {
-    const c = caseRecords[i % caseRecords.length];
-    const aa = auditActions[i % auditActions.length];
+    const c = caseRecords[i % caseRecords.length]!;
+    const aa = auditActions[i % auditActions.length]!;
     const actorEmail = i % 3 === 0 ? 'admin@koi-platform.com' : 'reviewer@koi-platform.com';
     await db.insert(adminAuditEvents).values({
       actorUserId: staffIds[actorEmail] ?? null,
@@ -737,7 +741,7 @@ async function main() {
 
   // -- Outbox events --
   for (let i = 0; i < 5; i++) {
-    const c = caseRecords[i];
+    const c = caseRecords[i]!;
     await db.insert(outboxEvents).values({
       aggregateType: 'case',
       aggregateId: c.id,
@@ -768,9 +772,9 @@ async function main() {
   console.log(`  ║  Audit events:       ${String(auditCount).padStart(3)}                ║`);
   console.log('  ╚══════════════════════════════════════════╝');
   console.log('\n  Staff logins:');
-  console.log('    admin@koi-platform.com     / admin123        (administrator)');
-  console.log('    reviewer@koi-platform.com  / review2026        (reviewer)');
-  console.log('    viewer@koi-platform.com    / viewer2026        (viewer)');
+  console.log(`    admin@koi-platform.com     / ${adminPassword}        (administrator)`);
+  console.log(`    reviewer@koi-platform.com  / ${reviewerPassword}        (reviewer)`);
+  console.log(`    viewer@koi-platform.com    / ${viewerPassword}        (viewer)`);
   console.log('\n  Campaigns:');
   for (const c of allCampaigns) {
     console.log(`    ${c.code}  [${c.status}]  /v1/recall-campaigns/${c.slug}`);
