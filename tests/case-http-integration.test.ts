@@ -10,7 +10,7 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createApplicationRegistry } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
-import { claimSubmissionResponseSchema } from '../src/contracts/toc.js';
+import { claimSubmissionResponseSchema, type ClaimSubmissionRequest } from '../src/contracts/toc.js';
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
 import { caseConsumers } from '../src/db/schema/index.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
@@ -58,8 +58,9 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
     const claimBody = {
       ...baseBody,
       consumer: { ...baseBody.consumer, email: uniqueEmail },
-      products: baseBody.products.map((product, index) =>
-        index === 0 ? { ...product, orderNumber: uniqueOrderNumber } : product,
+      products: baseBody.products.map(
+        (product: ClaimSubmissionRequest['products'][number], index: number) =>
+          index === 0 ? { ...product, orderNumber: uniqueOrderNumber } : product,
       ),
     };
     const payload = JSON.stringify(claimBody);

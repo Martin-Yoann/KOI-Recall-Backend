@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { claimSubmissionRequestSchema } from '../src/contracts/toc.js';
+import type { ZodIssue } from 'zod';
 
 const baseClaim = {
   draftId: '21326c9a-5dc2-430f-98a6-546729a1065f',
@@ -94,7 +95,7 @@ describe('claim incident contract', () => {
 
     expect(result.success).toBe(false);
     if (!result.success) {
-      expect(result.error.issues.map((issue) => issue.path.join('.'))).toEqual(
+      expect(result.error.issues.map((issue: ZodIssue) => issue.path.join('.'))).toEqual(
         expect.arrayContaining([
           'incidentDetails.injurySeverity',
           'incidentDetails.medicalTreatment',

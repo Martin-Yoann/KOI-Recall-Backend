@@ -10,7 +10,7 @@
   "packageManager": "pnpm@11.9.0",
   "scripts": {
     "dev": "tsx watch src/dev.ts",
-    "build": "echo 'Build OK'",
+    "build": "pnpm typecheck && pnpm openapi:check && pnpm db:check",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -27,7 +27,7 @@
     "staff:bootstrap": "tsx scripts/bootstrap-staff.ts"
   },
   "dependencies": {
-    "@hono/zod-openapi": "^1.5.1",
+    "@hono/zod-openapi": "1.5.1",
     "@neondatabase/serverless": "^1.1.0",
     "@vercel/blob": "^2.6.1",
     "dotenv": "^17.4.2",

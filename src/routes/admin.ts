@@ -359,7 +359,7 @@ export function registerAdminRoutes(
     }
     const updated = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
       const user = await staff.updateStaffUser(userId, {
-        ...(role !== undefined ? { role: role as StaffRole } : {}),
+        ...(role !== undefined ? { role } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(displayName !== undefined ? { displayName } : {}),
       });

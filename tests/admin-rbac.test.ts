@@ -101,6 +101,7 @@ function makeStaffFake(): StaffService & {
         role: input.role,
         status: 'active',
         lastLoginAt: null,
+        avatarDataUrl: null,
       };
       users.set(user.id, user);
       return user;

@@ -1,4 +1,3 @@
-// @ts-nocheck
 import { z } from '@hono/zod-openapi';
 
 import { addressSchema, isoDate, isoDateTime, uuid } from './common.js';
@@ -55,7 +54,7 @@ export const incidentDetailsSchema = z
   })
   .openapi('IncidentDetailsInput');
 
-export const claimSubmissionRequestSchema = z
+const claimSubmissionRequestObject = z
   .object({
     draftId: uuid,
     draftToken: z.string().min(32),
@@ -85,8 +84,10 @@ export const claimSubmissionRequestSchema = z
       .min(2),
     incidentAnswer: z.enum(['no', 'yes', 'unsure']),
     incidentDetails: incidentDetailsSchema.optional(),
-  })
-  .superRefine((value: Record<string, unknown>, context: z.RefinementCtx) => {
+  });
+
+export const claimSubmissionRequestSchema = claimSubmissionRequestObject
+  .superRefine((value: z.infer<typeof claimSubmissionRequestObject>, context: z.RefinementCtx) => {
     if (value.incidentAnswer === 'no' && value.incidentDetails) {
       context.addIssue({
         code: 'custom',
@@ -124,7 +125,9 @@ export const claimSubmissionRequestSchema = z
     }
 
     const hasInjury =
-      details.eventTypes?.some((type) => type === 'injury' || type === 'illness') ?? false;
+      details.eventTypes?.some(
+        (type: z.infer<typeof incidentEventTypeSchema>) => type === 'injury' || type === 'illness',
+      ) ?? false;
     if (hasInjury && !details.injurySeverity) {
       context.addIssue({
         code: 'custom',
