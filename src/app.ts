@@ -22,6 +22,7 @@ import { consoleSafeLogger } from './platform/observability/logger.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerCampaignRoutes } from './routes/campaigns.js';
 import { registerClaimRoutes } from './routes/claims.js';
+import { registerConsumerAuthRoutes } from './routes/consumer-auth.js';
 import { registerDocumentRoutes } from './routes/documents.js';
 import { notImplementedJobHandler, registerInternalJobRoutes } from './routes/internal-jobs.js';
 import { registerProductCheckRoutes } from './routes/product-checks.js';
@@ -78,8 +79,8 @@ export function createApp(dependencies: AppDependencies = {}) {
     '*',
     cors({
       origin: (origin) => (config.allowedOrigins.includes(origin) ? origin : ''),
-      allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'Idempotency-Key', 'X-Draft-Token', 'X-Request-Id'],
+      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Draft-Token', 'X-Request-Id'],
       exposeHeaders: [
         'ETag',
         'Content-Language',
@@ -101,6 +102,9 @@ export function createApp(dependencies: AppDependencies = {}) {
   // T6.2 (O6): strict body caps — JSON/claim bodies are small; provider
   // webhooks get a slightly larger allowance. Attachments never pass through
   // here (they go straight to Private Blob).
+  // Consumer profile/avatar uploads carry a base64 data URL (up to ~512 KiB),
+  // so they get a larger cap than the default JSON limit.
+  app.use('/v1/consumer-auth/me', bodyLimit(768 * 1024));
   app.use('/v1/*', bodyLimit(DEFAULT_JSON_BODY_LIMIT));
   app.use('/admin/*', bodyLimit(DEFAULT_JSON_BODY_LIMIT));
   app.use('/webhooks/*', bodyLimit(DEFAULT_WEBHOOK_BODY_LIMIT));
@@ -139,6 +143,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   registerProductCheckRoutes(app, registry);
   registerDocumentRoutes(app, registry);
   registerClaimRoutes(app, registry);
+  registerConsumerAuthRoutes(app);
   registerInternalJobRoutes(app, config.CRON_SECRET, {
     drainOutbox: registry.jobs?.drainOutbox ?? notImplementedJobHandler('Outbox processing'),
     cleanupDrafts: registry.jobs?.cleanupDrafts ?? notImplementedJobHandler('Draft cleanup'),

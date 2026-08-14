@@ -7,6 +7,7 @@
  */
 export * from './campaigns.js';
 export * from './claims.js';
+export * from './consumers.js';
 export * from './documents.js';
 export * from './incidents.js';
 export * from './operations.js';
