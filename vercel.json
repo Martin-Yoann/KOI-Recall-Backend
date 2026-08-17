@@ -2,5 +2,6 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["iad1"],
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
-  "buildCommand": "pnpm build"
+  "buildCommand": "pnpm build",
+  "builds": [{ "src": "api/index.ts", "use": "@vercel/node" }]
 }

@@ -8,7 +8,7 @@ import { isoDate, uuid } from './common.js';
  */
 export const productIdentifierSchema = z
   .object({
-    type: z.enum(['unit_upc', 'gtin14', 'model', 'style', 'lot_code', 'date_code']),
+    type: z.enum(['sku', 'unit_upc', 'gtin14', 'model', 'style', 'lot_code', 'date_code']),
     value: z.string().trim().min(1).max(160),
   })
   .openapi('ProductIdentifier');
@@ -56,15 +56,42 @@ const productCheckUnknownInput = z
   .openapi('ProductCheckUnknownInput');
 
 /**
- * Product-check request as a discriminated union of the three intake modes
+ * Legacy four-field intake (M1–M3 dual read): shape/flavor + lot/date codes.
+ * Evaluated by the Policy's legacy matching path against flat product
+ * attributes and affected-lot rows. At least one field is required so an empty
+ * submission is rejected up-front rather than routing to a confusing review.
+ */
+const productCheckLegacyInput = z
+  .object({
+    mode: z.literal('legacy'),
+    shape: z.string().trim().max(80).optional(),
+    flavor: z.string().trim().max(80).optional(),
+    lotCode: z.string().trim().max(80).optional(),
+    dateCode: z.string().trim().max(40).optional(),
+  })
+  .superRefine((value, context) => {
+    if (!value.shape && !value.flavor && !value.lotCode && !value.dateCode) {
+      context.addIssue({
+        code: 'custom',
+        path: ['mode'],
+        message: 'At least one of shape, flavor, lotCode, or dateCode is required.',
+      });
+    }
+  })
+  .openapi('ProductCheckLegacyInput');
+
+/**
+ * Product-check request as a discriminated union of the intake modes
  * (ADR-0002 §2.1, M2). Product identity and purchase evidence are kept
- * separate so corroboration is never mistaken for an identifier.
+ * separate so corroboration is never mistaken for an identifier. The legacy
+ * four-field path is retained through M3 for the shape/flavor + lot/date UI.
  */
 export const productCheckRequestSchema = z
   .discriminatedUnion('mode', [
     productCheckIdentifiersInput,
     productCheckPurchaseEvidenceInput,
     productCheckUnknownInput,
+    productCheckLegacyInput,
   ])
   .openapi('ProductCheckRequest');
 
@@ -75,7 +102,7 @@ const productCheckResponseObject = z
     result: z.enum(['potential_match', 'not_matched', 'manual_review']),
     reasonCodes: z.array(z.string().min(1).max(80)),
     matchedVariantIds: z.array(uuid),
-    identificationMode: z.enum(['product_identifiers', 'purchase_evidence', 'unknown']),
+    identificationMode: z.enum(['product_identifiers', 'purchase_evidence', 'unknown', 'legacy']),
     messageKey: z.enum([
       'product_check.potential_match',
       'product_check.manual_review.ambiguous',

@@ -438,6 +438,27 @@ components:
         - mode
         - identifiers
       type: object
+    ProductCheckLegacyInput:
+      properties:
+        dateCode:
+          maxLength: 40
+          type: string
+        flavor:
+          maxLength: 80
+          type: string
+        lotCode:
+          maxLength: 80
+          type: string
+        mode:
+          enum:
+            - legacy
+          type: string
+        shape:
+          maxLength: 80
+          type: string
+      required:
+        - mode
+      type: object
     ProductCheckPurchaseEvidenceInput:
       properties:
         mode:
@@ -453,6 +474,7 @@ components:
     ProductCheckRequest:
       discriminator:
         mapping:
+          legacy: "#/components/schemas/ProductCheckLegacyInput"
           product_identifiers: "#/components/schemas/ProductCheckIdentifiersInput"
           purchase_evidence: "#/components/schemas/ProductCheckPurchaseEvidenceInput"
           unknown: "#/components/schemas/ProductCheckUnknownInput"
@@ -461,6 +483,7 @@ components:
         - $ref: "#/components/schemas/ProductCheckIdentifiersInput"
         - $ref: "#/components/schemas/ProductCheckPurchaseEvidenceInput"
         - $ref: "#/components/schemas/ProductCheckUnknownInput"
+        - $ref: "#/components/schemas/ProductCheckLegacyInput"
     ProductCheckResponse:
       properties:
         checkedCampaignVersion:
@@ -476,6 +499,7 @@ components:
             - product_identifiers
             - purchase_evidence
             - unknown
+            - legacy
           type: string
         matchedVariantIds:
           items:
@@ -541,6 +565,7 @@ components:
       properties:
         type:
           enum:
+            - sku
             - unit_upc
             - gtin14
             - model

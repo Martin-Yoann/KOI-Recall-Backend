@@ -190,6 +190,8 @@ export function createApp(dependencies: AppDependencies = {}) {
     consoleSafeLogger.error('Unhandled API error', {
       requestId: context.get('requestId'),
       errorCode: error.name,
+      errorMessage: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
     });
     return context.json(
       {

@@ -44,6 +44,19 @@ function toIdentificationInput(slug: string, body: ProductCheckRequest): Identif
         campaignSlug: slug,
         signals: { purchaseEvidence: body.purchaseEvidence },
       };
+    case 'legacy':
+      // Map to `product_identifiers` so a provided-but-unmatched lot/date
+      // surfaces as not_matched rather than manual_review (insufficient signals).
+      return {
+        mode: 'product_identifiers',
+        campaignSlug: slug,
+        signals: {
+          ...(body.shape !== undefined ? { shape: body.shape } : {}),
+          ...(body.flavor !== undefined ? { flavor: body.flavor } : {}),
+          ...(body.lotCode !== undefined ? { lotCode: body.lotCode } : {}),
+          ...(body.dateCode !== undefined ? { dateCode: body.dateCode } : {}),
+        },
+      };
   }
 }
 
