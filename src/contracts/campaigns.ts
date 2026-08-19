@@ -40,6 +40,7 @@ export const campaignResponseSchema = z
       version: z.number().int().positive(),
       locale: z.string(),
       defaultLocale: z.string(),
+      privacyNotice: z.object({ version: z.string().max(80), url: z.string().url() }),
       title: z.string(),
       summary: z.string(),
       hazard: z.string(),

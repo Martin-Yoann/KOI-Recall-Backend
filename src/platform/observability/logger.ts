@@ -7,6 +7,8 @@ export interface SafeLogFields {
   status?: number;
   elapsedMs?: number;
   errorCode?: string;
+  errorMessage?: string;
+  stack?: string | undefined;
 }
 
 export interface SafeLogger {

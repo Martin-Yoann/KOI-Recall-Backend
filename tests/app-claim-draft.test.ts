@@ -15,7 +15,7 @@ import {
 
 const draft: CreatedClaimDraft = {
   draftId: '21326c9a-5dc2-430f-98a6-546729a1065f',
-  draftToken: 'one-time-secret-with-at-least-32-characters',
+  draftToken: 'one-time-secret-with-at-least-32-characters-1234',
   expiresAt: '2026-08-07T12:00:00.000Z',
 };
 
@@ -52,7 +52,7 @@ describe('POST /v1/recall-campaigns/{slug}/claim-drafts', () => {
     const body = (await response.json()) as ClaimDraftResponse;
     expect(body).toEqual({
       draftId: '21326c9a-5dc2-430f-98a6-546729a1065f',
-      draftToken: 'one-time-secret-with-at-least-32-characters',
+      draftToken: 'one-time-secret-with-at-least-32-characters-1234',
       expiresAt: '2026-08-07T12:00:00.000Z',
     });
   });

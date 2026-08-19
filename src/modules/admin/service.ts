@@ -1,4 +1,6 @@
 import type { StaffRole } from '../staff/permissions.js';
+import type { CaseResolution, ApproveResolutionInput, CompleteResolutionInput, CancelResolutionInput } from '../resolutions/service.js';
+import type { WorkflowSnapshot } from '../workflow/policy.js';
 
 /** The three operational queues an admin can inspect (T8/O10). */
 export type AdminQueue = 'standard' | 'manual_review' | 'incident';
@@ -9,11 +11,16 @@ export interface AdminCaseSummary {
   subtype: string;
   incidentFlag: boolean;
   submittedAt: string;
+  resolution?: Pick<CaseResolution, 'requestedType' | 'approvedType' | 'status'> | null;
+  workflow?: WorkflowSnapshot;
 }
 
 export interface ListCasesFilter {
   queue?: AdminQueue;
   status?: string;
+  resolutionType?: 'replacement' | 'refund';
+  resolutionStatus?: 'requested' | 'approved' | 'externally_completed' | 'cancelled';
+  incident?: boolean;
   limit: number;
 }
 
@@ -53,6 +60,16 @@ export interface AdminCaseDetail {
   assignedToStaffUserId: string | null;
   assignedAt: string | null;
   consumer: CaseDetailConsumer;
+  resolution?: CaseResolution | null;
+  workflow?: WorkflowSnapshot;
+  events?: Array<{
+    id: string;
+    eventType: string;
+    actorType: string;
+    actorId: string | null;
+    data: Record<string, unknown>;
+    occurredAt: string;
+  }>;
 }
 
 export interface GetCaseDetailInput {
@@ -98,4 +115,8 @@ export interface AdminService {
     nextStatus: string,
     actorUserId: string,
   ): Promise<void>;
+
+  approveResolution?(caseReference: string, input: Omit<ApproveResolutionInput, 'caseId'>): Promise<CaseResolution>;
+  completeResolution?(caseReference: string, input: Omit<CompleteResolutionInput, 'caseId'>): Promise<CaseResolution>;
+  cancelResolution?(caseReference: string, input: Omit<CancelResolutionInput, 'caseId'>): Promise<CaseResolution>;
 }

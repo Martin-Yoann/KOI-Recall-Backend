@@ -42,6 +42,18 @@ describe('HTTP application shell', () => {
     await expect(ready.json()).resolves.toEqual({ status: 'ok', service: 'koi-recall-api' });
   });
 
+  it('accepts a Neon integration fallback when DATABASE_URL is absent', async () => {
+    const readyApp = createApp({
+      config: loadConfig({
+        koi_DATABASE_URL:
+          'postgresql://user:pass@ep-koi-test-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require',
+        CORS_ALLOWED_ORIGINS: 'https://consumer.example.com',
+      }),
+    });
+    const ready = await readyApp.request('/health/ready');
+    expect(ready.status).toBe(200);
+  });
+
   it('honours an injected ready check', async () => {
     const app = createApp({
       config: loadConfig({ CORS_ALLOWED_ORIGINS: 'https://consumer.example.com' }),

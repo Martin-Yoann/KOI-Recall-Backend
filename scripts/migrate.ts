@@ -1,5 +1,7 @@
 import 'dotenv/config';
 
+import { fileURLToPath } from 'node:url';
+
 import { Pool as NeonPool } from '@neondatabase/serverless';
 import { drizzle as neonServerlessDrizzle } from 'drizzle-orm/neon-serverless';
 import { migrate as migrateNeonServerless } from 'drizzle-orm/neon-serverless/migrator';
@@ -9,7 +11,7 @@ import { Client, Pool } from 'pg';
 
 import { detectDriver } from '../src/db/client.js';
 
-const migrationsFolder = new URL('../drizzle', import.meta.url).pathname;
+const migrationsFolder = fileURLToPath(new URL('../drizzle', import.meta.url));
 
 /**
  * For local node-postgres targets, creates the database named in the connection
@@ -38,10 +40,10 @@ async function ensurePostgresDatabase(connectionString: string): Promise<void> {
 }
 
 async function run(): Promise<void> {
-  const databaseUrl = process.env.DATABASE_URL;
+  const databaseUrl = process.env.DATABASE_URL || process.env.koi_DATABASE_URL;
   if (!databaseUrl) {
     throw new Error(
-      'DATABASE_URL is required. Set it in .env (local Postgres) or your deployment environment (Neon).',
+      'DATABASE_URL is required. Set DATABASE_URL or koi_DATABASE_URL in .env or your deployment environment.',
     );
   }
 

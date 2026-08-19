@@ -40,6 +40,8 @@ import {
 import { DrizzleCampaignSnapshotReader } from '../product-identification/drizzle-snapshot-reader.js';
 import { identify } from '../product-identification/policy.js';
 import { hashDraftToken } from '../claim-drafts/tokens.js';
+import { DrizzleCaseResolutionService, resolutionTypeForRemedyCode } from '../resolutions/drizzle-case-resolution-service.js';
+import type { CaseResolutionService } from '../resolutions/service.js';
 import {
   canonicalJson,
   generateCaseReference,
@@ -112,13 +114,46 @@ interface EncryptedSubmission {
 }
 
 export class DrizzleCaseService implements CaseService {
+  private readonly handle: DatabaseHandle;
+  private readonly crypto: SensitiveDataCryptoPort;
+  private readonly resolutions: CaseResolutionService;
+  private readonly referenceGenerator: () => string;
+  private readonly beforeIdempotencyInsert: () => Promise<void>;
+  private readonly malwareScanRequired: boolean;
+
   constructor(
-    private readonly handle: DatabaseHandle,
-    private readonly crypto: SensitiveDataCryptoPort,
-    private readonly referenceGenerator: () => string = generateCaseReference,
-    private readonly beforeIdempotencyInsert: () => Promise<void> = () => Promise.resolve(),
-    private readonly malwareScanRequired = false,
-  ) {}
+    handle: DatabaseHandle,
+    crypto: SensitiveDataCryptoPort,
+    resolutionsOrReference?: CaseResolutionService | (() => string),
+    referenceOrBefore?: (() => string) | (() => Promise<void>),
+    beforeOrMalware?: (() => Promise<void>) | boolean,
+    malwareScanRequired = false,
+  ) {
+    this.handle = handle;
+    this.crypto = crypto;
+    const defaultResolution = new DrizzleCaseResolutionService(handle, crypto);
+    const legacyReference = typeof resolutionsOrReference === 'function' ? resolutionsOrReference : undefined;
+    this.resolutions =
+      legacyReference || typeof resolutionsOrReference === 'undefined'
+        ? defaultResolution
+        : (resolutionsOrReference as CaseResolutionService);
+    const legacyReferenceGenerator =
+      legacyReference ??
+      (resolutionsOrReference === undefined &&
+      typeof referenceOrBefore === 'function' &&
+      arguments.length === 3
+        ? referenceOrBefore as () => string
+        : undefined);
+    this.referenceGenerator = legacyReferenceGenerator ?? generateCaseReference;
+    this.beforeIdempotencyInsert =
+      resolutionsOrReference === undefined && typeof referenceOrBefore === 'function' && arguments.length >= 4
+        ? referenceOrBefore as () => Promise<void>
+        : typeof beforeOrMalware === 'function'
+          ? beforeOrMalware
+          : () => Promise.resolve();
+    this.malwareScanRequired =
+      typeof beforeOrMalware === 'boolean' ? beforeOrMalware : malwareScanRequired;
+  }
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
     const endpoint = `/v1/recall-campaigns/${command.campaignSlug}/claims`;
@@ -141,6 +176,7 @@ export class DrizzleCaseService implements CaseService {
           campaignSlug: recallCampaigns.slug,
           campaignStatus: recallCampaigns.status,
           versionCampaignId: campaignVersions.campaignId,
+          privacyNoticeVersion: campaignVersions.privacyNoticeVersion,
         })
         .from(claimDrafts)
         .innerJoin(recallCampaigns, eq(recallCampaigns.id, claimDrafts.campaignId))
@@ -190,7 +226,7 @@ export class DrizzleCaseService implements CaseService {
         )
         .returning({ id: idempotencyRecords.id });
 
-      this.validateConsents(command.body);
+      this.validateConsents(command.body, locked.privacyNoticeVersion);
       if (new Set(command.body.documentIds).size !== command.body.documentIds.length) {
         throw new ClaimValidationError('Document IDs must be unique.');
       }
@@ -439,6 +475,11 @@ export class DrizzleCaseService implements CaseService {
           acceptedAt: submittedAt,
         })),
       );
+      await this.resolutions.requestFromSubmission(tx, {
+        caseId,
+        requestedType: resolutionTypeForRemedyCode(command.body.remedyCode),
+        requestedRemedyOptionId: remedy.id,
+      });
       await tx.insert(submissionSnapshots).values({
         caseId,
         schemaVersion: 'phase1-v1',
@@ -593,7 +634,10 @@ export class DrizzleCaseService implements CaseService {
     return claimSubmissionResponseSchema.parse(existing.responseBody);
   }
 
-  private validateConsents(body: ClaimSubmissionRequest): void {
+  private validateConsents(
+    body: ClaimSubmissionRequest,
+    expectedPrivacyNoticeVersion: string | null,
+  ): void {
     const consentTypes = body.consents.map((item) => item.type);
     if (
       consentTypes.length !== 2 ||
@@ -602,6 +646,19 @@ export class DrizzleCaseService implements CaseService {
       !consentTypes.includes('information_accuracy')
     ) {
       throw new ClaimValidationError('Both required consents must be accepted exactly once.');
+    }
+
+    if (!expectedPrivacyNoticeVersion) {
+      throw new ClaimValidationError(
+        'The published Campaign Version is missing a Privacy Notice version.',
+      );
+    }
+
+    const privacyConsent = body.consents.find((item) => item.type === 'privacy_notice');
+    if (!privacyConsent || privacyConsent.textVersion !== expectedPrivacyNoticeVersion) {
+      throw new ClaimValidationError(
+        'The accepted Privacy Notice version is no longer current. Refresh and try again.',
+      );
     }
   }
 

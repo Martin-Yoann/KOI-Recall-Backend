@@ -1,4 +1,4 @@
-import type { OpenAPIHono } from '@hono/zod-openapi';
+﻿import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 
 import type { AdminTransactionRunner, ApplicationRegistry } from '../composition.js';
@@ -22,7 +22,7 @@ import { consoleSafeLogger } from '../platform/observability/logger.js';
  * path to a `principal` on the context; routes then enforce permissions.
  *
  * New endpoints (case detail, assign, status, sessions, staff mgmt, audit)
- * require a real staff session and do NOT accept the legacy key — they are
+ * require a real staff session and do NOT accept the legacy key 鈥?they are
  * net-new and have no backward-compat obligation.
  */
 
@@ -167,7 +167,7 @@ export function registerAdminRoutes(
     }),
   );
 
-  // ---- Sessions (login/logout/refresh) — net-new, no legacy key ----
+  // ---- Sessions (login/logout/refresh) 鈥?net-new, no legacy key ----
 
   app.post('/admin/sessions', async (context) => {
     const staff = registry.services.staff;
@@ -197,7 +197,7 @@ export function registerAdminRoutes(
     );
   });
 
-  // ---- Update own profile (name, avatar) — requires valid session ----
+  // ---- Update own profile (name, avatar) 鈥?requires valid session ----
 
   app.patch('/admin/profile', async (context) => {
     const principal = context.get('principal');
@@ -409,10 +409,17 @@ export function registerAdminRoutes(
       ? (queueParam as 'standard' | 'manual_review' | 'incident')
       : undefined;
     const status = context.req.query('status') ?? undefined;
+    const resolutionType = context.req.query('resolutionType');
+    const resolutionStatus = context.req.query('resolutionStatus');
+    const incidentParam = context.req.query('incident');
+    const incident = incidentParam === 'true' ? true : incidentParam === 'false' ? false : undefined;
     const limit = Math.min(Number(context.req.query('limit') ?? 100) || 100, 1000);
     const cases = await registry.services.admin?.listCases({
       ...(queue ? { queue } : {}),
       ...(status ? { status } : {}),
+      ...((resolutionType === 'replacement' || resolutionType === 'refund') ? { resolutionType } : {}),
+      ...((resolutionStatus === 'requested' || resolutionStatus === 'approved' || resolutionStatus === 'externally_completed' || resolutionStatus === 'cancelled') ? { resolutionStatus } : {}),
+      ...(incident !== undefined ? { incident } : {}),
       limit,
     });
     if (!cases) throw new Error('Admin service is not configured.');
@@ -534,6 +541,71 @@ export function registerAdminRoutes(
     return context.body(null, 204);
   });
 
+  // ---- Resolution lifecycle (case.status.transition) ----
+
+  app.post('/admin/cases/:caseRef/resolution/approve', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.status.transition');
+    if (guard instanceof Response) return guard;
+    const body = await bodyRecord(context);
+    const type = asString(body.type);
+    const note = asString(body.note) ?? '';
+    const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
+    if ((type !== 'replacement' && type !== 'refund') || note.trim().length < 10 || note.length > 1000 || !Number.isInteger(expectedVersion)) return validationError(context, 'type, note (10-1000 characters), and integer expectedVersion are required.');
+    const refundAmountMinor = typeof body.refundAmountMinor === 'number' ? body.refundAmountMinor : Number(body.refundAmountMinor);
+    const currency = asString(body.currency);
+    if (type === 'refund' && (!Number.isInteger(refundAmountMinor) || refundAmountMinor <= 0 || !currency)) return validationError(context, 'refund approvals require a positive integer refundAmountMinor and currency.');
+    const approve = registry.services.admin?.approveResolution;
+    if (!approve) throw new Error('Resolution service is not configured.');
+    const result = type === 'refund' && currency
+      ? await approve.call(registry.services.admin, context.req.param('caseRef'), { type, note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, refundAmountMinor, currency })
+      : await approve.call(registry.services.admin, context.req.param('caseRef'), { type: 'replacement', note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
+    if (!result) throw new Error('Admin service is not configured.');
+    return context.json({ resolution: result }, 200);
+  });
+
+  app.post('/admin/cases/:caseRef/resolution/complete', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.status.transition');
+    if (guard instanceof Response) return guard;
+    const body = await bodyRecord(context);
+    const note = asString(body.note) ?? '';
+    const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
+    if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion)) return validationError(context, 'note (10-2000 characters) and integer expectedVersion are required.');
+    const complete = registry.services.admin?.completeResolution;
+    if (!complete) throw new Error('Resolution service is not configured.');
+    const externalReference = asString(body.externalReference);
+    const result = externalReference
+      ? await complete.call(registry.services.admin, context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, externalReference })
+      : await complete.call(registry.services.admin, context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
+    if (!result) throw new Error('Admin service is not configured.');
+    return context.json({ resolution: result }, 200);
+  });
+
+  app.post('/admin/cases/:caseRef/resolution/cancel', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.status.transition');
+    if (guard instanceof Response) return guard;
+    const body = await bodyRecord(context);
+    const note = asString(body.note) ?? '';
+    const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
+    if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion)) return validationError(context, 'note (10-2000 characters) and integer expectedVersion are required.');
+    const cancel = registry.services.admin?.cancelResolution;
+    if (!cancel) throw new Error('Resolution service is not configured.');
+    const result = await cancel.call(registry.services.admin, context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, actorIsAdministrator: guard.role === 'administrator' });
+    if (!result) throw new Error('Admin service is not configured.');
+    return context.json({ resolution: result }, 200);
+  });
+
+
+  app.post('/admin/refund-exports', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.export');
+    if (guard instanceof Response) return guard;
+    const service = registry.services.refundExports;
+    if (!service) return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
+    const body = await bodyRecord(context);
+    const purpose = asString(body.purpose) ?? '';
+    if (purpose.trim().length === 0 || purpose.length > 500) return validationError(context, 'purpose is required and must be at most 500 characters.');
+    const result = await service.export({ actorUserId: guard.userId, actorRole: guard.role, purpose, includeExported: body.includeExported === true });
+    return context.body(result.csv, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="refund-export-${result.batchId}.csv"`, 'X-Refund-Export-Batch-Id': result.batchId, 'X-Refund-Export-Sha256': result.sha256 });
+  });
   // ---- Reportability review close (review.close) ----
 
   app.post('/admin/reportability-reviews/:id/close', async (context) => {

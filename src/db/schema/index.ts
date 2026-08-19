@@ -11,4 +11,6 @@ export * from './consumers.js';
 export * from './documents.js';
 export * from './incidents.js';
 export * from './operations.js';
+export * from './resolutions.js';
+export * from './refund-exports.js';
 export * from './staff.js';

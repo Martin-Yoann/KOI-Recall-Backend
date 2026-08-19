@@ -199,6 +199,19 @@ describe('application composition', () => {
     expect(registry.platform.crypto).toBeInstanceOf(NodeSensitiveDataCrypto);
   });
 
+  it('falls back to the Neon integration variable when DATABASE_URL is absent', () => {
+    const registry = createDefaultRegistry(
+      configuredConfig({
+        DATABASE_URL: undefined,
+        koi_DATABASE_URL:
+          'postgresql://user:password@ep-koi-test-pooler.us-east-2.aws.neon.tech/neondb?sslmode=require',
+      }),
+    );
+
+    expect(registry.services.cases).toBeInstanceOf(DrizzleCaseService);
+    expect(registry.platform.crypto).toBeInstanceOf(NodeSensitiveDataCrypto);
+  });
+
   it('fails closed for a direct Neon database URL without exposing it', () => {
     const databaseUrl =
       'postgresql://sensitive-user:sensitive-password@ep-koi-test.us-east-2.aws.neon.tech/neondb';

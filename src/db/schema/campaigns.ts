@@ -56,6 +56,9 @@ export const campaignVersions = pgTable(
     versionNumber: integer('version_number').notNull(),
     status: campaignVersionStatusEnum('status').notNull().default('draft'),
     schemaVersion: varchar('schema_version', { length: 40 }).notNull().default('phase1-v1'),
+    // M1 nullable for legacy versions; M3 makes published versions require both fields.
+    privacyNoticeVersion: varchar('privacy_notice_version', { length: 80 }),
+    privacyNoticeUrl: text('privacy_notice_url'),
     publishedAt: timestamp('published_at', { withTimezone: true, mode: 'date' }),
     retiredAt: timestamp('retired_at', { withTimezone: true, mode: 'date' }),
     // T4.3 (O4): publish-gate record. `approvals` carries the structured

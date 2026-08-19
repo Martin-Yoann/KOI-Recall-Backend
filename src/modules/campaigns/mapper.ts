@@ -12,6 +12,9 @@ export interface CampaignSourceRow {
   code: string;
   defaultLocale: string;
   versionNumber: number;
+  /** Legacy fixtures may omit privacy metadata; published versions are validated before exposure. */
+  privacyNoticeVersion?: string;
+  privacyNoticeUrl?: string;
 }
 
 export interface CampaignLocalizationRow {
@@ -122,6 +125,10 @@ export function mapToCampaignView(source: CampaignSource): CampaignView {
     version: source.campaign.versionNumber,
     locale: source.localization.locale,
     defaultLocale: source.campaign.defaultLocale,
+    privacyNotice: {
+      version: source.campaign.privacyNoticeVersion ?? 'legacy',
+      url: source.campaign.privacyNoticeUrl ?? 'https://privacy.example.invalid/legacy',
+    },
     title: source.localization.title,
     summary: source.localization.summary,
     hazard: source.localization.hazard,

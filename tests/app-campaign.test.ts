@@ -12,6 +12,7 @@ const campaign: CampaignView = {
   version: 1,
   locale: 'en-US',
   defaultLocale: 'en-US',
+  privacyNotice: { version: '2026-01', url: 'https://privacy.example.invalid/2026-01' },
   title: 'Music Lollipop Safety Recall',
   summary: 'Fictional test content.',
   hazard: 'Fictional hazard.',

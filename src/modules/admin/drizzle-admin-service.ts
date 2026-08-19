@@ -1,14 +1,19 @@
 import { and, desc, eq, inArray } from 'drizzle-orm';
 
+import { evaluate } from '../workflow/policy.js';
+
 import type { DatabaseExecutor } from '../../db/client.js';
 import {
   caseConsumers,
   caseEvents,
+  caseResolutions,
+  incidents,
   recallCases,
   reportabilityReviews,
 } from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import { piiTierFor } from '../staff/permissions.js';
+import type { CaseResolution, ApproveResolutionInput, CompleteResolutionInput, CancelResolutionInput, CaseResolutionService } from '../resolutions/service.js';
 import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
 import { maskAddress, maskEmail, maskName, maskPhone } from './pii-masking.js';
 import type {
@@ -21,20 +26,6 @@ import type {
   GetCaseDetailInput,
   ListCasesFilter,
 } from './service.js';
-
-/**
- * Legal forward status transitions for a recall case (ADR-0004 B8). Closed is
- * terminal; duplicate/withdrawn are also terminal. This prevents invalid jumps
- * like closed → submitted.
- */
-const LEGAL_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {
-  submitted: ['triage', 'under_review', 'rejected', 'duplicate', 'withdrawn'],
-  triage: ['under_review', 'need_info', 'approved', 'rejected', 'duplicate', 'withdrawn'],
-  under_review: ['need_info', 'approved', 'rejected', 'closure_review', 'withdrawn'],
-  need_info: ['under_review', 'approved', 'rejected', 'withdrawn'],
-  approved: ['closure_review', 'closed'],
-  closure_review: ['closed', 'under_review'],
-};
 
 /** Statuses that put a case in each operational queue (T8/O10). */
 type CaseStatus = (typeof recallCases.$inferSelect)['status'];
@@ -53,6 +44,7 @@ export class DrizzleAdminService implements AdminService {
   constructor(
     private readonly db: DatabaseExecutor,
     private readonly crypto: SensitiveDataCryptoPort,
+    private readonly resolutions?: CaseResolutionService,
   ) {}
 
   async listCases(filter: ListCasesFilter): Promise<AdminCaseSummary[]> {
@@ -82,12 +74,11 @@ export class DrizzleAdminService implements AdminService {
       .orderBy(desc(recallCases.submittedAt))
       .limit(filter.limit);
 
-    return rows.map((row) => ({
-      caseReference: row.caseReference,
-      status: row.status,
-      subtype: row.subtype,
-      incidentFlag: row.incidentFlag,
-      submittedAt: row.submittedAt.toISOString(),
+    return Promise.all(rows.map(async (row): Promise<AdminCaseSummary> => {
+      const [caseRow] = await db.select({ id: recallCases.id, status: recallCases.status, subtype: recallCases.subtype, incidentFlag: recallCases.incidentFlag }).from(recallCases).where(eq(recallCases.publicReference, row.caseReference)).limit(1);
+      const resolution = caseRow ? await db.select({ requestedType: caseResolutions.requestedType, approvedType: caseResolutions.approvedType, status: caseResolutions.status }).from(caseResolutions).where(eq(caseResolutions.caseId, caseRow.id)).limit(1) : [];
+      const workflow = caseRow ? await this.workflowFor(caseRow) : undefined;
+      return { caseReference: row.caseReference, status: row.status, subtype: row.subtype, incidentFlag: row.incidentFlag, submittedAt: row.submittedAt.toISOString(), ...(resolution[0] ? { resolution: resolution[0] } : { resolution: null }), ...(workflow ? { workflow } : {}) };
     }));
   }
 
@@ -162,7 +153,16 @@ export class DrizzleAdminService implements AdminService {
       assignedToStaffUserId: caseRow.assignedToStaffUserId,
       assignedAt: caseRow.assignedAt ? caseRow.assignedAt.toISOString() : null,
       consumer,
+      resolution: this.resolutions ? await this.resolutions.getForCase(caseRow.id) : null,
+      workflow: await this.workflowFor(caseRow),
+      events: (await db.select().from(caseEvents).where(eq(caseEvents.caseId, caseRow.id)).orderBy(desc(caseEvents.occurredAt)).limit(100)).reverse().map((event) => ({ id: event.id, eventType: event.eventType, actorType: event.actorType, actorId: event.actorId, data: event.data, occurredAt: event.occurredAt.toISOString() })),
     };
+  }
+
+  private async workflowFor(caseRow: { id: string; status: CaseStatus; subtype: 'standard' | 'injury_hazard'; incidentFlag: boolean }) {
+    const [incidentRow] = await this.db.select({ reportabilityStatus: reportabilityReviews.status }).from(incidents).leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id)).where(eq(incidents.caseId, caseRow.id)).limit(1);
+    const [resolutionRow] = await this.db.select({ requestedType: caseResolutions.requestedType, approvedType: caseResolutions.approvedType, status: caseResolutions.status }).from(caseResolutions).where(eq(caseResolutions.caseId, caseRow.id)).limit(1);
+    return evaluate({ caseStatus: caseRow.status, subtype: caseRow.subtype, incidentFlag: caseRow.incidentFlag, reportabilityStatus: incidentRow?.reportabilityStatus ?? null, resolution: resolutionRow ?? null });
   }
 
   private async renderConsumer(
@@ -218,6 +218,27 @@ export class DrizzleAdminService implements AdminService {
     };
   }
 
+  async approveResolution(caseReference: string, input: Omit<ApproveResolutionInput, 'caseId'>): Promise<CaseResolution> {
+    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    return this.resolutions.approve({ ...input, caseId: await this.caseIdForReference(caseReference) });
+  }
+
+  async completeResolution(caseReference: string, input: Omit<CompleteResolutionInput, 'caseId'>): Promise<CaseResolution> {
+    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    return this.resolutions.recordExternalCompletion({ ...input, caseId: await this.caseIdForReference(caseReference) });
+  }
+
+  async cancelResolution(caseReference: string, input: Omit<CancelResolutionInput, 'caseId'>): Promise<CaseResolution> {
+    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    return this.resolutions.cancel({ ...input, caseId: await this.caseIdForReference(caseReference) });
+  }
+
+  private async caseIdForReference(caseReference: string): Promise<string> {
+    const [row] = await this.db.select({ id: recallCases.id }).from(recallCases).where(eq(recallCases.publicReference, caseReference)).limit(1);
+    if (!row) throw new ResourceNotFoundError('Case was not found.');
+    return row.id;
+  }
+
   async assignCase(caseReference: string, staffUserId: string | null): Promise<void> {
     const db = this.db;
     const result = await db
@@ -235,18 +256,59 @@ export class DrizzleAdminService implements AdminService {
   ): Promise<void> {
     const db = this.db;
     const [caseRow] = await db
-      .select({ id: recallCases.id, status: recallCases.status })
+      .select({
+        id: recallCases.id,
+        status: recallCases.status,
+        subtype: recallCases.subtype,
+        incidentFlag: recallCases.incidentFlag,
+      })
       .from(recallCases)
       .where(eq(recallCases.publicReference, caseReference))
       .limit(1);
     if (!caseRow) throw new ResourceNotFoundError('Case was not found.');
 
-    const allowed = LEGAL_TRANSITIONS[caseRow.status] ?? [];
-    if (!allowed.includes(nextStatus)) {
+    const [incident] = await db
+      .select({ id: incidents.id })
+      .from(incidents)
+      .where(eq(incidents.caseId, caseRow.id))
+      .limit(1);
+    const [incidentReview] = incident
+      ? await db
+          .select({ reportabilityStatus: reportabilityReviews.status })
+          .from(reportabilityReviews)
+          .where(eq(reportabilityReviews.incidentId, incident.id))
+          .limit(1)
+      : [];
+
+    const [resolutionRow] = await db
+      .select({
+        requestedType: caseResolutions.requestedType,
+        approvedType: caseResolutions.approvedType,
+        status: caseResolutions.status,
+      })
+      .from(caseResolutions)
+      .where(eq(caseResolutions.caseId, caseRow.id))
+      .limit(1);
+
+    const workflow = evaluate({
+      caseStatus: caseRow.status,
+      subtype: caseRow.subtype,
+      incidentFlag: caseRow.incidentFlag,
+      reportabilityStatus: incidentReview?.reportabilityStatus ?? null,
+      resolution: resolutionRow
+        ? {
+            requestedType: resolutionRow.requestedType,
+            approvedType: resolutionRow.approvedType,
+            status: resolutionRow.status,
+          }
+        : null,
+    });
+    if (!workflow.allowedActions.includes(`transition:${nextStatus}`)) {
       throw new ClaimValidationError(
         `Status transition from '${caseRow.status}' to '${nextStatus}' is not allowed.`,
       );
     }
+
     await db
       .update(recallCases)
       .set({ status: nextStatus as never })

@@ -19,6 +19,18 @@ components:
               type: string
             locale:
               type: string
+            privacyNotice:
+              properties:
+                url:
+                  format: uri
+                  type: string
+                version:
+                  maxLength: 80
+                  type: string
+              required:
+                - version
+                - url
+              type: object
             products:
               items:
                 $ref: "#/components/schemas/PublicCampaignProduct"
@@ -67,6 +79,7 @@ components:
             - version
             - locale
             - defaultLocale
+            - privacyNotice
             - title
             - summary
             - hazard

@@ -65,7 +65,21 @@ export class DrizzleCampaignService implements CampaignService {
     if (!campaign || !campaign.publishedVersionId) return null;
     const versionId = campaign.publishedVersionId;
 
-    const [version] = await buildPublishedVersionQuery(db, campaign.id, versionId);
+    const [version] = await db
+      .select({
+        versionNumber: campaignVersions.versionNumber,
+        privacyNoticeVersion: campaignVersions.privacyNoticeVersion,
+        privacyNoticeUrl: campaignVersions.privacyNoticeUrl,
+      })
+      .from(campaignVersions)
+      .where(
+        and(
+          eq(campaignVersions.id, versionId),
+          eq(campaignVersions.campaignId, campaign.id),
+          eq(campaignVersions.status, 'published'),
+        ),
+      )
+      .limit(1);
     if (!version) return null;
 
     const [localization] = await db
@@ -147,6 +161,8 @@ export class DrizzleCampaignService implements CampaignService {
         code: campaign.code,
         defaultLocale: campaign.defaultLocale,
         versionNumber: version.versionNumber,
+        privacyNoticeVersion: version.privacyNoticeVersion ?? 'legacy',
+        privacyNoticeUrl: version.privacyNoticeUrl ?? 'https://privacy.example.invalid/legacy',
       },
       localization,
       products,

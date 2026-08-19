@@ -5,9 +5,11 @@ import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
 import { DrizzleAdminService } from './modules/admin/drizzle-admin-service.js';
 import type { AdminService } from './modules/admin/service.js';
+import { DrizzleCaseResolutionService } from './modules/resolutions/drizzle-case-resolution-service.js';
 import { DrizzleStaffService } from './modules/staff/drizzle-staff-service.js';
 import { DrizzleAuditService } from './modules/staff/drizzle-audit-service.js';
 import type { StaffService } from './modules/staff/service.js';
+import { RefundExportService } from './modules/refund-exports/service.js';
 import type { AuditService } from './modules/staff/audit-service.js';
 import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-draft-service.js';
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
@@ -50,6 +52,7 @@ export interface ApplicationServices {
   /** ADR-0004: staff identity, sessions, and audit (B-end RBAC). */
   staff?: StaffService;
   audit?: AuditService;
+  refundExports?: RefundExportService;
   adminTransactions?: AdminTransactionRunner;
 }
 
@@ -155,18 +158,31 @@ export function createApplicationRegistry(
             cases: new DrizzleCaseService(
               handle,
               crypto,
+              new DrizzleCaseResolutionService(handle, crypto),
               undefined,
               undefined,
               malwareScanRequired,
             ),
-            admin: new DrizzleAdminService(handle.db, crypto),
+            admin: new DrizzleAdminService(
+              handle.db,
+              crypto,
+              new DrizzleCaseResolutionService(handle, crypto),
+            ),
             staff: new DrizzleStaffService(handle.db, crypto),
             audit: new DrizzleAuditService(handle.db),
+            refundExports: new RefundExportService(handle),
             adminTransactions: {
               run: (work) =>
                 handle.transaction((tx) =>
                   work({
-                    admin: new DrizzleAdminService(tx, crypto),
+                    admin: new DrizzleAdminService(
+                      tx,
+                      crypto,
+                      new DrizzleCaseResolutionService(
+                        { db: tx as never, driver: handle.driver, transaction: async (work) => work(tx), close: async () => {} },
+                        crypto,
+                      ),
+                    ),
                     staff: new DrizzleStaffService(tx, crypto),
                     audit: new DrizzleAuditService(tx),
                   }),
