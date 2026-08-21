@@ -6,13 +6,26 @@
 // ============================================================
 
 import { createHash, randomBytes } from 'node:crypto';
-import { eq, and } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { Context } from 'hono';
 import type { AppEnv } from '../middleware/request-context.js';
 import { createDatabase, type DatabaseHandle } from '../db/client.js';
-import { consumerUsers, consumerSessions } from '../db/schema/consumers.js';
+import {
+  campaignLocalizations,
+  campaignProducts,
+  caseConsumers,
+  caseEvents,
+  caseResolutions,
+  claimedProducts,
+  consumerSessions,
+  consumerUsers,
+  recallCases,
+  recallCampaigns,
+} from '../db/schema/index.js';
 import { hashPassword, verifyPassword } from '../modules/staff/password.js';
 import { NodeSensitiveDataCrypto } from '../platform/crypto/node-sensitive-data-crypto.js';
+import { problemType } from '../shared/errors.js';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const AVATAR_MAX_BYTES = 512 * 1024; // 512 KiB data-URL ceiling (matches staff)
@@ -80,6 +93,42 @@ function toPublic(row: typeof consumerUsers.$inferSelect): ConsumerPublic {
   };
 }
 
+type ConsumerUserRow = typeof consumerUsers.$inferSelect;
+
+type ConsumerClaimStatus =
+  | 'submitted'
+  | 'under_review'
+  | 'verified'
+  | 'remedy_issued'
+  | 'resolved'
+  | 'rejected';
+
+interface ConsumerClaimSummary {
+  id: string;
+  claimNumber: string;
+  caseRef: string;
+  campaignId: string;
+  campaignTitle: string;
+  campaignSlug: string;
+  consumerName: string;
+  consumerEmail: string;
+  consumerPhone: string;
+  productName: string;
+  shape?: string;
+  flavor?: string;
+  lotCode?: string;
+  dateCode?: string;
+  remedyId: string;
+  remedyTitle: string;
+  remedyType: string;
+  refundAmount?: number;
+  status: ConsumerClaimStatus;
+  evidenceCount: number;
+  submittedAt: string;
+  updatedAt: string;
+  resolutionDate?: string;
+}
+
 async function issueSession(userId: string): Promise<{ token: string; sessionId: string; expiresAt: string }> {
   const token = newToken();
   const tokenHash = sha256hex(token);
@@ -89,39 +138,38 @@ async function issueSession(userId: string): Promise<{ token: string; sessionId:
     .insert(consumerSessions)
     .values({ userId, tokenHash, expiresAt })
     .returning({ id: consumerSessions.id });
-  return { token, sessionId: session!.id, expiresAt: expiresAt.toISOString() };
+  if (!session) throw new Error('Consumer session could not be created.');
+  return { token, sessionId: session.id, expiresAt: expiresAt.toISOString() };
 }
 
-/** Resolve a Bearer token to an active, non-expired consumer session + user. */
-async function resolveBearer(authHeader: string | undefined): Promise<typeof consumerUsers.$inferSelect | null> {
+async function resolveBearer(authHeader: string | undefined): Promise<ConsumerUserRow | null> {
   if (!authHeader?.startsWith('Bearer ')) return null;
   const token = authHeader.slice('Bearer '.length).trim();
   if (!token) return null;
   const tokenHash = sha256hex(token);
   const handle = db();
-  const rows = await handle.db
+  const [row] = await handle.db
     .select({ user: consumerUsers, session: consumerSessions })
     .from(consumerSessions)
     .innerJoin(consumerUsers, eq(consumerSessions.userId, consumerUsers.id))
     .where(and(eq(consumerSessions.tokenHash, tokenHash), eq(consumerSessions.status, 'active')));
-  const row = rows[0];
-  if (!row) return null;
-  if (row.session.expiresAt.getTime() < Date.now()) return null;
-  if (row.user.status !== 'active') return null;
-  // Touch lastUsedAt (fire-and-forget)
-  handle.db
+  if (!row || row.session.expiresAt.getTime() < Date.now() || row.user.status !== 'active') return null;
+  void handle.db
     .update(consumerSessions)
     .set({ lastUsedAt: new Date() })
-    .where(eq(consumerSessions.id, row.session.id))
-    .execute()
-    .catch(() => {});
+    .where(eq(consumerSessions.id, row.session.id));
   return row.user;
 }
 
-function problem(context: any, status: number, title: string, detail: string) {
+function problem(
+  context: Context<AppEnv>,
+  status: 400 | 401 | 403 | 404 | 409 | 500 | 503,
+  title: string,
+  detail: string,
+) {
   return context.json(
     {
-      type: 'about:blank',
+      type: problemType('consumer-auth'),
       title,
       status,
       detail,
@@ -132,18 +180,138 @@ function problem(context: any, status: number, title: string, detail: string) {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readString(body: Record<string, unknown>, key: string): string | undefined {
+  const value = body[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function readNullableString(body: Record<string, unknown>, key: string): string | null | undefined {
+  const value = body[key];
+  if (value === null) return null;
+  return typeof value === 'string' ? value : undefined;
+}
+
+function normalizeClaimStatus(
+  caseStatus: typeof recallCases.$inferSelect.status,
+  resolutionStatus: typeof caseResolutions.$inferSelect.status | null,
+): ConsumerClaimStatus {
+  if (caseStatus === 'rejected' || caseStatus === 'duplicate' || caseStatus === 'withdrawn') return 'rejected';
+  if (caseStatus === 'closed') return 'resolved';
+  if (resolutionStatus === 'externally_completed') return 'resolved';
+  if (resolutionStatus === 'approved' || caseStatus === 'approved' || caseStatus === 'closure_review') return 'remedy_issued';
+  if (caseStatus === 'triage' || caseStatus === 'under_review') return 'under_review';
+  if (caseStatus === 'need_info') return 'verified';
+  return 'submitted';
+}
+
+async function buildConsumerClaim(caseId: string): Promise<ConsumerClaimSummary | null> {
+  const handle = db();
+  const crypto = cryptoPort();
+  const [joined] = await handle.db
+    .select({
+      caseId: recallCases.id,
+      claimNumber: recallCases.publicReference,
+      campaignId: recallCases.campaignId,
+      campaignSlug: recallCampaigns.slug,
+      submittedAt: recallCases.submittedAt,
+      updatedAt: recallCases.updatedAt,
+      caseStatus: recallCases.status,
+      consumerFirstNameEncrypted: caseConsumers.firstNameEncrypted,
+      consumerLastNameEncrypted: caseConsumers.lastNameEncrypted,
+      consumerEmailEncrypted: caseConsumers.emailEncrypted,
+      consumerPhoneEncrypted: caseConsumers.phoneEncrypted,
+      consumerKeyVersion: caseConsumers.keyVersion,
+      productName: campaignProducts.name,
+      shape: claimedProducts.shape,
+      flavor: claimedProducts.flavor,
+      lotCode: claimedProducts.lotCode,
+      dateCode: claimedProducts.dateCode,
+      resolutionRequestedType: caseResolutions.requestedType,
+      resolutionApprovedType: caseResolutions.approvedType,
+      resolutionStatus: caseResolutions.status,
+      refundAmountMinor: caseResolutions.refundAmountMinor,
+      currency: caseResolutions.currency,
+      resolutionCompletedAt: caseResolutions.completedAt,
+      campaignTitle: campaignLocalizations.title,
+    })
+    .from(recallCases)
+    .innerJoin(recallCampaigns, eq(recallCampaigns.id, recallCases.campaignId))
+    .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+    .leftJoin(claimedProducts, eq(claimedProducts.caseId, recallCases.id))
+    .leftJoin(campaignProducts, eq(campaignProducts.id, claimedProducts.campaignProductId))
+    .leftJoin(caseResolutions, eq(caseResolutions.caseId, recallCases.id))
+    .leftJoin(
+      campaignLocalizations,
+      and(
+        eq(campaignLocalizations.campaignVersionId, recallCases.campaignVersionId),
+        eq(campaignLocalizations.locale, recallCases.locale),
+      ),
+    )
+    .where(eq(recallCases.id, caseId))
+    .limit(1);
+  if (!joined) return null;
+
+  const [firstName, lastName, consumerEmail, consumerPhone, eventRows] = await Promise.all([
+    crypto.decrypt({ value: joined.consumerFirstNameEncrypted, keyVersion: joined.consumerKeyVersion }),
+    crypto.decrypt({ value: joined.consumerLastNameEncrypted, keyVersion: joined.consumerKeyVersion }),
+    crypto.decrypt({ value: joined.consumerEmailEncrypted, keyVersion: joined.consumerKeyVersion }),
+    joined.consumerPhoneEncrypted
+      ? crypto.decrypt({ value: joined.consumerPhoneEncrypted, keyVersion: joined.consumerKeyVersion })
+      : Promise.resolve(''),
+    handle.db.select({ eventType: caseEvents.eventType }).from(caseEvents).where(eq(caseEvents.caseId, caseId)),
+  ]);
+
+  const remedyType = joined.resolutionApprovedType ?? joined.resolutionRequestedType ?? 'replacement';
+  const refundAmount =
+    joined.currency === 'USD' && joined.refundAmountMinor !== null && joined.refundAmountMinor !== undefined
+      ? joined.refundAmountMinor / 100
+      : undefined;
+
+  return {
+    id: joined.caseId,
+    claimNumber: joined.claimNumber,
+    caseRef: joined.claimNumber,
+    campaignId: joined.campaignId,
+    campaignTitle: joined.campaignTitle ?? joined.campaignSlug,
+    campaignSlug: joined.campaignSlug,
+    consumerName: `${firstName} ${lastName}`.trim(),
+    consumerEmail,
+    consumerPhone,
+    productName: joined.productName ?? 'Unknown Product',
+    ...(joined.shape ? { shape: joined.shape } : {}),
+    ...(joined.flavor ? { flavor: joined.flavor } : {}),
+    ...(joined.lotCode ? { lotCode: joined.lotCode } : {}),
+    ...(joined.dateCode ? { dateCode: joined.dateCode } : {}),
+    remedyId: remedyType,
+    remedyTitle: remedyType === 'refund' ? 'Refund' : 'Replacement',
+    remedyType,
+    ...(refundAmount !== undefined ? { refundAmount } : {}),
+    status: normalizeClaimStatus(joined.caseStatus, joined.resolutionStatus ?? null),
+    evidenceCount: eventRows.filter((eventRow) => eventRow.eventType === 'document.uploaded').length,
+    submittedAt: joined.submittedAt.toISOString(),
+    updatedAt: joined.updatedAt.toISOString(),
+    ...(joined.resolutionCompletedAt ? { resolutionDate: joined.resolutionCompletedAt.toISOString() } : {}),
+  };
+}
+
 export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   // ── POST /v1/consumer-auth/register ──
   app.post('/v1/consumer-auth/register', async (c) => {
-    let body: { email?: string; password?: string; displayName?: string };
+    let body: Record<string, unknown>;
     try {
-      body = await c.req.json();
+      const parsed = await c.req.json<unknown>();
+      if (!isRecord(parsed)) return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
+      body = parsed;
     } catch {
       return problem(c, 400, 'Invalid Request', 'Request body must be JSON.');
     }
-    const email = (body.email ?? '').trim().toLowerCase();
-    const password = body.password ?? '';
-    const displayName = (body.displayName ?? '').trim();
+    const email = (readString(body, 'email') ?? '').trim().toLowerCase();
+    const password = readString(body, 'password') ?? '';
+    const displayName = (readString(body, 'displayName') ?? '').trim();
     if (!isValidEmail(email)) return problem(c, 400, 'Invalid Email', 'A valid email is required.');
     if (password.length < 12) return problem(c, 400, 'Weak Password', 'Password must be at least 12 characters.');
     if (displayName.length < 1 || displayName.length > 160) return problem(c, 400, 'Invalid Name', 'Display name must be 1–160 characters.');
@@ -174,14 +342,16 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
 
   // ── POST /v1/consumer-auth/login ──
   app.post('/v1/consumer-auth/login', async (c) => {
-    let body: { email?: string; password?: string };
+    let body: Record<string, unknown>;
     try {
-      body = await c.req.json();
+      const parsed = await c.req.json<unknown>();
+      if (!isRecord(parsed)) return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
+      body = parsed;
     } catch {
       return problem(c, 400, 'Invalid Request', 'Request body must be JSON.');
     }
-    const email = (body.email ?? '').trim().toLowerCase();
-    const password = body.password ?? '';
+    const email = (readString(body, 'email') ?? '').trim().toLowerCase();
+    const password = readString(body, 'password') ?? '';
     if (!email || !password) return problem(c, 400, 'Missing Credentials', 'Email and password are required.');
 
     try {
@@ -234,21 +404,25 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   app.patch('/v1/consumer-auth/me', async (c) => {
     const user = await resolveBearer(c.req.header('Authorization'));
     if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
-    let body: { displayName?: string; avatarDataUrl?: string | null };
+    let body: Record<string, unknown>;
     try {
-      body = await c.req.json();
+      const parsed = await c.req.json<unknown>();
+      if (!isRecord(parsed)) return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
+      body = parsed;
     } catch {
       return problem(c, 400, 'Invalid Request', 'Request body must be JSON.');
     }
     const patch: Partial<{ displayName: string; avatarDataUrl: string | null }> = {};
-    if (body.displayName !== undefined) {
-      const name = body.displayName.trim();
-      if (name.length < 1 || name.length > 160) return problem(c, 400, 'Invalid Name', 'Display name must be 1–160 characters.');
+    const displayName = readString(body, 'displayName');
+    if (displayName !== undefined) {
+      const name = displayName.trim();
+      if (name.length < 1 || name.length > 160) return problem(c, 400, 'Invalid Name', 'Display name must be 1-160 characters.');
       patch.displayName = name;
     }
-    if (body.avatarDataUrl !== undefined) {
+    const avatarDataUrl = readNullableString(body, 'avatarDataUrl');
+    if (avatarDataUrl !== undefined) {
       try {
-        patch.avatarDataUrl = validateAvatar(body.avatarDataUrl);
+        patch.avatarDataUrl = validateAvatar(avatarDataUrl);
       } catch (err) {
         return problem(c, 400, 'Invalid Avatar', err instanceof Error ? err.message : 'Avatar rejected.');
       }
@@ -262,9 +436,82 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
         .set({ ...patch, updatedAt: new Date() })
         .where(eq(consumerUsers.id, user.id))
         .returning();
-      return c.json({ user: toPublic(updated!) });
+      if (!updated) return problem(c, 404, 'Not Found', 'Consumer account was not found.');
+      return c.json({ user: toPublic(updated) });
     } catch (err) {
       return problem(c, 500, 'Update Error', err instanceof Error ? err.message : 'Profile update failed.');
+    }
+  });
+
+  app.get('/v1/consumer-auth/claims', async (c) => {
+    const user = await resolveBearer(c.req.header('Authorization'));
+    if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
+
+    try {
+      const crypto = cryptoPort();
+      const emailLookupHash = await crypto.lookupHash(user.email.trim().toLowerCase());
+      const rows = await db().db
+        .select({ caseId: caseConsumers.caseId })
+        .from(caseConsumers)
+        .where(eq(caseConsumers.emailLookupHash, emailLookupHash));
+      const claims = (
+        await Promise.all(rows.map((row) => buildConsumerClaim(row.caseId)))
+      ).filter((claim): claim is ConsumerClaimSummary => claim !== null);
+      claims.sort((left, right) => right.submittedAt.localeCompare(left.submittedAt));
+      return c.json({ claims });
+    } catch (err) {
+      return problem(c, 500, 'Claims Error', err instanceof Error ? err.message : 'Could not load claims.');
+    }
+  });
+
+  app.get('/v1/consumer-auth/claims/:claimNumber', async (c) => {
+    const user = await resolveBearer(c.req.header('Authorization'));
+    if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
+
+    try {
+      const claimNumber = c.req.param('claimNumber').trim().toUpperCase();
+      const [row] = await db().db
+        .select({ caseId: recallCases.id })
+        .from(recallCases)
+        .where(eq(recallCases.publicReference, claimNumber))
+        .limit(1);
+      if (!row) return problem(c, 404, 'Not Found', 'Claim was not found.');
+      const claim = await buildConsumerClaim(row.caseId);
+      if (!claim || claim.consumerEmail.toLowerCase() !== user.email.toLowerCase()) {
+        return problem(c, 404, 'Not Found', 'Claim was not found.');
+      }
+      return c.json({ claim });
+    } catch (err) {
+      return problem(c, 500, 'Claim Detail Error', err instanceof Error ? err.message : 'Could not load claim.');
+    }
+  });
+
+  app.get('/v1/consumer-auth/lookup/:claimNumber', async (c) => {
+    const claimNumber = c.req.param('claimNumber').trim().toUpperCase();
+    const phone = (c.req.query('phone') ?? '').trim();
+    if (!phone) return problem(c, 400, 'Invalid Request', 'phone is required.');
+
+    try {
+      const [row] = await db().db
+        .select({ caseId: recallCases.id })
+        .from(recallCases)
+        .where(eq(recallCases.publicReference, claimNumber))
+        .limit(1);
+      if (!row) return problem(c, 404, 'Not Found', 'Claim was not found.');
+      const claim = await buildConsumerClaim(row.caseId);
+      if (!claim || claim.consumerPhone.trim() !== phone) {
+        return problem(c, 404, 'Not Found', 'Claim was not found.');
+      }
+      return c.json({
+        claim,
+        campaignTitle: claim.campaignTitle,
+        productName: claim.productName,
+        remedyTitle: claim.remedyTitle,
+        remedyType: claim.remedyType,
+        refundAmount: claim.refundAmount,
+      });
+    } catch (err) {
+      return problem(c, 500, 'Lookup Error', err instanceof Error ? err.message : 'Could not look up claim.');
     }
   });
 }

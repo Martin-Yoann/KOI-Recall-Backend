@@ -554,11 +554,10 @@ export function registerAdminRoutes(
     const refundAmountMinor = typeof body.refundAmountMinor === 'number' ? body.refundAmountMinor : Number(body.refundAmountMinor);
     const currency = asString(body.currency);
     if (type === 'refund' && (!Number.isInteger(refundAmountMinor) || refundAmountMinor <= 0 || !currency)) return validationError(context, 'refund approvals require a positive integer refundAmountMinor and currency.');
-    const approve = registry.services.admin?.approveResolution;
-    if (!approve) throw new Error('Resolution service is not configured.');
+    if (!registry.services.admin?.approveResolution) throw new Error('Resolution service is not configured.');
     const result = type === 'refund' && currency
-      ? await approve.call(registry.services.admin, context.req.param('caseRef'), { type, note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, refundAmountMinor, currency })
-      : await approve.call(registry.services.admin, context.req.param('caseRef'), { type: 'replacement', note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
+      ? await registry.services.admin.approveResolution(context.req.param('caseRef'), { type, note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, refundAmountMinor, currency })
+      : await registry.services.admin.approveResolution(context.req.param('caseRef'), { type: 'replacement', note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });
@@ -570,12 +569,11 @@ export function registerAdminRoutes(
     const note = asString(body.note) ?? '';
     const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
     if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion)) return validationError(context, 'note (10-2000 characters) and integer expectedVersion are required.');
-    const complete = registry.services.admin?.completeResolution;
-    if (!complete) throw new Error('Resolution service is not configured.');
+    if (!registry.services.admin?.completeResolution) throw new Error('Resolution service is not configured.');
     const externalReference = asString(body.externalReference);
     const result = externalReference
-      ? await complete.call(registry.services.admin, context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, externalReference })
-      : await complete.call(registry.services.admin, context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
+      ? await registry.services.admin.completeResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, externalReference })
+      : await registry.services.admin.completeResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });
@@ -587,9 +585,8 @@ export function registerAdminRoutes(
     const note = asString(body.note) ?? '';
     const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
     if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion)) return validationError(context, 'note (10-2000 characters) and integer expectedVersion are required.');
-    const cancel = registry.services.admin?.cancelResolution;
-    if (!cancel) throw new Error('Resolution service is not configured.');
-    const result = await cancel.call(registry.services.admin, context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, actorIsAdministrator: guard.role === 'administrator' });
+    if (!registry.services.admin?.cancelResolution) throw new Error('Resolution service is not configured.');
+    const result = await registry.services.admin.cancelResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, actorIsAdministrator: guard.role === 'administrator' });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });
@@ -651,7 +648,7 @@ export function registerAdminRoutes(
     if (guard instanceof Response) return guard;
     const audit = registry.services.audit;
     if (!audit) return json(context, 501, { title: 'Audit service not configured.', status: 501 });
-    const q = context.req.query.bind(context.req);
+    const q = (name: string) => context.req.query(name);
     const since = q('since') ?? undefined;
     const until = q('until') ?? undefined;
     const events = await audit.query({

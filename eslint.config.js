@@ -6,6 +6,8 @@ export default tseslint.config(
     ignores: [
       'node_modules/**',
       'dist/**',
+      '.vercel/**',
+      '.tmp-*',
       'drizzle/**',
       'openapi/**',
       'eslint.config.js',
