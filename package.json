@@ -15,7 +15,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --no-file-parallelism",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "tsx scripts/check-openapi.ts",
     "types:frontend": "openapi-typescript openapi/toc-v1.openapi.yaml -o src/generated/toc-v1.d.ts",

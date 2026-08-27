@@ -44,8 +44,14 @@ describe('staff password (node:crypto.scrypt)', () => {
     await expect(hashPassword('')).rejects.toThrow(/empty/i);
   });
 
-  it('rejects passwords shorter than twelve characters at hash time', async () => {
+  it('rejects passwords shorter than twelve characters at hash time by default', async () => {
     await expect(hashPassword('too-short')).rejects.toThrow(/12/i);
+  });
+
+  it('supports the consumer minimum of six characters', async () => {
+    const envelope = await hashPassword('six123', 6);
+    await expect(verifyPassword('six123', envelope)).resolves.toBe(true);
+    await expect(hashPassword('short', 6)).rejects.toThrow(/6/i);
   });
 
   it('rejects implausibly long password at hash time', async () => {

@@ -8,6 +8,7 @@ import {
   caseConsents,
   caseConsumers,
   caseEvents,
+  caseResolutions,
   claimedProducts,
   claimDrafts,
   communications,
@@ -269,6 +270,7 @@ export async function cleanupClaimFixture(
     await handle.db.delete(incidents).where(inArray(incidents.caseId, caseIds));
     await handle.db.delete(submissionSnapshots).where(inArray(submissionSnapshots.caseId, caseIds));
     await handle.db.delete(caseConsents).where(inArray(caseConsents.caseId, caseIds));
+    await handle.db.delete(caseResolutions).where(inArray(caseResolutions.caseId, caseIds));
     await handle.db.delete(claimedProducts).where(inArray(claimedProducts.caseId, caseIds));
     await handle.db.delete(caseConsumers).where(inArray(caseConsumers.caseId, caseIds));
   }

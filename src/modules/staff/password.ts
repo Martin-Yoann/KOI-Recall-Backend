@@ -42,8 +42,8 @@ export const SCRYPT_PARAMS = { N: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P } as const;
  * Hashes a password, returning a self-describing envelope:
  * `scrypt.<N>.<r>.<p>.<base64url(salt)>.<base64url(digest)>`.
  */
-export async function hashPassword(password: string): Promise<string> {
-  validatePasswordShape(password);
+export async function hashPassword(password: string, minimumLength = 12): Promise<string> {
+  validatePasswordShape(password, minimumLength);
   const salt = randomBytes(SALT_LENGTH);
   const derived = await scrypt(password, salt, KEY_LENGTH, {
     N: SCRYPT_N,
@@ -78,10 +78,15 @@ export function needsRehash(envelope: string): boolean {
 }
 
 /** Rejects empty or implausibly long passwords before the KDF runs. */
-function validatePasswordShape(password: string): void {
+function validatePasswordShape(password: string, minimumLength: number): void {
   if (typeof password !== 'string') throw new Error('Password must be a string.');
+  if (!Number.isInteger(minimumLength) || minimumLength < 1 || minimumLength > 1024) {
+    throw new Error('Password minimum length must be between 1 and 1024 characters.');
+  }
   if (password.length === 0) throw new Error('Password must not be empty.');
-  if (password.length < 12) throw new Error('Password must contain at least 12 characters.');
+  if (password.length < minimumLength) {
+    throw new Error(`Password must contain at least ${minimumLength} characters.`);
+  }
   if (password.length > 1024) throw new Error('Password must not exceed 1024 characters.');
 }
 

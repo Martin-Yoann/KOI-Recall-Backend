@@ -313,7 +313,7 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     const password = readString(body, 'password') ?? '';
     const displayName = (readString(body, 'displayName') ?? '').trim();
     if (!isValidEmail(email)) return problem(c, 400, 'Invalid Email', 'A valid email is required.');
-    if (password.length < 12) return problem(c, 400, 'Weak Password', 'Password must be at least 12 characters.');
+    if (password.length < 6) return problem(c, 400, 'Weak Password', 'Password must be at least 6 characters.');
     if (displayName.length < 1 || displayName.length > 160) return problem(c, 400, 'Invalid Name', 'Display name must be 1–160 characters.');
 
     try {
@@ -324,7 +324,7 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
       if (existing.length > 0) {
         return problem(c, 409, 'Email Already Registered', 'An account with this email already exists.');
       }
-      const passwordHash = await hashPassword(password);
+      const passwordHash = await hashPassword(password, 6);
       const [user] = await handle.db
         .insert(consumerUsers)
         .values({ email, emailLookupHash, displayName, passwordHash, status: 'active' })
