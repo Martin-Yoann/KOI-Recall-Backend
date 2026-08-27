@@ -91,7 +91,7 @@ describe('HTTP application shell', () => {
     expect(denied.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 
-  it('returns Problem Details for contract-complete placeholder routes', async () => {
+  it('returns 501 with a configuration explanation when a required service is not configured', async () => {
     const response = await testApp().request(
       '/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US',
     );
@@ -99,7 +99,11 @@ describe('HTTP application shell', () => {
 
     expect(response.status).toBe(501);
     expect(response.headers.get('Content-Type')).toContain('application/problem+json');
-    expect(body).toMatchObject({ title: 'Not Implemented', status: 501 });
+    expect(body).toMatchObject({
+      title: 'Not Implemented',
+      status: 501,
+    });
+    expect(body.detail).toContain('required service or adapter is not configured');
     expect(body).not.toHaveProperty('storagePathname');
   });
 

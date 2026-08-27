@@ -19,7 +19,6 @@ import { DrizzleCommunicationService } from './modules/communications/drizzle-co
 import type { CommunicationService } from './modules/communications/service.js';
 import { DrizzleDocumentService } from './modules/documents/drizzle-document-service.js';
 import type { DocumentService } from './modules/documents/service.js';
-import type { IncidentService } from './modules/incidents/service.js';
 import { DrizzleProductCheckService } from './modules/product-checks/drizzle-product-check-service.js';
 import type { ProductCheckService } from './modules/product-checks/service.js';
 import type { AppConfig } from './config/env.js';
@@ -49,7 +48,6 @@ export interface ApplicationServices {
   documents: DocumentService;
   cases: CaseService;
   caseStatusLookups: CaseStatusLookupService;
-  incidents: IncidentService;
   communications: CommunicationService;
   admin?: AdminService;
   /** ADR-0004: staff identity, sessions, and audit (B-end RBAC). */
@@ -114,11 +112,7 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
       caseStatusLookups: {
         lookup: () => unavailable('Case status lookup'),
       },
-      incidents: {
-        createPendingIncident: () => unavailable('Incident creation'),
-      },
       communications: {
-        queueClaimConfirmation: () => unavailable('Claim confirmation queueing'),
         recordDeliveryEvent: () => unavailable('Provider delivery event recording'),
       },
     },

@@ -76,7 +76,7 @@ function configuredConfig(overrides: Record<string, string | undefined> = {}) {
 }
 
 describe('application composition', () => {
-  it('registers all Phase 1 domain services and provider adapters', () => {
+  it('registers callable domain services and provider adapters', () => {
     const registry = createPlaceholderRegistry();
 
     expect(Object.keys(registry.services).sort()).toEqual([
@@ -86,7 +86,6 @@ describe('application composition', () => {
       'claimDrafts',
       'communications',
       'documents',
-      'incidents',
       'productChecks',
     ]);
     expect(Object.keys(registry.platform).sort()).toEqual(['blob', 'crypto', 'email']);

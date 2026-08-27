@@ -1029,7 +1029,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1097,7 +1097,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1166,7 +1166,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1257,7 +1257,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1322,7 +1322,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1396,7 +1396,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1453,7 +1453,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1541,7 +1541,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:
@@ -1604,7 +1604,7 @@ paths:
             application/problem+json:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
-          description: The contract exists, but the Phase 1 skeleton has no provider implementation.
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
         "503":
           content:
             application/problem+json:

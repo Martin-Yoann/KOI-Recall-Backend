@@ -1,8 +1,8 @@
 # KOI Recall API
 
-第一阶段消费者召回 API 的独立 Node.js 服务。现有静态 Demo 保持不变；本项目提供可部署架构、PostgreSQL 数据模型和 ToC 契约。
+KOI 召回平台的独立 Node.js API 服务，提供消费者申请提交、公开进度查询，以及管理后台的 Case 查询和处理能力。现有静态 Demo 保持不变；正式业务数据由本项目的 PostgreSQL 数据模型承载。
 
-当前六个 `/v1` 业务端点均已注册并进行运行时校验。配置 `DATABASE_URL`
+当前 `/v1` 召回业务端点已注册并进行运行时校验。配置 `DATABASE_URL`
 后，Campaign 查询、商品预筛、匿名 Draft 创建与附件记录管理会读写真实数据库。再同时配置
 `FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 后，Claim 提交会在一个事务中写入 Case 聚合、
 Confirmation Communication 和 Outbox，成功返回 `201` 与 `emailStatus=queued`。
@@ -10,6 +10,23 @@ Confirmation Communication 和 Outbox，成功返回 `201` 与 `emailStatus=queu
 邮件不会在 Claim 请求内联发送。配置 Resend、Cron、Blob 与 Crypto 后，内部 Job 会异步投递
 Outbox 邮件并清理过期 Draft；Resend Webhook 使用 Svix 签名验证。未配置相应适配器的能力仍返回
 `501 application/problem+json`。
+
+## Claim 与 Case 的统一口径
+
+领域术语以 [CONTEXT.md](CONTEXT.md) 为准（2026-08-27 确认）：
+
+| 概念 | 含义与边界 |
+|---|---|
+| Claim | 消费者对召回申请的称呼，不是后台另一类独立处理记录。 |
+| Claim Draft | 提交前的临时草稿，用于准备材料和上传附件；不进入正式 Case 处理列表。 |
+| Recall Case | 提交成功时创建的正式记录，承载原始申请及后续审核、补资料、补救和结案；创建不代表审核通过。 |
+
+完整链路为：**Claim Draft → 提交 Claim → 创建 Recall Case → Admin 处理同一 Case**。不存在先审核 Claim 再转换成 Case 的步骤。
+
+- 消费者提交继续使用 `POST /v1/recall-campaigns/{slug}/claims`，成功返回 `caseReference`；不因后台统一命名而改动公开契约。
+- Admin 通过 `GET /admin/cases` 与 `GET /admin/cases/{caseRef}` 读取同一条正式记录，操作由 `/admin/cases/{caseRef}/…` 下的授权接口处理。
+- 消费者通过 `POST /v1/case-status-lookups` 查询该 Case 的受限公开进度，不能调用 Admin 接口读取完整资料。
+- 不新增独立 Claim 表、`/admin/claims` 接口或第二套审核状态。Admin 遗留 Claims 页面及本地桥接存储待退出，不能作为正式业务数据来源；本次文档统一不代表页面已移除。
 
 ## 本地检查
 
@@ -87,8 +104,7 @@ pnpm exec vitest run tests/neon-pooled-transaction.integration.test.ts
 Claim 的姓名、联系方式、地址、订单号、事故叙述和提交快照以 AES-256-GCM 密文持久化；查询用值使用
 独立 `HASH_PEPPER` 生成 HMAC。密钥必须与数据库分开保存，两项 Secret 也必须彼此不同。
 
-Phase 1 的权限模型只有一种授权后台用户：Admin API 在授权后端边界内解密，允许查看/导出数据；
-本阶段不实现多级权限。不要把数据库直连当作人工查看接口。
+初版单一后台用户模型已由 [ADR-0004](docs/adr/0004-internal-operations-identity-rbac.md) 的固定角色与两级 PII 模型取代。人工查看和处理应经过授权 Admin API，不要把数据库直连当作人工查看接口。
 
 > B 端运营升级（ADR-0004）：后台已升级为具名运营主体（`staff_users`）+ 会话令牌 + 固定角色
 > RBAC（`viewer` / `reviewer` / `compliance` / `administrator`）+ 两级 PII（默认脱敏，`compliance`/
@@ -99,8 +115,12 @@ Phase 1 的权限模型只有一种授权后台用户：Admin API 在授权后�
 ## 关键入口
 
 - `src/app.ts`：Hono 应用与中间件注册。
+- `CONTEXT.md`：统一领域词汇表，区分 Claim、Claim Draft 与 Recall Case。
+- `src/routes/admin.ts`：后台 Case 列表、详情、分派、状态流转与补救操作入口。
 - `src/contracts/`：按资源拆分的 Zod 运行时校验、TypeScript 类型和 OpenAPI 契约；`toc.ts` 为兼容导出。
 - `src/db/schema/`：按领域拆分的 Drizzle PostgreSQL Schema；`index.ts` 为统一导出。
 - `drizzle/`：生成的首个迁移及元数据。
 - `openapi/toc-v1.openapi.yaml`：从代码生成的 OpenAPI 3.1 契约。
 - `docs/phase-1/`：架构、数据库和 ToC 接口说明。
+
+带日期的 `docs/superpowers/specs/`、`docs/superpowers/plans/` 和带代码基线的优化计划保留其设计时点语境，不作为当前实现完成状态的证明。Claim/Case 口径以本节和 `CONTEXT.md` 为准。

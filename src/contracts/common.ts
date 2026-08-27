@@ -17,7 +17,8 @@ export const problemDetailsSchema = z
   .openapi('ProblemDetails');
 
 export const notImplementedResponse = {
-  description: 'The contract exists, but the Phase 1 skeleton has no provider implementation.',
+  description:
+    'This capability is not enabled in this environment because a required service or adapter is not configured.',
   content: { 'application/problem+json': { schema: problemDetailsSchema } },
 } as const;
 
