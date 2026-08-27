@@ -9,6 +9,7 @@ const baseSource: CampaignSource = {
     code: 'ML-DEMO-2026',
     defaultLocale: 'en-US',
     versionNumber: 1,
+    publishedAt: new Date('2026-08-01T09:00:00.000Z'),
   },
   localization: {
     locale: 'en-US',
@@ -29,6 +30,7 @@ const baseSource: CampaignSource = {
       name: 'Music Lollipop',
       attributes: { flavors: ['Peach', 'Strawberry'], shapes: ['Bear', 'Dinosaur'] },
       sortOrder: 2,
+      unitUpcs: ['012345678905', '0641234567890', '012345678905'],
     },
     {
       id: '00000000-0000-4000-8000-000000000001',
@@ -96,12 +98,21 @@ describe('campaign mapper', () => {
     expect(view.slug).toBe('music-lollipop-demo-2026');
     expect(view.code).toBe('ML-DEMO-2026');
     expect(view.version).toBe(1);
+    expect(view.publishedAt).toBe('2026-08-01T09:00:00.000Z');
     expect(view.locale).toBe('en-US');
     expect(view.support).toEqual({
       email: 'demo-support@example.invalid',
       phone: '(555) 010-2042',
       hours: 'Mon-Fri 9-5 ET',
     });
+  });
+
+  it('exposes deduplicated, sorted unit UPCs; products without identifiers get an empty list', () => {
+    const lollipop = view.products[1]!;
+    expect(lollipop.upcs).toEqual(['012345678905', '0641234567890']);
+    expect(view.products[0]!.upcs).toEqual([]);
+    // `sku` stays the internal catalogue code — never a UPC.
+    expect(view.products[1]!.sku).toBe('MUSIC-LOLLIPOP-DEMO-18G');
   });
 
   it('orders products by sort order and reads flavors/shapes from attributes', () => {
@@ -132,9 +143,10 @@ describe('campaign mapper', () => {
   });
 
   it('orders evidence requirements by category', () => {
-    expect(view.evidenceRequirements.map((evidence: CampaignView['evidenceRequirements'][number]) => evidence.category)).toEqual([
-      'product_photo',
-      'proof_of_purchase',
-    ]);
+    expect(
+      view.evidenceRequirements.map(
+        (evidence: CampaignView['evidenceRequirements'][number]) => evidence.category,
+      ),
+    ).toEqual(['product_photo', 'proof_of_purchase']);
   });
 });

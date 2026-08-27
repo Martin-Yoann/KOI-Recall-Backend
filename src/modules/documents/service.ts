@@ -1,4 +1,5 @@
 import type { EvidenceCategory, UploadCompletion } from '../../platform/blob/port.js';
+import type { DraftDocumentStatus, DraftDocumentStatusReason } from '../../contracts/toc.js';
 
 /**
  * The result of authorizing a draft document upload: the server-generated
@@ -12,6 +13,21 @@ export interface AuthorizedUpload {
   pathname: string;
   clientToken: string;
   expiresAt: string;
+}
+
+/**
+ * One entry of the draft documents listing (consumer-front contract §7).
+ * Mirrors the `DraftDocument` Zod contract; the six-state model is derived,
+ * not stored — see `deriveDocumentStatus`.
+ */
+export interface DraftDocumentSummary {
+  documentId: string;
+  category: EvidenceCategory;
+  fileName: string;
+  status: DraftDocumentStatus;
+  statusReason: DraftDocumentStatusReason | null;
+  uploadedAt: string | null;
+  lastStatusChangedAt: string;
 }
 
 /**
@@ -37,6 +53,17 @@ export interface DocumentService {
    * connection failures for the caller to map to 503.
    */
   authorizeUpload(input: AuthorizeUploadInput): Promise<AuthorizedUpload>;
+
+  /**
+   * Authenticates the caller's draft token (same contract as
+   * {@link scheduleDraftDocumentDeletion}: valid token, active draft, not
+   * expired) and returns the draft's documents in stable order with their
+   * derived six-state status. Deletion-pending, deleted, and case-linked rows
+   * are excluded so the list reflects DELETE and submission immediately.
+   * Throws {@link DraftExpiredOrInvalidError} for an invalid token or a draft
+   * that is no longer active.
+   */
+  listDraftDocuments(draftId: string, draftToken: string): Promise<DraftDocumentSummary[]>;
 
   /**
    * Authenticates and locks the active Draft, then locks and conditionally marks

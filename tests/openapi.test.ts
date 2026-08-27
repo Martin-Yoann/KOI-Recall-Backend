@@ -11,7 +11,7 @@ function document() {
 }
 
 describe('OpenAPI contract', () => {
-  it('contains exactly the six public Phase 1 paths', () => {
+  it('contains exactly the public Phase 1 paths (plus the deprecated legacy lookup)', () => {
     const paths = Object.keys(document().paths ?? {});
 
     expect(paths).toEqual([
@@ -20,11 +20,31 @@ describe('OpenAPI contract', () => {
       '/v1/recall-campaigns/{slug}/claim-drafts',
       '/v1/claim-drafts/{draftId}/upload-tokens',
       '/v1/claim-drafts/{draftId}/documents/{documentId}',
+      '/v1/claim-drafts/{draftId}/documents',
       '/v1/recall-campaigns/{slug}/claims',
+      '/v1/consumer-auth/lookup/{claimNumber}',
+      '/v1/case-status-lookups',
     ]);
     expect(
       paths.every((path) => !path.startsWith('/internal') && !path.startsWith('/webhooks')),
     ).toBe(true);
+  });
+
+  it('marks only the legacy consumer-auth lookup as deprecated', () => {
+    const doc = document();
+    const deprecated = Object.entries(doc.paths ?? {})
+      .filter(([, pathItem]) => {
+        if (!pathItem || typeof pathItem !== 'object') return false;
+        return Object.values(pathItem as Record<string, unknown>).some(
+          (operation) =>
+            typeof operation === 'object' &&
+            operation !== null &&
+            (operation as Record<string, unknown>).deprecated === true,
+        );
+      })
+      .map(([path]) => path);
+
+    expect(deprecated).toEqual(['/v1/consumer-auth/lookup/{claimNumber}']);
   });
 
   it('documents idempotency and all requested error statuses', () => {

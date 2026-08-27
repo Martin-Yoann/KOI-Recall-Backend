@@ -35,7 +35,10 @@ const publicPaths = [
   '/v1/recall-campaigns/{slug}/claim-drafts',
   '/v1/claim-drafts/{draftId}/upload-tokens',
   '/v1/claim-drafts/{draftId}/documents/{documentId}',
+  '/v1/claim-drafts/{draftId}/documents',
   '/v1/recall-campaigns/{slug}/claims',
+  '/v1/case-status-lookups',
+  '/v1/consumer-auth/lookup/{claimNumber}',
 ];
 
 describe('documentation cross-check', () => {

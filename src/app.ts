@@ -21,6 +21,7 @@ import { requestContext, type AppEnv } from './middleware/request-context.js';
 import { consoleSafeLogger } from './platform/observability/logger.js';
 import { registerAdminRoutes } from './routes/admin.js';
 import { registerCampaignRoutes } from './routes/campaigns.js';
+import { registerCaseStatusLookupRoutes } from './routes/case-status-lookups.js';
 import { registerClaimRoutes } from './routes/claims.js';
 import { registerConsumerAuthRoutes } from './routes/consumer-auth.js';
 import { registerDocumentRoutes } from './routes/documents.js';
@@ -80,7 +81,13 @@ export function createApp(dependencies: AppDependencies = {}) {
     cors({
       origin: (origin) => (config.allowedOrigins.includes(origin) ? origin : ''),
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key', 'X-Draft-Token', 'X-Request-Id'],
+      allowHeaders: [
+        'Content-Type',
+        'Authorization',
+        'Idempotency-Key',
+        'X-Draft-Token',
+        'X-Request-Id',
+      ],
       exposeHeaders: [
         'ETag',
         'Content-Language',
@@ -147,6 +154,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   registerDocumentRoutes(app, registry);
   registerClaimRoutes(app, registry);
   registerConsumerAuthRoutes(app);
+  registerCaseStatusLookupRoutes(app, registry);
   registerInternalJobRoutes(app, config.CRON_SECRET, {
     drainOutbox: registry.jobs?.drainOutbox ?? notImplementedJobHandler('Outbox processing'),
     cleanupDrafts: registry.jobs?.cleanupDrafts ?? notImplementedJobHandler('Draft cleanup'),

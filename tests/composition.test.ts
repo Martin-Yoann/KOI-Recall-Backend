@@ -81,6 +81,7 @@ describe('application composition', () => {
 
     expect(Object.keys(registry.services).sort()).toEqual([
       'campaigns',
+      'caseStatusLookups',
       'cases',
       'claimDrafts',
       'communications',

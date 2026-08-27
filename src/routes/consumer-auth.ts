@@ -24,6 +24,7 @@ import {
   recallCampaigns,
 } from '../db/schema/index.js';
 import { hashPassword, verifyPassword } from '../modules/staff/password.js';
+import { legacyConsumerAuthLookupRoute } from '../contracts/routes.js';
 import { NodeSensitiveDataCrypto } from '../platform/crypto/node-sensitive-data-crypto.js';
 import { problemType } from '../shared/errors.js';
 
@@ -96,12 +97,7 @@ function toPublic(row: typeof consumerUsers.$inferSelect): ConsumerPublic {
 type ConsumerUserRow = typeof consumerUsers.$inferSelect;
 
 type ConsumerClaimStatus =
-  | 'submitted'
-  | 'under_review'
-  | 'verified'
-  | 'remedy_issued'
-  | 'resolved'
-  | 'rejected';
+  'submitted' | 'under_review' | 'verified' | 'remedy_issued' | 'resolved' | 'rejected';
 
 interface ConsumerClaimSummary {
   id: string;
@@ -129,7 +125,9 @@ interface ConsumerClaimSummary {
   resolutionDate?: string;
 }
 
-async function issueSession(userId: string): Promise<{ token: string; sessionId: string; expiresAt: string }> {
+async function issueSession(
+  userId: string,
+): Promise<{ token: string; sessionId: string; expiresAt: string }> {
   const token = newToken();
   const tokenHash = sha256hex(token);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS);
@@ -153,7 +151,8 @@ async function resolveBearer(authHeader: string | undefined): Promise<ConsumerUs
     .from(consumerSessions)
     .innerJoin(consumerUsers, eq(consumerSessions.userId, consumerUsers.id))
     .where(and(eq(consumerSessions.tokenHash, tokenHash), eq(consumerSessions.status, 'active')));
-  if (!row || row.session.expiresAt.getTime() < Date.now() || row.user.status !== 'active') return null;
+  if (!row || row.session.expiresAt.getTime() < Date.now() || row.user.status !== 'active')
+    return null;
   void handle.db
     .update(consumerSessions)
     .set({ lastUsedAt: new Date() })
@@ -166,7 +165,9 @@ function problem(
   status: 400 | 401 | 403 | 404 | 409 | 500 | 503,
   title: string,
   detail: string,
-) {
+): never {
+  // `as never` mirrors routes/shared.ts: ProblemDetails exits are terminal for
+  // the openapi handler's success typing.
   return context.json(
     {
       type: problemType('consumer-auth'),
@@ -177,7 +178,7 @@ function problem(
     },
     status,
     { 'Content-Type': 'application/problem+json' },
-  );
+  ) as never;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -199,10 +200,16 @@ function normalizeClaimStatus(
   caseStatus: typeof recallCases.$inferSelect.status,
   resolutionStatus: typeof caseResolutions.$inferSelect.status | null,
 ): ConsumerClaimStatus {
-  if (caseStatus === 'rejected' || caseStatus === 'duplicate' || caseStatus === 'withdrawn') return 'rejected';
+  if (caseStatus === 'rejected' || caseStatus === 'duplicate' || caseStatus === 'withdrawn')
+    return 'rejected';
   if (caseStatus === 'closed') return 'resolved';
   if (resolutionStatus === 'externally_completed') return 'resolved';
-  if (resolutionStatus === 'approved' || caseStatus === 'approved' || caseStatus === 'closure_review') return 'remedy_issued';
+  if (
+    resolutionStatus === 'approved' ||
+    caseStatus === 'approved' ||
+    caseStatus === 'closure_review'
+  )
+    return 'remedy_issued';
   if (caseStatus === 'triage' || caseStatus === 'under_review') return 'under_review';
   if (caseStatus === 'need_info') return 'verified';
   return 'submitted';
@@ -256,18 +263,33 @@ async function buildConsumerClaim(caseId: string): Promise<ConsumerClaimSummary 
   if (!joined) return null;
 
   const [firstName, lastName, consumerEmail, consumerPhone, eventRows] = await Promise.all([
-    crypto.decrypt({ value: joined.consumerFirstNameEncrypted, keyVersion: joined.consumerKeyVersion }),
-    crypto.decrypt({ value: joined.consumerLastNameEncrypted, keyVersion: joined.consumerKeyVersion }),
+    crypto.decrypt({
+      value: joined.consumerFirstNameEncrypted,
+      keyVersion: joined.consumerKeyVersion,
+    }),
+    crypto.decrypt({
+      value: joined.consumerLastNameEncrypted,
+      keyVersion: joined.consumerKeyVersion,
+    }),
     crypto.decrypt({ value: joined.consumerEmailEncrypted, keyVersion: joined.consumerKeyVersion }),
     joined.consumerPhoneEncrypted
-      ? crypto.decrypt({ value: joined.consumerPhoneEncrypted, keyVersion: joined.consumerKeyVersion })
+      ? crypto.decrypt({
+          value: joined.consumerPhoneEncrypted,
+          keyVersion: joined.consumerKeyVersion,
+        })
       : Promise.resolve(''),
-    handle.db.select({ eventType: caseEvents.eventType }).from(caseEvents).where(eq(caseEvents.caseId, caseId)),
+    handle.db
+      .select({ eventType: caseEvents.eventType })
+      .from(caseEvents)
+      .where(eq(caseEvents.caseId, caseId)),
   ]);
 
-  const remedyType = joined.resolutionApprovedType ?? joined.resolutionRequestedType ?? 'replacement';
+  const remedyType =
+    joined.resolutionApprovedType ?? joined.resolutionRequestedType ?? 'replacement';
   const refundAmount =
-    joined.currency === 'USD' && joined.refundAmountMinor !== null && joined.refundAmountMinor !== undefined
+    joined.currency === 'USD' &&
+    joined.refundAmountMinor !== null &&
+    joined.refundAmountMinor !== undefined
       ? joined.refundAmountMinor / 100
       : undefined;
 
@@ -291,10 +313,13 @@ async function buildConsumerClaim(caseId: string): Promise<ConsumerClaimSummary 
     remedyType,
     ...(refundAmount !== undefined ? { refundAmount } : {}),
     status: normalizeClaimStatus(joined.caseStatus, joined.resolutionStatus ?? null),
-    evidenceCount: eventRows.filter((eventRow) => eventRow.eventType === 'document.uploaded').length,
+    evidenceCount: eventRows.filter((eventRow) => eventRow.eventType === 'document.uploaded')
+      .length,
     submittedAt: joined.submittedAt.toISOString(),
     updatedAt: joined.updatedAt.toISOString(),
-    ...(joined.resolutionCompletedAt ? { resolutionDate: joined.resolutionCompletedAt.toISOString() } : {}),
+    ...(joined.resolutionCompletedAt
+      ? { resolutionDate: joined.resolutionCompletedAt.toISOString() }
+      : {}),
   };
 }
 
@@ -304,7 +329,8 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     let body: Record<string, unknown>;
     try {
       const parsed = await c.req.json<unknown>();
-      if (!isRecord(parsed)) return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
+      if (!isRecord(parsed))
+        return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
       body = parsed;
     } catch {
       return problem(c, 400, 'Invalid Request', 'Request body must be JSON.');
@@ -313,16 +339,27 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     const password = readString(body, 'password') ?? '';
     const displayName = (readString(body, 'displayName') ?? '').trim();
     if (!isValidEmail(email)) return problem(c, 400, 'Invalid Email', 'A valid email is required.');
-    if (password.length < 12) return problem(c, 400, 'Weak Password', 'Password must be at least 12 characters.');
-    if (displayName.length < 1 || displayName.length > 160) return problem(c, 400, 'Invalid Name', 'Display name must be 1–160 characters.');
+    if (password.length < 12)
+      return problem(c, 400, 'Weak Password', 'Password must be at least 12 characters.');
+    if (displayName.length < 1 || displayName.length > 160)
+      return problem(c, 400, 'Invalid Name', 'Display name must be 1–160 characters.');
 
     try {
       const crypto = cryptoPort();
       const emailLookupHash = await crypto.lookupHash(email);
       const handle = db();
-      const existing = await handle.db.select({ id: consumerUsers.id }).from(consumerUsers).where(eq(consumerUsers.emailLookupHash, emailLookupHash)).limit(1);
+      const existing = await handle.db
+        .select({ id: consumerUsers.id })
+        .from(consumerUsers)
+        .where(eq(consumerUsers.emailLookupHash, emailLookupHash))
+        .limit(1);
       if (existing.length > 0) {
-        return problem(c, 409, 'Email Already Registered', 'An account with this email already exists.');
+        return problem(
+          c,
+          409,
+          'Email Already Registered',
+          'An account with this email already exists.',
+        );
       }
       const passwordHash = await hashPassword(password);
       const [user] = await handle.db
@@ -345,26 +382,37 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     let body: Record<string, unknown>;
     try {
       const parsed = await c.req.json<unknown>();
-      if (!isRecord(parsed)) return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
+      if (!isRecord(parsed))
+        return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
       body = parsed;
     } catch {
       return problem(c, 400, 'Invalid Request', 'Request body must be JSON.');
     }
     const email = (readString(body, 'email') ?? '').trim().toLowerCase();
     const password = readString(body, 'password') ?? '';
-    if (!email || !password) return problem(c, 400, 'Missing Credentials', 'Email and password are required.');
+    if (!email || !password)
+      return problem(c, 400, 'Missing Credentials', 'Email and password are required.');
 
     try {
       const crypto = cryptoPort();
       const emailLookupHash = await crypto.lookupHash(email);
       const handle = db();
-      const rows = await handle.db.select().from(consumerUsers).where(eq(consumerUsers.emailLookupHash, emailLookupHash)).limit(1);
+      const rows = await handle.db
+        .select()
+        .from(consumerUsers)
+        .where(eq(consumerUsers.emailLookupHash, emailLookupHash))
+        .limit(1);
       const user = rows[0];
-      if (!user || !user.passwordHash) return problem(c, 401, 'Invalid Credentials', 'Email or password is incorrect.');
-      if (user.status !== 'active') return problem(c, 403, 'Account Disabled', 'This account has been disabled.');
+      if (!user || !user.passwordHash)
+        return problem(c, 401, 'Invalid Credentials', 'Email or password is incorrect.');
+      if (user.status !== 'active')
+        return problem(c, 403, 'Account Disabled', 'This account has been disabled.');
       const ok = await verifyPassword(password, user.passwordHash);
       if (!ok) return problem(c, 401, 'Invalid Credentials', 'Email or password is incorrect.');
-      await handle.db.update(consumerUsers).set({ lastLoginAt: new Date(), failedLoginAttempts: 0 }).where(eq(consumerUsers.id, user.id));
+      await handle.db
+        .update(consumerUsers)
+        .set({ lastLoginAt: new Date(), failedLoginAttempts: 0 })
+        .where(eq(consumerUsers.id, user.id));
       const session = await issueSession(user.id);
       return c.json({ ...session, user: toPublic(user) });
     } catch (err) {
@@ -386,7 +434,12 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
       await handle.db
         .update(consumerSessions)
         .set({ status: 'revoked', revokedAt: new Date() })
-        .where(and(eq(consumerSessions.tokenHash, sha256hex(token)), eq(consumerSessions.status, 'active')));
+        .where(
+          and(
+            eq(consumerSessions.tokenHash, sha256hex(token)),
+            eq(consumerSessions.status, 'active'),
+          ),
+        );
       return c.json({ ok: true });
     } catch (err) {
       return problem(c, 500, 'Logout Error', err instanceof Error ? err.message : 'Logout failed.');
@@ -407,7 +460,8 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     let body: Record<string, unknown>;
     try {
       const parsed = await c.req.json<unknown>();
-      if (!isRecord(parsed)) return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
+      if (!isRecord(parsed))
+        return problem(c, 400, 'Invalid Request', 'Request body must be a JSON object.');
       body = parsed;
     } catch {
       return problem(c, 400, 'Invalid Request', 'Request body must be JSON.');
@@ -416,7 +470,8 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     const displayName = readString(body, 'displayName');
     if (displayName !== undefined) {
       const name = displayName.trim();
-      if (name.length < 1 || name.length > 160) return problem(c, 400, 'Invalid Name', 'Display name must be 1-160 characters.');
+      if (name.length < 1 || name.length > 160)
+        return problem(c, 400, 'Invalid Name', 'Display name must be 1-160 characters.');
       patch.displayName = name;
     }
     const avatarDataUrl = readNullableString(body, 'avatarDataUrl');
@@ -424,10 +479,16 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
       try {
         patch.avatarDataUrl = validateAvatar(avatarDataUrl);
       } catch (err) {
-        return problem(c, 400, 'Invalid Avatar', err instanceof Error ? err.message : 'Avatar rejected.');
+        return problem(
+          c,
+          400,
+          'Invalid Avatar',
+          err instanceof Error ? err.message : 'Avatar rejected.',
+        );
       }
     }
-    if (Object.keys(patch).length === 0) return problem(c, 400, 'Nothing to Update', 'Provide displayName or avatarDataUrl.');
+    if (Object.keys(patch).length === 0)
+      return problem(c, 400, 'Nothing to Update', 'Provide displayName or avatarDataUrl.');
 
     try {
       const handle = db();
@@ -439,7 +500,12 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
       if (!updated) return problem(c, 404, 'Not Found', 'Consumer account was not found.');
       return c.json({ user: toPublic(updated) });
     } catch (err) {
-      return problem(c, 500, 'Update Error', err instanceof Error ? err.message : 'Profile update failed.');
+      return problem(
+        c,
+        500,
+        'Update Error',
+        err instanceof Error ? err.message : 'Profile update failed.',
+      );
     }
   });
 
@@ -450,17 +516,22 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     try {
       const crypto = cryptoPort();
       const emailLookupHash = await crypto.lookupHash(user.email.trim().toLowerCase());
-      const rows = await db().db
-        .select({ caseId: caseConsumers.caseId })
+      const rows = await db()
+        .db.select({ caseId: caseConsumers.caseId })
         .from(caseConsumers)
         .where(eq(caseConsumers.emailLookupHash, emailLookupHash));
-      const claims = (
-        await Promise.all(rows.map((row) => buildConsumerClaim(row.caseId)))
-      ).filter((claim): claim is ConsumerClaimSummary => claim !== null);
+      const claims = (await Promise.all(rows.map((row) => buildConsumerClaim(row.caseId)))).filter(
+        (claim): claim is ConsumerClaimSummary => claim !== null,
+      );
       claims.sort((left, right) => right.submittedAt.localeCompare(left.submittedAt));
       return c.json({ claims });
     } catch (err) {
-      return problem(c, 500, 'Claims Error', err instanceof Error ? err.message : 'Could not load claims.');
+      return problem(
+        c,
+        500,
+        'Claims Error',
+        err instanceof Error ? err.message : 'Could not load claims.',
+      );
     }
   });
 
@@ -470,8 +541,8 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
 
     try {
       const claimNumber = c.req.param('claimNumber').trim().toUpperCase();
-      const [row] = await db().db
-        .select({ caseId: recallCases.id })
+      const [row] = await db()
+        .db.select({ caseId: recallCases.id })
         .from(recallCases)
         .where(eq(recallCases.publicReference, claimNumber))
         .limit(1);
@@ -482,18 +553,27 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
       }
       return c.json({ claim });
     } catch (err) {
-      return problem(c, 500, 'Claim Detail Error', err instanceof Error ? err.message : 'Could not load claim.');
+      return problem(
+        c,
+        500,
+        'Claim Detail Error',
+        err instanceof Error ? err.message : 'Could not load claim.',
+      );
     }
   });
 
-  app.get('/v1/consumer-auth/lookup/:claimNumber', async (c) => {
-    const claimNumber = c.req.param('claimNumber').trim().toUpperCase();
-    const phone = (c.req.query('phone') ?? '').trim();
+  // ── GET /v1/consumer-auth/lookup/:claimNumber (deprecated) ──
+  // Formally registered so the OpenAPI document can advertise `deprecated: true`;
+  // the response still carries PII by contract — consumers must migrate to
+  // POST /v1/case-status-lookups.
+  app.openapi(legacyConsumerAuthLookupRoute, async (c) => {
+    const claimNumber = c.req.valid('param').claimNumber.trim().toUpperCase();
+    const phone = c.req.valid('query').phone.trim();
     if (!phone) return problem(c, 400, 'Invalid Request', 'phone is required.');
 
     try {
-      const [row] = await db().db
-        .select({ caseId: recallCases.id })
+      const [row] = await db()
+        .db.select({ caseId: recallCases.id })
         .from(recallCases)
         .where(eq(recallCases.publicReference, claimNumber))
         .limit(1);
@@ -511,7 +591,12 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
         refundAmount: claim.refundAmount,
       });
     } catch (err) {
-      return problem(c, 500, 'Lookup Error', err instanceof Error ? err.message : 'Could not look up claim.');
+      return problem(
+        c,
+        500,
+        'Lookup Error',
+        err instanceof Error ? err.message : 'Could not look up claim.',
+      );
     }
   });
 }

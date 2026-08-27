@@ -40,7 +40,10 @@ import {
 import { DrizzleCampaignSnapshotReader } from '../product-identification/drizzle-snapshot-reader.js';
 import { identify } from '../product-identification/policy.js';
 import { hashDraftToken } from '../claim-drafts/tokens.js';
-import { DrizzleCaseResolutionService, resolutionTypeForRemedyCode } from '../resolutions/drizzle-case-resolution-service.js';
+import {
+  DrizzleCaseResolutionService,
+  resolutionTypeForRemedyCode,
+} from '../resolutions/drizzle-case-resolution-service.js';
 import type { CaseResolutionService } from '../resolutions/service.js';
 import {
   canonicalJson,
@@ -132,7 +135,8 @@ export class DrizzleCaseService implements CaseService {
     this.handle = handle;
     this.crypto = crypto;
     const defaultResolution = new DrizzleCaseResolutionService(handle, crypto);
-    const legacyReference = typeof resolutionsOrReference === 'function' ? resolutionsOrReference : undefined;
+    const legacyReference =
+      typeof resolutionsOrReference === 'function' ? resolutionsOrReference : undefined;
     this.resolutions =
       legacyReference || typeof resolutionsOrReference === 'undefined'
         ? defaultResolution
@@ -142,12 +146,14 @@ export class DrizzleCaseService implements CaseService {
       (resolutionsOrReference === undefined &&
       typeof referenceOrBefore === 'function' &&
       arguments.length === 3
-        ? referenceOrBefore as () => string
+        ? (referenceOrBefore as () => string)
         : undefined);
     this.referenceGenerator = legacyReferenceGenerator ?? generateCaseReference;
     this.beforeIdempotencyInsert =
-      resolutionsOrReference === undefined && typeof referenceOrBefore === 'function' && arguments.length >= 4
-        ? referenceOrBefore as () => Promise<void>
+      resolutionsOrReference === undefined &&
+      typeof referenceOrBefore === 'function' &&
+      arguments.length >= 4
+        ? (referenceOrBefore as () => Promise<void>)
         : typeof beforeOrMalware === 'function'
           ? beforeOrMalware
           : () => Promise.resolve();
@@ -333,18 +339,28 @@ export class DrizzleCaseService implements CaseService {
       // T5.5/O5 (D5): a claim may only attach documents that are verified AND
       // scan-clean. `verified` proves media-type reconciliation, not safety —
       // the malware gate is separate and mandatory.
-      if (
-        selectedDocuments.length !== command.body.documentIds.length ||
-        selectedDocuments.some(
-          (document) =>
-            document.draftId !== locked.draftId ||
-            document.uploadStatus !== 'verified' ||
-            (document.scanStatus !== 'clean' &&
-              (this.malwareScanRequired || document.scanStatus !== 'not_run')),
-        )
-      ) {
+      const failingDocumentIds = new Set<string>();
+      for (const document of selectedDocuments) {
+        if (
+          document.draftId !== locked.draftId ||
+          document.uploadStatus !== 'verified' ||
+          (document.scanStatus !== 'clean' &&
+            (this.malwareScanRequired || document.scanStatus !== 'not_run'))
+        ) {
+          failingDocumentIds.add(document.id);
+        }
+      }
+      for (const documentId of command.body.documentIds) {
+        if (!selectedDocuments.some((document) => document.id === documentId)) {
+          // Unknown or already-claimed rows are equally un-submittable; naming
+          // them keeps the consumer-side fallback actionable either way.
+          failingDocumentIds.add(documentId);
+        }
+      }
+      if (failingDocumentIds.size > 0) {
         throw new ClaimValidationError(
-          'Every selected Document must be verified, satisfy the configured malware-scan policy, and be owned by the active Claim Draft.',
+          `Selected Documents [${[...failingDocumentIds].sort().join(', ')}] did not pass submission requirements: ` +
+            'every Document must be verified, satisfy the configured malware-scan policy, and be owned by the active Claim Draft.',
         );
       }
 

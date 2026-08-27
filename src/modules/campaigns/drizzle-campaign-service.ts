@@ -5,7 +5,9 @@ import {
   campaignEvidenceRequirements,
   campaignLocalizations,
   campaignMessageTemplates,
+  campaignProductIdentifiers,
   campaignProductLots,
+  campaignProductVariants,
   campaignProducts,
   campaignRemedyOptions,
   campaignVersions,
@@ -70,6 +72,7 @@ export class DrizzleCampaignService implements CampaignService {
         versionNumber: campaignVersions.versionNumber,
         privacyNoticeVersion: campaignVersions.privacyNoticeVersion,
         privacyNoticeUrl: campaignVersions.privacyNoticeUrl,
+        publishedAt: campaignVersions.publishedAt,
       })
       .from(campaignVersions)
       .where(
@@ -132,6 +135,42 @@ export class DrizzleCampaignService implements CampaignService {
             .where(inArray(campaignProductLots.campaignProductId, productIds))
         : [];
 
+    // Unit UPCs are curated per ADR-0001 as variant identifiers; a UPC may
+    // legitimately repeat across variants. `sku` is never treated as one.
+    const unitUpcRows =
+      productIds.length > 0
+        ? await db
+            .select({
+              campaignProductId: campaignProducts.id,
+              rawValue: campaignProductIdentifiers.rawValue,
+            })
+            .from(campaignProductIdentifiers)
+            .innerJoin(
+              campaignProductVariants,
+              eq(campaignProductVariants.id, campaignProductIdentifiers.variantId),
+            )
+            .innerJoin(
+              campaignProducts,
+              eq(campaignProducts.id, campaignProductVariants.campaignProductId),
+            )
+            .where(
+              and(
+                inArray(campaignProducts.id, productIds),
+                eq(campaignProductIdentifiers.identifierType, 'unit_upc'),
+              ),
+            )
+        : [];
+    const unitUpcsByProductId = new Map<string, string[]>();
+    for (const row of unitUpcRows) {
+      const existing = unitUpcsByProductId.get(row.campaignProductId) ?? [];
+      existing.push(row.rawValue);
+      unitUpcsByProductId.set(row.campaignProductId, existing);
+    }
+    const productsWithUpcs = products.map((product) => ({
+      ...product,
+      unitUpcs: unitUpcsByProductId.get(product.id) ?? [],
+    }));
+
     const remedies = await db
       .select({
         code: campaignRemedyOptions.code,
@@ -163,9 +202,10 @@ export class DrizzleCampaignService implements CampaignService {
         versionNumber: version.versionNumber,
         privacyNoticeVersion: version.privacyNoticeVersion ?? 'legacy',
         privacyNoticeUrl: version.privacyNoticeUrl ?? 'https://privacy.example.invalid/legacy',
+        publishedAt: version.publishedAt,
       },
       localization,
-      products,
+      products: productsWithUpcs,
       lots,
       remedies,
       evidence,

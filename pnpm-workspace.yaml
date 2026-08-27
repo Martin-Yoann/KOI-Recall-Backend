@@ -1,2 +1,6 @@
 packages:
   - '.'
+allowBuilds:
+  # esbuild's postinstall only validates/downloads the platform binary that
+  # tsx/vitest depend on; blocking it makes every pnpm install exit non-zero.
+  esbuild: true

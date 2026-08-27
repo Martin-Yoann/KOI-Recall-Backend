@@ -10,4 +10,6 @@ export * from './campaigns.js';
 export * from './product-checks.js';
 export * from './documents.js';
 export * from './claims.js';
+export * from './case-status-lookups.js';
+export * from './consumer-auth.js';
 export * from './routes.js';

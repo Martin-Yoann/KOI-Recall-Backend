@@ -3,6 +3,8 @@ import { DrizzleCampaignService } from './modules/campaigns/drizzle-campaign-ser
 import type { CampaignService } from './modules/campaigns/service.js';
 import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
+import { DrizzleCaseStatusLookupService } from './modules/cases/drizzle-case-status-lookup-service.js';
+import type { CaseStatusLookupService } from './modules/cases/case-status-lookup-service.js';
 import { DrizzleAdminService } from './modules/admin/drizzle-admin-service.js';
 import type { AdminService } from './modules/admin/service.js';
 import { DrizzleCaseResolutionService } from './modules/resolutions/drizzle-case-resolution-service.js';
@@ -46,6 +48,7 @@ export interface ApplicationServices {
   claimDrafts: ClaimDraftService;
   documents: DocumentService;
   cases: CaseService;
+  caseStatusLookups: CaseStatusLookupService;
   incidents: IncidentService;
   communications: CommunicationService;
   admin?: AdminService;
@@ -102,10 +105,14 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
       documents: {
         authorizeUpload: () => unavailable('Private Blob upload authorization'),
         scheduleDraftDocumentDeletion: () => unavailable('Draft document deletion'),
+        listDraftDocuments: () => unavailable('Draft document listing'),
         reconcileCompletedUpload: () => unavailable('Private Blob upload callback reconciliation'),
       },
       cases: {
         submit: () => unavailable('Recall claim submission'),
+      },
+      caseStatusLookups: {
+        lookup: () => unavailable('Case status lookup'),
       },
       incidents: {
         createPendingIncident: () => unavailable('Incident creation'),
@@ -163,6 +170,7 @@ export function createApplicationRegistry(
               undefined,
               malwareScanRequired,
             ),
+            caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
             admin: new DrizzleAdminService(
               handle.db,
               crypto,
@@ -179,7 +187,12 @@ export function createApplicationRegistry(
                       tx,
                       crypto,
                       new DrizzleCaseResolutionService(
-                        { db: tx as never, driver: handle.driver, transaction: async (work) => work(tx), close: async () => {} },
+                        {
+                          db: tx as never,
+                          driver: handle.driver,
+                          transaction: async (work) => work(tx),
+                          close: async () => {},
+                        },
                         crypto,
                       ),
                     ),
