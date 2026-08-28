@@ -30,6 +30,8 @@ const summary = {
 
 const admin: AdminService = {
   listCases: () => Promise.resolve([summary]),
+  listIncidents: () => Promise.resolve([]),
+  listCampaigns: () => Promise.resolve([]),
   exportCases: () => Promise.resolve([summary]),
   closeReportabilityReview: () => Promise.resolve(),
   getCaseDetail: () => Promise.resolve(null),

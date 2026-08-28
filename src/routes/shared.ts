@@ -5,15 +5,15 @@ import type { AppEnv } from '../middleware/request-context.js';
 import { problemType } from '../shared/errors.js';
 
 /**
- * 501 Problem Details body for a contract-complete capability that the Phase 1
- * skeleton has not wired to a provider yet.
+ * 501 Problem Details body for a capability whose required service or adapter
+ * is not configured in the current environment.
  */
 export function problem(requestId: string, capability: string) {
   return {
     type: problemType('not-implemented'),
     title: 'Not Implemented',
     status: 501,
-    detail: `${capability} is contract-complete but not implemented in this Phase 1 skeleton.`,
+    detail: `${capability} is not enabled in this environment because a required service or adapter is not configured.`,
     requestId,
   };
 }

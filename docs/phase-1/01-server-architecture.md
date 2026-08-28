@@ -2,13 +2,19 @@
 
 ## 1. 目标与交付边界
 
-本项目是独立的消费者召回 API，不修改现有静态 Demo。第一阶段的可验收目标是把公开 Campaign、商品预筛、匿名附件上传、申请提交入库和确认邮件排队串成稳定契约。
+本项目是独立的召回 API，不修改现有静态 Demo。当前链路覆盖公开 Campaign、商品预筛、匿名附件上传、申请提交入库、确认邮件排队，以及 Admin 对已提交 Case 的查询和处理。
 
-当前仓库的六个 ToC 路由、内部任务入口、领域服务接口和供应商端口已经注册。Campaign 查询、商品预筛、匿名 Draft 创建和附件记录管理在配置 `DATABASE_URL` 后读写真实 PostgreSQL；附件直传在配置 `BLOB_READ_WRITE_TOKEN` 后接入 Vercel Private Blob（浏览器直传 + `/webhooks/vercel-blob` 完成回调）。
+当前仓库的 ToC 路由、Admin 路由、内部任务入口、领域服务接口和供应商端口已经注册。Campaign 查询、商品预筛、匿名 Draft 创建和附件记录管理在配置 `DATABASE_URL` 后读写真实 PostgreSQL；附件直传在配置 `BLOB_READ_WRITE_TOKEN` 后接入 Vercel Private Blob（浏览器直传 + `/webhooks/vercel-blob` 完成回调）。
 
 Claim 提交在 `DATABASE_URL`、`FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 三者都已配置时使用真实 `DrizzleCaseService`，成功返回 `201`。Case 聚合、Confirmation Communication 和 Outbox 在同一事务中原子持久化；响应仅承诺 `emailStatus=queued`，不表示邮件已发送或送达。未配置数据库或缺少任一 Crypto Secret 时，Claim 保持条件性 `501 application/problem+json`；非法非空配置在启动组合阶段失败关闭。
 
-Resend 投递与 Webhook、Outbox worker、Draft cleanup、Private Blob 实体删除、Admin API 和 Vercel 部署仍未实现。仓库不写真实凭证，当前 Claim 请求也不会内联发送邮件。
+Admin API、Resend 投递与 Webhook、Outbox worker、Draft cleanup 和 Private Blob 实体删除已有代码实现，实际能力依赖对应数据库、身份、Secret 与 Provider 配置。代码存在不代表目标环境已部署或通过验收；Claim 请求不会内联发送邮件，仓库不写真实凭证。
+
+### 1.1 Claim 与 Case 边界
+
+术语以 [CONTEXT.md](../../CONTEXT.md) 为准。Claim 是消费者对申请的称呼；Claim Draft 是提交前的临时工作区；Recall Case 是提交成功即创建的正式记录，不等待人工审核通过。
+
+**后台以 Case 为唯一处理对象**：原始申请、审核、补资料、补救和结案都围绕同一 Case。没有独立的 Claim 审核队列或“审核后转 Case”步骤，也不新增独立 Claim 表或 `/admin/claims` 资源。Admin 的旧 Claims 页面属于待退出的遗留实现，不是另一条业务链路。
 
 ## 2. 技术选型
 
@@ -27,16 +33,17 @@ Resend 投递与 Webhook、Outbox worker、Draft cleanup、Private Blob 实体�
 ```mermaid
 flowchart LR
   Browser[Consumer browser] -->|HTTPS /v1| API[Hono on Vercel Functions]
+  Admin[Admin browser] -->|authenticated /admin/cases| API
   Browser -->|short-lived client upload| Blob[(Vercel Private Blob)]
   Blob -->|signed callback| API
   API -->|pooled queries / transaction| Neon[(Neon Serverless Pool)]
   Cron[Vercel Cron] -->|authenticated /internal| API
   API -->|claim transaction writes| Outbox[(outbox_events)]
-  Cron -.->|follow-up: dispatch pending outbox| Resend[Resend]
-  Resend -.->|follow-up: signed webhook| API
+  API -->|outbox worker dispatches| Resend[Resend]
+  Resend -->|signed webhook| API
 ```
 
-生产环境只有公开的 `/v1` 和供应商要求的 `/webhooks` 入口。`/internal` 只接受 Cron Secret 或等价的服务到服务认证；它们不属于 ToC OpenAPI。
+`/v1` 提供消费者接口，`/admin` 提供经过身份与权限校验的运营接口，`/webhooks` 接收供应商回调。`/internal` 只接受 Cron Secret 认证；Admin、内部任务与供应商回调不属于 ToC OpenAPI。
 
 ## 4. 目录与职责
 
@@ -92,23 +99,31 @@ Private Blob 的任何读取都必须经过授权服务端代理或签名 URL。
 
 ### 5.4 Case 提交事务
 
-提交服务先做幂等检查，然后重新验证 Campaign 版本、Draft 状态、产品、补救、附件数量/类型/状态和事故条件字段。一个 Neon 非交互事务内完成：
+提交服务先做幂等检查，然后重新验证 Campaign 版本、Draft 状态、产品、补救、附件数量/类型/状态和事故条件字段。在一个数据库交互式事务内完成：
 
 1. 创建 `recall_cases` 和 `case_consumers`。
 2. 创建 `claimed_products`、`case_consents`、`submission_snapshots`。
 3. `incidentAnswer=yes|unsure` 时创建 `incidents` 与默认 `pending` 的 `reportability_reviews`。
-4. 原子关联 `document_uploads`。
+4. 原子关联 `document_uploads`，将 Draft 标为 `submitted` 并关联到所创建的 Case。
 5. 追加 `case_events`。
 6. 创建 `communications` 和确认邮件 `outbox_events`。
 7. 保存 `idempotency_records` 的原始成功响应。
 
-事务提交后立即返回 `201` 与不可猜测的 `caseReference`，邮件状态为 `queued`。确认页只使用本响应，不提供公开 Case GET。
+事务提交后立即返回 `201` 与不可猜测的 `caseReference`，邮件状态为 `queued`。此时 Case 已存在，Admin 可通过 `/admin/cases` 列表及 `/admin/cases/{caseRef}` 详情读取，不需要二次创建或转换。确认页使用提交响应；后续公开进度通过 `POST /v1/case-status-lookups` 查询，不提供匿名读取完整 Case 的 GET 接口。
 
 ### 5.5 邮件与 Webhook
 
-当前事务只创建 `communications` 和 `outbox_events`，不调用 Resend。后续 Outbox worker 才会领取到期事件、有限重试投递并保存 Provider ID；后续 Resend Webhook 需验证签名、去重并更新 `communications`。当前 `/internal/jobs/outbox` 与 `/webhooks/resend` 均返回 `501`。
+提交事务创建 `communications` 和 `outbox_events`，不调用 Resend。已实现的 Outbox worker 在独立任务中领取到期事件、有限重试投递并保存 Provider ID；Resend Webhook 验证签名、去重并更新 `communications`。内部任务需通过 Cron Secret 校验；缺少对应适配器配置时能力不可用，不能据此推断代码尚未实现。
 
-因此申请成功与邮件已发送是两个独立状态；`emailStatus=queued` 只是持久化状态。
+因此申请成功、Case 审核通过和邮件已发送是不同事实；`emailStatus=queued` 只是持久化状态。
+
+### 5.6 Admin Case 处理
+
+- `GET /admin/cases` 和 `GET /admin/cases/{caseRef}` 查询提交事务创建的 Case。
+- 分派、状态流转和 Resolution 操作均作用于该 Case，并由 API 校验权限、流程条件和审计要求。
+- 消费者请求的退款或换货不等于运营批准；原始申请资料属于 Case 的组成部分，不再建立独立 Claim 状态机。
+- Campaign 下的申请列表应是关联 Cases 的视图，Queues 是 Cases 的工作队列；相关 Admin 遗留页面的切换仍需单独实施和验收。
+- 未提交 Draft 不进入正式运营列表；如有草稿分析需求，应另行定义，不与正式 Case 混计。
 
 ## 6. 横切设计
 
@@ -129,7 +144,7 @@ Private Blob 的任何读取都必须经过授权服务端代理或签名 URL。
 - Blob 永远为 Private；文件名视为不可信输入，展示和日志前转义/脱敏。
 - 所有密钥只来自 Vercel 加密环境变量或后续密钥管理方案，不进入 Git。
 - `FIELD_ENCRYPTION_KEY` 与 `HASH_PEPPER` 用途不同、值必须不同，并与数据库/备份分开保存。
-- Phase 1 只定义一种授权后台用户：由未来 Admin API 在授权后端边界内解密，允许查看/导出完整数据；不实现多级权限或字段脱敏。当前 Admin API 尚未实现。
+- Admin API 使用具名 Staff、固定角色 RBAC 和两级 PII；完整资料读取需独立权限并记录审计，详见 [ADR-0004](../adr/0004-internal-operations-identity-rbac.md)。
 
 ### 6.3 异常语义
 
@@ -157,8 +172,9 @@ Private Blob 的任何读取都必须经过授权服务端代理或签名 URL。
 
 ## 8. 当前实现状态
 
-- 六个 ToC 路由和四个内部/回调入口完成注册。
+- ToC、Admin、公开 Case 状态查询和内部/回调入口已注册。
 - 运行时请求校验、CORS、Request ID、安全头、Problem Details 和 OpenAPI 可测试。
 - Campaign、商品预筛、Draft、Document 记录与 Claim 提交已有 PostgreSQL 实现；Claim 另需两项合法 Crypto Secret。
-- Claim 事务已持久化 Communication 与 Outbox；Resend 投递/Webhook、Outbox worker、Draft cleanup、Blob 实体删除和 Admin API 仍是后续工作。
+- Claim 事务创建正式 Case 并持久化 Communication 与 Outbox；Admin 处理同一 Case，不存在独立 Claim 审核阶段。
+- Resend 投递/Webhook、Outbox worker、Draft cleanup 与 Blob 实体删除已有实现；目标环境配置、邮件送达及实际部署需另行验证。
 - OpenAPI 和 Drizzle migration 均可生成和检查漂移。

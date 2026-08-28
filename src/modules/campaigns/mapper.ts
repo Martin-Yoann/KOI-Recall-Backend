@@ -15,6 +15,8 @@ export interface CampaignSourceRow {
   /** Legacy fixtures may omit privacy metadata; published versions are validated before exposure. */
   privacyNoticeVersion?: string;
   privacyNoticeUrl?: string;
+  /** Announcement timestamp of the published version; absent for legacy rows. */
+  publishedAt?: Date | null;
 }
 
 export interface CampaignLocalizationRow {
@@ -36,6 +38,12 @@ export interface CampaignProductRow {
   name: string;
   attributes: Record<string, unknown>;
   sortOrder: number;
+  /**
+   * Unit UPCs curated under ADR-0001 product identifiers
+   * (`identifier_type = 'unit_upc'`). Deliberately a list: the identifier
+   * model treats UPC collisions across variants as business fact.
+   */
+  unitUpcs?: string[];
 }
 
 export interface CampaignLotRow {
@@ -102,6 +110,7 @@ export function mapToCampaignView(source: CampaignSource): CampaignView {
       return {
         productId: product.id,
         sku: product.sku,
+        upcs: [...new Set(product.unitUpcs ?? [])].sort(compareString),
         brand: product.brand,
         name: product.name,
         flavors: attributes.flavors ?? [],
@@ -123,6 +132,7 @@ export function mapToCampaignView(source: CampaignSource): CampaignView {
     slug: source.campaign.slug,
     code: source.campaign.code,
     version: source.campaign.versionNumber,
+    publishedAt: source.campaign.publishedAt ? source.campaign.publishedAt.toISOString() : null,
     locale: source.localization.locale,
     defaultLocale: source.campaign.defaultLocale,
     privacyNotice: {

@@ -118,7 +118,9 @@ export class CampaignValidationError extends HttpProblemError {
 
 export class NotImplementedServiceError extends Error {
   constructor(readonly capability: string) {
-    super(`${capability} is defined by contract but is not implemented in the Phase 1 skeleton.`);
+    super(
+      `${capability} is not enabled in this environment because a required service or adapter is not configured.`,
+    );
     this.name = 'NotImplementedServiceError';
   }
 }

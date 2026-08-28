@@ -6,9 +6,15 @@
 
 当前 Campaign 查询、商品预筛、匿名 Draft 创建、附件记录管理和 Claim 提交均有 PostgreSQL 实现。附件直传在配置 `BLOB_READ_WRITE_TOKEN` 后接入 Vercel Private Blob（含完成回调回写 `document_uploads`）。
 
-Claim 只在 `DATABASE_URL`、`FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 都已配置时返回 `201`；未配置数据库或缺少任一 Crypto Secret 时返回条件性 `501 Not Implemented`。成功事务会原子持久化 Case 聚合、Confirmation Communication 与 Outbox，但当前不调用 Resend。
+Claim 只在 `DATABASE_URL`、`FIELD_ENCRYPTION_KEY` 和 `HASH_PEPPER` 都已配置时返回 `201`；未配置数据库或缺少任一 Crypto Secret 时返回条件性 `501 Not Implemented`。成功事务会原子持久化 Case 聚合、Confirmation Communication 与 Outbox，不在提交请求内联调用 Resend。
 
-不提供消费者账户、Case 查询、状态门户、修改或撤回接口。确认页使用提交响应，不通过公开 GET 暴露 Case。
+本文聚焦无需消费者账户的召回提交流程。确认页使用提交响应；后续通过 `POST /v1/case-status-lookups` 查询受限公开进度（第 13 节），不通过匿名 GET 暴露完整 Case。管理后台使用独立的授权 Admin API 查询与处理。
+
+### 1.1 申请与正式记录
+
+术语以 [CONTEXT.md](../../CONTEXT.md) 为准：Claim 是消费者申请的称呼，Claim Draft 是提交前的临时草稿，Recall Case 是提交成功时创建的正式记录。后台不另设 Claim 审核阶段；从原始申请到后续处理均属于同一个 Case。
+
+提交端点继续命名为 `/v1/recall-campaigns/{slug}/claims`，响应继续使用 `caseReference`；不因 Admin 统一为 Cases 而改名或新增转换接口。提交成功不代表退款或换货已获批准。
 
 ## 2. 通用协议
 
@@ -44,8 +50,10 @@ Problem Details 示例：
 2. `POST /v1/recall-campaigns/{slug}/product-checks`
 3. `POST /v1/recall-campaigns/{slug}/claim-drafts`
 4. 每个附件调用 `POST /v1/claim-drafts/{draftId}/upload-tokens`，然后浏览器直传 Private Blob。
-5. 用户删除附件时调用 `DELETE /v1/claim-drafts/{draftId}/documents/{documentId}`。
-6. `POST /v1/recall-campaigns/{slug}/claims` 完成提交。
+5. 直传期间轮询 `GET /v1/claim-drafts/{draftId}/documents` 获取附件的六态状态（见第 12 节）。
+6. 用户删除附件时调用 `DELETE /v1/claim-drafts/{draftId}/documents/{documentId}`。
+7. `POST /v1/recall-campaigns/{slug}/claims` 完成提交。
+8. 提交后以案件号 + 邮箱调用 `POST /v1/case-status-lookups` 查询公开进度（见第 13 节）。
 
 前端必须以 GET 返回的 `evidenceRequirements` 决定必传类别、数量、MIME 和大小，不能把 Demo 规则写死。最终提交时服务端会按 Draft 绑定的 Campaign 版本再次验证。
 
@@ -282,6 +290,8 @@ Content-Type: application/json
 `emailStatus=queued` 只表示确认邮件已进入 Outbox，不代表 Resend 已发送或送达。
 该事务中 Communication 与 Outbox 和 Case 聚合一起提交；任一写入失败时整个申请回滚。
 
+`201` 返回时正式 Case 已创建，管理员可通过 `GET /admin/cases/{caseRef}` 查询，其中 `caseRef` 为响应的 `caseReference`。不需要另行提交、审核或转换 Claim 才能出现在后台。Draft 会标为 `submitted` 并关联该 Case；不得把 Draft 与 Case 分别计为两条申请。
+
 ### 9.1 幂等规则
 
 - Key 长度 16–128，仅保存哈希。
@@ -342,6 +352,82 @@ Content-Type: application/json
 - `POST /webhooks/vercel-blob`
 - `POST /webhooks/resend`
 
-`/webhooks/vercel-blob` 的签名验证、上传 reconciliation 和去重已实现；只有完成 reconciliation 后才确认 Blob 回调。`/internal/jobs/outbox`、`/internal/jobs/cleanup-drafts` 和 `/webhooks/resend` 仍返回 `501`；后续实现必须验证 Cron Secret 与 Resend/Svix 签名，并使用 `webhook_events` 的 `processing/processed/failed` 状态实现可重试去重。
+`/webhooks/vercel-blob` 的签名验证、上传 reconciliation 和去重已实现；只有完成 reconciliation 后才确认 Blob 回调。Outbox、Draft cleanup 和 Resend Webhook 也已有实现，分别依赖相应数据库、Provider 与 Secret 配置。内部任务验证 Cron Secret，Resend Webhook 验证 Svix 签名并通过持久化事件去重；实现存在不代表目标环境任务已运行或邮件已送达。
 
-当前不提供 Admin API。Phase 1 预定的人工查看语义是：只有一种授权后台用户，由后端在授权边界内解密并允许查看/导出完整数据；本阶段不实现多级权限或脱敏展示。
+Admin API 已提供 `GET /admin/cases`、`GET /admin/cases/{caseRef}` 及相关分派、状态流转、Resolution 操作。这些接口不属于消费者契约，必须通过后台身份与权限校验；固定角色、两级 PII 与审计规则见 [ADR-0004](../adr/0004-internal-operations-identity-rbac.md)。不存在独立 `/admin/claims` 处理资源；Admin 遗留 Claims 页面的退出是前端清理任务，不是新建 API 业务对象。
+
+## 12. Draft 附件状态列表（六态 UI）
+
+`GET /v1/claim-drafts/{draftId}/documents`
+
+Header 同删除附件：`X-Draft-Token`。成功 `200`：
+
+```json
+{
+  "documents": [
+    {
+      "documentId": "a996d56a-da5e-49c3-bf76-665130bbb88a",
+      "category": "proof_of_purchase",
+      "fileName": "receipt.jpg",
+      "status": "scan_pending",
+      "statusReason": null,
+      "uploadedAt": "2026-08-27T03:12:00.000Z",
+      "lastStatusChangedAt": "2026-08-27T03:13:41.000Z"
+    }
+  ]
+}
+```
+
+- 六态枚举：`uploading` / `verifying` / `verified` / `scan_pending` / `rejected` / `expired`。
+- `statusReason` 仅在 `rejected` 时给出脱敏枚举（`mime_mismatch | malware_detected`），不含扫描引擎细节。
+- 已删除（`deletion_pending/deleted`）或已随提交挂接 Case 的文档不再出现在列表中。
+- 上传回调 reconciliation 分两步落库：先写回实际元数据并置中间态 `uploaded`（对应公开
+  `verifying`），再判定 `verified/rejected`，因此前端能观察到真实的 verifying 窗口。
+- 含未 `verified` 文档的 Claim 提交仍被 `422` 拒绝，ProblemDetails.detail 会指明未通过的 `documentId`。
+
+可能错误：`400/404/410/429/500/501/503`。
+
+## 13. 公开案件状态查询
+
+`POST /v1/case-status-lookups`（公开端点，无需鉴权；按 IP 限流 **10 次/分钟**，超出返回带
+Request ID 的 `429` ProblemDetails）。
+
+```json
+{ "caseReference": "KOI-B2C4-D6E8F0A1", "email": "consumer@example.com" }
+```
+
+校验方式：对 `caseReference + email` 做 peppered HMAC 比对（命中 `case_consumers.email_lookup_hash`），
+全程不解密任何 PII。不存在的 reference 与 email 不匹配返回**字节级一致**的 `404` ProblemDetails，
+reference 无法被枚举。`is_test_data = true` 的 Campaign 下的 Case 永不可查（合成数据治理）。
+
+成功响应严格为白名单字段：
+
+```json
+{
+  "caseReference": "KOI-B2C4-D6E8F0A1",
+  "campaignTitle": "Music Lollipop Recall",
+  "publicStatus": "in_review",
+  "publicStatusLabel": "Under review",
+  "consumerNextAction": "Your claim is under review. No action is needed right now.",
+  "requestedResolution": "Replacement",
+  "approvedResolution": null,
+  "lastUpdatedAt": "2026-08-20T09:30:00.000Z"
+}
+```
+
+- `publicStatus` 固定八值：`received / in_review / action_required / resolution_approved /
+resolution_in_progress / completed / not_approved / closed`；标签与下一步文案由 API 产出，前端透传。
+- 内部状态映射（确定性、穷举测试覆盖）：`submitted→received`；`triage|under_review→in_review`；
+  `need_info→action_required`；`approved→resolution_approved`；`closure_review→resolution_in_progress`；
+  `closed→completed`（此前有批准或外部完成）或 `closed`；`rejected|duplicate→not_approved`；
+  `withdrawn→closed`。
+- `approvedResolution` 仅当批准事实对消费者可见（进入 resolution 阶段之后）才返回，否则为 `null`；
+- 响应中永不出现任何姓名、电话、地址、refundAmount 等原始 PII 或内部字段。
+
+可能错误：`400/404/429/500/501/503`。
+
+### 13.1 旧查询端点弃用
+
+`GET /v1/consumer-auth/lookup/{claimNumber}?phone=` 返回含完整 PII 的 Claim 对象，现已在 OpenAPI 中
+标注 `deprecated: true`，契约原样保留一个过渡窗口。新集成一律使用 `POST /v1/case-status-lookups`，
+过渡窗口结束后旧端点将被移除。

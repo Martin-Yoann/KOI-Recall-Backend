@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi';
 
-import { uuid } from './common.js';
+import { uuid, isoDateTime } from './common.js';
 
 export const evidenceRequirementSchema = z
   .object({
@@ -17,7 +17,12 @@ export const evidenceRequirementSchema = z
 export const publicProductSchema = z
   .object({
     productId: uuid,
-    sku: z.string(),
+    sku: z.string().openapi({
+      description:
+        'Internal catalogue SKU. Deliberately NOT a UPC — unit UPCs are exposed via `upcs`.',
+    }),
+    /** Unit UPCs from curated product identifiers (ADR-0001); may repeat across variants. */
+    upcs: z.array(z.string()),
     brand: z.string(),
     name: z.string(),
     flavors: z.array(z.string()),
@@ -38,6 +43,10 @@ export const campaignResponseSchema = z
       slug: z.string(),
       code: z.string(),
       version: z.number().int().positive(),
+      publishedAt: isoDateTime.nullable().openapi({
+        description:
+          'When the published campaign version was announced; null for legacy versions predating the field.',
+      }),
       locale: z.string(),
       defaultLocale: z.string(),
       privacyNotice: z.object({ version: z.string().max(80), url: z.string().url() }),

@@ -19,7 +19,17 @@ import {
   UnsupportedMediaTypeError,
 } from '../../shared/errors.js';
 import { hashDraftToken } from '../claim-drafts/tokens.js';
-import type { AuthorizeUploadInput, DocumentService, AuthorizedUpload } from './service.js';
+import {
+  deriveDocumentStatus,
+  type ListedUploadStatus,
+  LISTED_UPLOAD_STATUSES,
+} from './document-status.js';
+import type {
+  AuthorizeUploadInput,
+  DocumentService,
+  AuthorizedUpload,
+  DraftDocumentSummary,
+} from './service.js';
 
 /** The full union of `document_uploads.upload_status` values. */
 type DocumentUploadStatus = (typeof documentUploadStatusEnum.enumValues)[number];
@@ -226,6 +236,68 @@ export class DrizzleDocumentService implements DocumentService {
     });
   }
 
+  async listDraftDocuments(draftId: string, draftToken: string): Promise<DraftDocumentSummary[]> {
+    const now = new Date();
+    const [draft] = await this.db
+      .select({
+        tokenHash: claimDrafts.tokenHash,
+        status: claimDrafts.status,
+        expiresAt: claimDrafts.expiresAt,
+      })
+      .from(claimDrafts)
+      .where(eq(claimDrafts.id, draftId))
+      .limit(1);
+    if (
+      !draft ||
+      draft.tokenHash !== hashDraftToken(draftToken) ||
+      draft.status !== 'active' ||
+      draft.expiresAt.getTime() <= now.getTime()
+    ) {
+      throw new DraftExpiredOrInvalidError(
+        'The draft token is invalid, or the draft is no longer active or has expired.',
+      );
+    }
+
+    const rows = await this.db
+      .select({
+        id: documentUploads.id,
+        category: documentUploads.category,
+        originalFileName: documentUploads.originalFileName,
+        uploadStatus: documentUploads.uploadStatus,
+        scanStatus: documentUploads.scanStatus,
+        uploadedAt: documentUploads.uploadedAt,
+        updatedAt: documentUploads.updatedAt,
+        expiresAt: documentUploads.expiresAt,
+      })
+      .from(documentUploads)
+      .where(
+        and(
+          eq(documentUploads.draftId, draftId),
+          inArray(documentUploads.uploadStatus, [...LISTED_UPLOAD_STATUSES]),
+        ),
+      )
+      .orderBy(documentUploads.createdAt, documentUploads.id);
+
+    return rows.map((row) => {
+      // The listing filter above pins the row to a listed status; the derived
+      // switch is still total so no runtime state can fall through unmapped.
+      const { status, statusReason } = deriveDocumentStatus(
+        row.uploadStatus as ListedUploadStatus,
+        row.scanStatus,
+        row.expiresAt.getTime() <= now.getTime(),
+      );
+      return {
+        documentId: row.id,
+        category: row.category,
+        fileName: row.originalFileName,
+        status,
+        statusReason,
+        uploadedAt: row.uploadedAt ? row.uploadedAt.toISOString() : null,
+        lastStatusChangedAt: row.updatedAt.toISOString(),
+      };
+    });
+  }
+
   async reconcileCompletedUpload(
     completion: UploadCompletion,
     event: { providerEventId: string; eventType: string; payload: Record<string, unknown> },
@@ -276,31 +348,52 @@ export class DrizzleDocumentService implements DocumentService {
         (document.status === 'authorized' || document.status === 'deletion_pending')
       ) {
         const deletionRequested = document.status === 'deletion_pending';
-        const rejected =
-          !!document.declaredMimeType && document.declaredMimeType !== completion.detectedMimeType;
+        // Phase 1 of 2: land the payload facts and flip the row to `uploaded`,
+        // making the public `verifying` state observable between the blob
+        // callback and the verification verdict (consumer-front contract §7).
         await db
           .update(documentUploads)
           .set({
-            uploadStatus: deletionRequested
-              ? 'deletion_pending'
-              : rejected
-                ? 'rejected'
-                : 'verified',
-            scanStatus:
-              deletionRequested || rejected
-                ? 'not_run'
-                : this.malwareScanRequired
-                  ? 'pending'
-                  : 'not_run',
-            ...(deletionRequested || rejected ? { categorySlot: null } : {}),
             storagePathname: completion.pathname,
             detectedMimeType: completion.detectedMimeType,
             sizeBytes: completion.sizeBytes,
+            ...(deletionRequested
+              ? { scanStatus: 'not_run' as const }
+              : { uploadStatus: 'uploaded' as const }),
             uploadedAt: sql`now()`,
             updatedAt: sql`now()`,
           })
-          .where(eq(documentUploads.id, completion.documentId))
+          .where(
+            and(
+              eq(documentUploads.id, completion.documentId),
+              eq(documentUploads.uploadStatus, document.status),
+            ),
+          )
           .execute();
+
+        if (!deletionRequested) {
+          // Phase 2 of 2: the verification verdict itself. Retry-safe — a crash
+          // after phase 1 leaves the row in `uploaded`, which the reclaimable
+          // webhookEvents claim above lets a redelivered event finalize here.
+          const rejected =
+            !!document.declaredMimeType &&
+            document.declaredMimeType !== completion.detectedMimeType;
+          await db
+            .update(documentUploads)
+            .set({
+              uploadStatus: rejected ? 'rejected' : 'verified',
+              scanStatus: this.malwareScanRequired && !rejected ? 'pending' : 'not_run',
+              ...(rejected ? { categorySlot: null } : {}),
+              updatedAt: sql`now()`,
+            })
+            .where(
+              and(
+                eq(documentUploads.id, completion.documentId),
+                eq(documentUploads.uploadStatus, 'uploaded'),
+              ),
+            )
+            .execute();
+        }
       }
 
       await db

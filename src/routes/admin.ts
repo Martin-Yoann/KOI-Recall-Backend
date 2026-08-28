@@ -190,8 +190,10 @@ export function registerAdminRoutes(
         token: result.token,
         sessionId: result.sessionId,
         expiresAt: result.expiresAt,
+        staffUserId: profile?.id ?? null,
         displayName: profile?.displayName ?? email,
         avatarDataUrl: profile?.avatarDataUrl ?? null,
+        role: profile?.role ?? 'viewer',
       },
       201,
     );
@@ -453,6 +455,28 @@ export function registerAdminRoutes(
     });
   });
 
+  // ---- Incident operations list (incidents & safety surface) ----
+
+  app.get('/admin/incidents', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.queue.read');
+    if (guard instanceof Response) return guard;
+    const admin = registry.services.admin;
+    if (!admin) throw new Error('Admin service is not configured.');
+    const incidents = await admin.listIncidents();
+    return context.json({ incidents }, 200);
+  });
+
+  // ---- Campaign overview (read-only intake context) ----
+
+  app.get('/admin/campaigns', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.queue.read');
+    if (guard instanceof Response) return guard;
+    const admin = registry.services.admin;
+    if (!admin) throw new Error('Admin service is not configured.');
+    const campaigns = await admin.listCampaigns();
+    return context.json({ campaigns }, 200);
+  });
+
   // ---- Case detail (masked/raw two-tier PII) ----
 
   app.get('/admin/cases/:caseRef', async (context) => {
@@ -483,7 +507,10 @@ export function registerAdminRoutes(
         outcome: 'success',
         reasonCode: 'raw_pii_view',
         metadata: {
-          fields: Object.keys(detail.consumer).filter((field) => field !== 'piiTier'),
+          fields: [
+            ...Object.keys(detail.consumer).filter((field) => field !== 'piiTier'),
+            ...(detail.incident?.narrative !== undefined ? ['incident.narrative'] : []),
+          ],
         },
       });
     }
@@ -526,8 +553,21 @@ export function registerAdminRoutes(
         requestId: context.get('requestId'),
       });
     }
+    const note = asString(body.note);
+    const trimmedNote = note?.trim();
+    // The consumer must be told what to provide: a need_info transition
+    // without a note would strand them in "action required" with no guidance.
+    if (nextStatus === 'need_info' && (!trimmedNote || trimmedNote.length < 10)) {
+      return validationError(
+        context,
+        'A note of at least 10 characters is required when requesting additional information.',
+      );
+    }
+    if (trimmedNote && trimmedNote.length > 2000) {
+      return validationError(context, 'The transition note must be at most 2000 characters.');
+    }
     await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
-      await admin.transitionCaseStatus(caseRef, nextStatus, guard.userId);
+      await admin.transitionCaseStatus(caseRef, nextStatus, guard.userId, trimmedNote);
       await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
@@ -535,7 +575,7 @@ export function registerAdminRoutes(
         resourceType: 'case',
         resourceId: caseRef,
         outcome: 'success',
-        metadata: { nextStatus: body.status },
+        metadata: { nextStatus: body.status, ...(trimmedNote ? { note: trimmedNote } : {}) },
       });
     });
     return context.body(null, 204);
@@ -591,6 +631,15 @@ export function registerAdminRoutes(
     return context.json({ resolution: result }, 200);
   });
 
+
+  app.get('/admin/refund-exports', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.export');
+    if (guard instanceof Response) return guard;
+    const service = registry.services.refundExports;
+    if (!service) return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
+    const batches = await service.listBatches();
+    return context.json({ batches }, 200);
+  });
 
   app.post('/admin/refund-exports', async (context) => {
     const guard = await requirePermission(context, registry, 'case.export');

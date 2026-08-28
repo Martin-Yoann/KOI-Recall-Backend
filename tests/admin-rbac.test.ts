@@ -166,6 +166,12 @@ function makeAdminFake(): AdminService & { detailTierByRef: Map<string, 'masked'
     async listCases() {
       return [];
     },
+    async listIncidents() {
+      return [];
+    },
+    async listCampaigns() {
+      return [];
+    },
     async exportCases() {
       return [];
     },
@@ -574,5 +580,135 @@ describe('B-end RBAC (ADR-0004)', () => {
     const createAudit = audit.events.find((e) => e.action === 'staff.create');
     expect(createAudit).toBeTruthy();
     expect(createAudit?.actorUserId).toBe(adminUser.id);
+  });
+
+  it('lists incidents for a viewer via GET /admin/incidents', async () => {
+    const staff = makeStaffFake();
+    const admin = makeAdminFake();
+    admin.listIncidents = () =>
+      Promise.resolve([
+        {
+          id: 'i-1',
+          caseReference: 'KOI-7N4Q-A91M2X6P',
+          caseStatus: 'triage',
+          answer: 'yes',
+          eventTypes: ['burn'],
+          injurySeverity: 'moderate',
+          medicalTreatment: 'yes',
+          occurredAt: '2026-08-01T00:00:00.000Z',
+          createdAt: '2026-08-02T00:00:00.000Z',
+          reportability: { id: 'r-1', status: 'pending', cpscReference: null, filedAt: null, decisionAt: null },
+        },
+      ]);
+    await staff.createStaffUser({
+      email: 'v2@x.com',
+      displayName: 'Viewer2',
+      role: 'viewer',
+      password: 'password1234',
+    });
+    const token = (await staff.login('v2@x.com', 'password1234'))!.token;
+    const app = appWith({ admin, staff, audit: makeAuditFake() });
+
+    const res = await app.request('/admin/incidents', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { incidents: Array<{ id: string; caseReference: string }> };
+    expect(body.incidents[0]?.caseReference).toBe('KOI-7N4Q-A91M2X6P');
+  });
+
+  it('lists campaigns for a viewer via GET /admin/campaigns', async () => {
+    const staff = makeStaffFake();
+    const admin = makeAdminFake();
+    admin.listCampaigns = () =>
+      Promise.resolve([
+        {
+          id: 'c-1',
+          slug: 'music-lollipop-demo-2026',
+          code: 'KOI-ML-2026',
+          status: 'active',
+          launchAt: '2026-01-01T00:00:00.000Z',
+          closeAt: null,
+          title: 'Music Lollipop Recall',
+          caseCount: 12,
+        },
+      ]);
+    await staff.createStaffUser({
+      email: 'v3@x.com',
+      displayName: 'Viewer3',
+      role: 'viewer',
+      password: 'password1234',
+    });
+    const token = (await staff.login('v3@x.com', 'password1234'))!.token;
+    const app = appWith({ admin, staff, audit: makeAuditFake() });
+
+    const res = await app.request('/admin/campaigns', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { campaigns: Array<{ slug: string; caseCount: number }> };
+    expect(body.campaigns[0]?.slug).toBe('music-lollipop-demo-2026');
+    expect(body.campaigns[0]?.caseCount).toBe(12);
+  });
+
+  it('requires a note when transitioning to need_info and forwards it otherwise', async () => {
+    const staff = makeStaffFake();
+    const admin = makeAdminFake();
+    const audit = makeAuditFake();
+    const forwarded: Array<{ nextStatus: string; note?: string }> = [];
+    admin.transitionCaseStatus = (_ref, nextStatus, _userId, note) => {
+      forwarded.push({ nextStatus, ...(note !== undefined ? { note } : {}) });
+      return Promise.resolve();
+    };
+    await staff.createStaffUser({
+      email: 'r3@x.com',
+      displayName: 'Reviewer3',
+      role: 'reviewer',
+      password: 'password1234',
+    });
+    const token = (await staff.login('r3@x.com', 'password1234'))!.token;
+    const app = appWith({ admin, staff, audit });
+
+    // need_info without a note is rejected with 422.
+    const withoutNote = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'need_info' }),
+    });
+    expect(withoutNote.status).toBe(422);
+
+    // need_info with a short note is rejected with 422.
+    const shortNote = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'need_info', note: 'short' }),
+    });
+    expect(shortNote.status).toBe(422);
+
+    // A valid note is forwarded to the service.
+    const withNote = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status: 'need_info',
+        note: 'Please provide a photo of the lot code.',
+      }),
+    });
+    expect(withNote.status).toBe(204);
+    expect(forwarded).toEqual([
+      {
+        nextStatus: 'need_info',
+        note: 'Please provide a photo of the lot code.',
+      },
+    ]);
+
+    // Transitions to other states carry an optional note too.
+    const triage = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'triage', note: 'Product anomaly suspected.' }),
+    });
+    expect(triage.status).toBe(204);
+    expect(forwarded[1]).toEqual({ nextStatus: 'triage', note: 'Product anomaly suspected.' });
   });
 });

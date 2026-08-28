@@ -3,6 +3,8 @@ import { DrizzleCampaignService } from './modules/campaigns/drizzle-campaign-ser
 import type { CampaignService } from './modules/campaigns/service.js';
 import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
+import { DrizzleCaseStatusLookupService } from './modules/cases/drizzle-case-status-lookup-service.js';
+import type { CaseStatusLookupService } from './modules/cases/case-status-lookup-service.js';
 import { DrizzleAdminService } from './modules/admin/drizzle-admin-service.js';
 import type { AdminService } from './modules/admin/service.js';
 import { DrizzleCaseResolutionService } from './modules/resolutions/drizzle-case-resolution-service.js';
@@ -17,7 +19,6 @@ import { DrizzleCommunicationService } from './modules/communications/drizzle-co
 import type { CommunicationService } from './modules/communications/service.js';
 import { DrizzleDocumentService } from './modules/documents/drizzle-document-service.js';
 import type { DocumentService } from './modules/documents/service.js';
-import type { IncidentService } from './modules/incidents/service.js';
 import { DrizzleProductCheckService } from './modules/product-checks/drizzle-product-check-service.js';
 import type { ProductCheckService } from './modules/product-checks/service.js';
 import type { AppConfig } from './config/env.js';
@@ -46,7 +47,7 @@ export interface ApplicationServices {
   claimDrafts: ClaimDraftService;
   documents: DocumentService;
   cases: CaseService;
-  incidents: IncidentService;
+  caseStatusLookups: CaseStatusLookupService;
   communications: CommunicationService;
   admin?: AdminService;
   /** ADR-0004: staff identity, sessions, and audit (B-end RBAC). */
@@ -102,16 +103,16 @@ export function createPlaceholderRegistry(): ApplicationRegistry {
       documents: {
         authorizeUpload: () => unavailable('Private Blob upload authorization'),
         scheduleDraftDocumentDeletion: () => unavailable('Draft document deletion'),
+        listDraftDocuments: () => unavailable('Draft document listing'),
         reconcileCompletedUpload: () => unavailable('Private Blob upload callback reconciliation'),
       },
       cases: {
         submit: () => unavailable('Recall claim submission'),
       },
-      incidents: {
-        createPendingIncident: () => unavailable('Incident creation'),
+      caseStatusLookups: {
+        lookup: () => unavailable('Case status lookup'),
       },
       communications: {
-        queueClaimConfirmation: () => unavailable('Claim confirmation queueing'),
         recordDeliveryEvent: () => unavailable('Provider delivery event recording'),
       },
     },
@@ -163,6 +164,7 @@ export function createApplicationRegistry(
               undefined,
               malwareScanRequired,
             ),
+            caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
             admin: new DrizzleAdminService(
               handle.db,
               crypto,
@@ -179,7 +181,12 @@ export function createApplicationRegistry(
                       tx,
                       crypto,
                       new DrizzleCaseResolutionService(
-                        { db: tx as never, driver: handle.driver, transaction: async (work) => work(tx), close: async () => {} },
+                        {
+                          db: tx as never,
+                          driver: handle.driver,
+                          transaction: async (work) => work(tx),
+                          close: async () => {},
+                        },
                         crypto,
                       ),
                     ),

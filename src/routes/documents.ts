@@ -6,6 +6,8 @@ import {
   createClaimDraftRoute,
   createUploadTokenRoute,
   deleteDraftDocumentRoute,
+  draftDocumentListResponseSchema,
+  listDraftDocumentsRoute,
   uploadTokenResponseSchema,
 } from '../contracts/toc.js';
 import type { AppEnv } from '../middleware/request-context.js';
@@ -69,5 +71,21 @@ export function registerDocumentRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     }
 
     return context.body(null, 204);
+  });
+
+  app.openapi(listDraftDocumentsRoute, async (context) => {
+    const { draftId } = context.req.valid('param');
+    let documents;
+    try {
+      documents = await registry.services.documents.listDraftDocuments(
+        draftId,
+        context.req.valid('header')['X-Draft-Token'],
+      );
+    } catch (error) {
+      if (isConnectionError(error)) return dependencyUnavailable(context, 'Draft document listing');
+      throw error;
+    }
+
+    return context.json(draftDocumentListResponseSchema.parse({ documents }), 200);
   });
 }

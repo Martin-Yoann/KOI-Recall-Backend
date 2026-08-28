@@ -20,12 +20,6 @@ const DELIVERY_STATUS: Record<ProviderDeliveryEvent, 'delivered' | 'bounced' | '
 export class DrizzleCommunicationService implements CommunicationService {
   constructor(private readonly db: Database) {}
 
-  queueClaimConfirmation(caseId: string): Promise<string> {
-    // Queueing happens inside the claim transaction (DrizzleCaseService); this
-    // method exists for interface completeness and direct callers.
-    return Promise.resolve(caseId);
-  }
-
   async recordDeliveryEvent(input: {
     providerEventId: string;
     providerMessageId: string;

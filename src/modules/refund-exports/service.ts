@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 
 import type { DatabaseHandle } from '../../db/client.js';
-import { adminAuditEvents, caseResolutions, recallCases, refundExportBatches, refundExportItems } from '../../db/schema/index.js';
+import { adminAuditEvents, caseResolutions, recallCases, refundExportBatches, refundExportItems, staffUsers } from '../../db/schema/index.js';
 import type { StaffRole } from '../staff/permissions.js';
 
 export interface RefundExportInput {
@@ -19,6 +19,15 @@ export interface RefundExportResult {
   csv: string;
 }
 
+export interface RefundExportBatchSummary {
+  batchId: string;
+  createdAt: string;
+  createdBy: string;
+  purpose: string;
+  rowCount: number;
+  fileSha256: string;
+}
+
 const CSV_HEADERS = ['caseReference', 'resolutionId', 'amountMinor', 'currency', 'resolutionVersion'];
 
 function csvCell(value: string | number): string {
@@ -33,6 +42,22 @@ export function renderRefundCsv(rows: readonly { caseReference: string; resoluti
 
 export class RefundExportService {
   constructor(private readonly handle: DatabaseHandle) {}
+
+  async listBatches(): Promise<RefundExportBatchSummary[]> {
+    const rows = await this.handle.db
+      .select({
+        batchId: refundExportBatches.id,
+        createdAt: refundExportBatches.createdAt,
+        createdBy: staffUsers.displayName,
+        purpose: refundExportBatches.purpose,
+        rowCount: refundExportBatches.rowCount,
+        fileSha256: refundExportBatches.fileSha256,
+      })
+      .from(refundExportBatches)
+      .innerJoin(staffUsers, eq(staffUsers.id, refundExportBatches.requestedByStaffUserId))
+      .orderBy(refundExportBatches.createdAt);
+    return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
+  }
 
   async export(input: RefundExportInput): Promise<RefundExportResult> {
     if (input.purpose.trim().length === 0 || input.purpose.length > 500) throw new Error('purpose must be 1-500 characters.');

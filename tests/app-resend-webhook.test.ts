@@ -14,7 +14,6 @@ function appWith(recordDeliveryEvent: CommunicationService['recordDeliveryEvent'
     services: {
       ...base.services,
       communications: {
-        queueClaimConfirmation: () => Promise.resolve('case-1'),
         recordDeliveryEvent,
       },
     },

@@ -35,7 +35,10 @@ const publicPaths = [
   '/v1/recall-campaigns/{slug}/claim-drafts',
   '/v1/claim-drafts/{draftId}/upload-tokens',
   '/v1/claim-drafts/{draftId}/documents/{documentId}',
+  '/v1/claim-drafts/{draftId}/documents',
   '/v1/recall-campaigns/{slug}/claims',
+  '/v1/case-status-lookups',
+  '/v1/consumer-auth/lookup/{claimNumber}',
 ];
 
 describe('documentation cross-check', () => {
@@ -53,10 +56,10 @@ describe('documentation cross-check', () => {
     expect(apiDoc).toContain('不代表 Resend 已发送或送达');
     expect(architecture).toContain('Neon Serverless Pool');
     expect(architecture).toContain('Resend 投递与 Webhook');
-    expect(architecture).toContain('Admin API 和 Vercel 部署仍未实现');
-    expect(architecture).toContain('Phase 1 只定义一种授权后台用户');
-    expect(architecture).toContain('允许查看/导出完整数据');
-    expect(architecture).toContain('不实现多级权限或字段脱敏');
+    expect(architecture).toContain('Recall Case 是提交成功即创建的正式记录');
+    expect(architecture).toContain('没有独立的 Claim 审核队列');
+    expect(architecture).toContain('GET /admin/cases/{caseRef}');
+    expect(architecture).toContain('固定角色 RBAC 和两级 PII');
     expect(frontendDoc).toContain('重试必须复用原 Key 和完全相同的请求体');
     expect(frontendDoc).toContain('不要在前端持有 `FIELD_ENCRYPTION_KEY` 或 `HASH_PEPPER`');
     expect(frontendDoc).toContain('这两项只属于后端运行环境');
@@ -79,7 +82,7 @@ describe('documentation cross-check', () => {
     for (const path of publicPaths) expect(api).toContain(path);
   });
 
-  it('all documents distinguish the 501 skeleton from live providers', async () => {
+  it('documents configuration-dependent capabilities and transactional persistence', async () => {
     const documents = await Promise.all([
       readFile('docs/phase-1/01-server-architecture.md', 'utf8'),
       readFile('docs/phase-1/02-database-design.md', 'utf8'),

@@ -10,6 +10,7 @@ const campaign: CampaignView = {
   slug: 'music-lollipop-demo-2026',
   code: 'ML-DEMO-2026',
   version: 1,
+  publishedAt: null,
   locale: 'en-US',
   defaultLocale: 'en-US',
   privacyNotice: { version: '2026-01', url: 'https://privacy.example.invalid/2026-01' },
@@ -27,6 +28,7 @@ const campaign: CampaignView = {
     {
       productId: '5e41d8b9-03c4-46d4-9b87-80c40cdfbde5',
       sku: 'MUSIC-LOLLIPOP-DEMO-18G',
+      upcs: [],
       brand: 'Candy Master',
       name: 'Music Lollipop',
       flavors: ['Peach'],

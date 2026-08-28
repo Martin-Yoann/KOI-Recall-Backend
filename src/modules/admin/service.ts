@@ -50,6 +50,100 @@ export interface CaseDetailConsumer {
   address?: Record<string, unknown> | undefined;
 }
 
+/** The recall campaign a case was submitted against (review context). */
+export interface AdminCaseCampaign {
+  slug: string;
+  code: string;
+  title?: string | undefined;
+}
+
+/**
+ * A product the consumer claimed, with the identifiers the reviewer needs to
+ * re-run the lot/date match. Non-PII by design (order numbers stay encrypted).
+ */
+export interface AdminCaseProduct {
+  id: string;
+  quantity: number;
+  shape: string;
+  flavor: string;
+  lotCode: string;
+  dateCode: string;
+  purchaseChannel: string;
+  purchaseDate?: string | null;
+  checkResult: string;
+  identificationMode?: string | null;
+  reasonCodes?: string[] | null;
+}
+
+/** Evidence file metadata for a case. Never includes storage pathnames. */
+export interface AdminCaseDocument {
+  id: string;
+  category: string;
+  categorySlot?: number | null;
+  originalFileName: string;
+  declaredMimeType: string;
+  sizeBytes: number;
+  uploadStatus: string;
+  scanStatus: string;
+  uploadedAt?: string | null;
+}
+
+/** The safety incident reported with a case, plus its reportability gate. */
+export interface AdminCaseIncident {
+  id: string;
+  answer: string;
+  eventTypes: string[];
+  injurySeverity?: string | null;
+  medicalTreatment?: string | null;
+  usedAsIntended?: string | null;
+  occurredAt?: string | null;
+  occurredDateUnknown: boolean;
+  companyObtainedAt: string;
+  reportability: {
+    id: string;
+    status: string;
+    cpscReference?: string | null;
+    filedAt?: string | null;
+  } | null;
+  /**
+   * Decrypted narrative — returned ONLY for the raw PII tier (the same read
+   * that writes the `pii.view_raw` audit event). Masked viewers never see it.
+   */
+  narrative?: string | undefined;
+}
+
+/** Incident operations row: one incident joined to its case and review gate. */
+export interface AdminIncidentSummary {
+  id: string;
+  caseReference: string;
+  caseStatus: string;
+  answer: string;
+  eventTypes: string[];
+  injurySeverity?: string | null;
+  medicalTreatment?: string | null;
+  occurredAt?: string | null;
+  createdAt: string;
+  reportability: {
+    id: string;
+    status: string;
+    cpscReference?: string | null;
+    filedAt?: string | null;
+    decisionAt?: string | null;
+  } | null;
+}
+
+/** Campaign overview row for the intake surface (read-only). */
+export interface AdminCampaignSummary {
+  id: string;
+  slug: string;
+  code: string;
+  status: string;
+  launchAt?: string | null;
+  closeAt?: string | null;
+  title?: string | undefined;
+  caseCount: number;
+}
+
 /** Full case detail (ADR-0004 B8), with PII tier decided by the viewer's role. */
 export interface AdminCaseDetail {
   caseReference: string;
@@ -59,6 +153,10 @@ export interface AdminCaseDetail {
   submittedAt: string;
   assignedToStaffUserId: string | null;
   assignedAt: string | null;
+  campaign?: AdminCaseCampaign;
+  products?: AdminCaseProduct[];
+  documents?: AdminCaseDocument[];
+  incident?: AdminCaseIncident | null;
   consumer: CaseDetailConsumer;
   resolution?: CaseResolution | null;
   workflow?: WorkflowSnapshot;
@@ -87,6 +185,15 @@ export interface GetCaseDetailInput {
 export interface AdminService {
   listCases(filter: ListCasesFilter): Promise<AdminCaseSummary[]>;
 
+  /**
+   * Incident operations list: every incident joined to its case reference and
+   * reportability gate. Feeds the incidents & safety surface (case.queue.read).
+   */
+  listIncidents(): Promise<AdminIncidentSummary[]>;
+
+  /** Read-only campaign overview with case counts (case.queue.read). */
+  listCampaigns(): Promise<AdminCampaignSummary[]>;
+
   /** Full case export for archive/reporting (T8/O10: complete export). */
   exportCases(): Promise<AdminCaseSummary[]>;
 
@@ -109,11 +216,14 @@ export interface AdminService {
   /**
    * ADR-0004 B8: transition a case status. Throws ClaimValidationError on an
    * illegal transition; ResourceNotFoundError if the case does not exist.
+   * `note` is persisted on the transition event; transitioning to `need_info`
+   * requires it (the consumer must be told what to provide).
    */
   transitionCaseStatus(
     caseReference: string,
     nextStatus: string,
     actorUserId: string,
+    note?: string,
   ): Promise<void>;
 
   approveResolution?(caseReference: string, input: Omit<ApproveResolutionInput, 'caseId'>): Promise<CaseResolution>;

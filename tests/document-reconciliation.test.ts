@@ -31,6 +31,8 @@ class FakeReconciliationDatabase {
 
   failNextDocumentUpdate = false;
   failNextFailureStatusUpdate = false;
+  /** Every upload_status value written to the document row, in write order. */
+  readonly uploadStatusWrites: string[] = [];
 
   insert(table: unknown) {
     if (table !== webhookEvents) throw new Error('Unexpected insert table');
@@ -104,6 +106,7 @@ class FakeReconciliationDatabase {
               }
               if (typeof values.uploadStatus === 'string') {
                 this.document.uploadStatus = values.uploadStatus;
+                this.uploadStatusWrites.push(values.uploadStatus);
               }
               if (typeof values.storagePathname === 'string') {
                 this.document.storagePathname = values.storagePathname;
@@ -223,6 +226,29 @@ describe('DrizzleDocumentService upload reconciliation', () => {
       storagePathname: 'drafts/draft/document/product-random.jpg',
     });
     expect(fake.webhook.status).toBe('processed');
+  });
+
+  it('writes an observable uploaded row state before the verification verdict', async () => {
+    // Phase 1 flips authorized → uploaded (public `verifying`), phase 2 issues
+    // the verdict — both before the webhook event is acknowledged.
+    const fake = new FakeReconciliationDatabase();
+
+    await serviceWith(fake, true).reconcileCompletedUpload(completion, event);
+
+    expect(fake.uploadStatusWrites).toEqual(['uploaded', 'verified']);
+    expect(fake.document.scanStatus).toBe('pending');
+  });
+
+  it('rejects on detected/declared media-type divergence after the intermediate state', async () => {
+    const fake = new FakeReconciliationDatabase();
+    const mismatched = { ...completion, detectedMimeType: 'application/octet-stream' };
+
+    await serviceWith(fake).reconcileCompletedUpload(mismatched, event);
+
+    expect(fake.uploadStatusWrites).toEqual(['uploaded', 'rejected']);
+    expect(fake.document.uploadStatus).toBe('rejected');
+    // A media-type rejection never claims a scan ran.
+    expect(fake.document.scanStatus).toBe('not_run');
   });
 });
 

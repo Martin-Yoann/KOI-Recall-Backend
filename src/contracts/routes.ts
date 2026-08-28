@@ -16,6 +16,12 @@ import {
   uploadTokenResponseSchema,
 } from './documents.js';
 import {
+  caseStatusLookupRequestSchema,
+  caseStatusLookupResponseSchema,
+} from './case-status-lookups.js';
+import { legacyConsumerClaimLookupResponseSchema } from './consumer-auth.js';
+import { draftDocumentListResponseSchema } from './documents.js';
+import {
   claimSubmissionRequestSchema,
   claimSubmissionResponseSchema,
   idempotencyHeaderSchema,
@@ -130,6 +136,31 @@ export const deleteDraftDocumentRoute = createRoute({
   },
 });
 
+export const listDraftDocumentsRoute = createRoute({
+  method: 'get',
+  path: '/v1/claim-drafts/{draftId}/documents',
+  tags: ['Documents'],
+  summary: 'List draft documents with their upload lifecycle status',
+  description:
+    'Powers the six-state upload UI: uploading, verifying, verified, scan_pending, rejected, expired. ' +
+    'Deleted documents no longer appear; the same X-Draft-Token authentication as every other Draft sub-resource applies.',
+  request: {
+    params: z.object({ draftId: uuid }),
+    headers: draftTokenHeaderSchema,
+  },
+  responses: {
+    200: {
+      description: 'Current draft documents in stable order.',
+      content: { 'application/json': { schema: draftDocumentListResponseSchema } },
+    },
+    410: {
+      description: 'Draft expired or already submitted.',
+      content: { 'application/problem+json': { schema: problemDetailsSchema } },
+    },
+    ...commonProblemResponses,
+  },
+});
+
 export const submitClaimRoute = createRoute({
   method: 'post',
   path: '/v1/recall-campaigns/{slug}/claims',
@@ -159,6 +190,55 @@ export const submitClaimRoute = createRoute({
     422: {
       description: 'Campaign, product, evidence, or conditional fields are invalid.',
       content: { 'application/problem+json': { schema: problemDetailsSchema } },
+    },
+    ...commonProblemResponses,
+  },
+});
+
+export const createCaseStatusLookupRoute = createRoute({
+  method: 'post',
+  path: '/v1/case-status-lookups',
+  tags: ['Case status'],
+  summary: 'Look up the public status of a case by case reference and email',
+  description:
+    'Public, PII-free status lookup for the consumer-front `/lookup` page. The (caseReference, email) ' +
+    'pair is verified with a peppered HMAC; unknown references and mismatched emails return an identical ' +
+    '404 ProblemDetails so references cannot be enumerated. Rate limited per client IP at 10 requests/minute; ' +
+    'exceeding it returns 429 ProblemDetails with a Request ID.',
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: caseStatusLookupRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description:
+        'Whitelisted public view. No PII, internal statuses, or refund data may appear — the schema is exhaustive.',
+      content: { 'application/json': { schema: caseStatusLookupResponseSchema } },
+    },
+    ...commonProblemResponses,
+  },
+});
+
+/** Superseded legacy endpoint — kept for one transition window, formally deprecated. */
+export const legacyConsumerAuthLookupRoute = createRoute({
+  method: 'get',
+  path: '/v1/consumer-auth/lookup/{claimNumber}',
+  deprecated: true,
+  tags: ['Case status'],
+  summary: '[Deprecated] Legacy claim lookup returning the full claim object',
+  description:
+    'Returns a PII-bearing claim summary and is scheduled for removal after the transition window. ' +
+    'New integrations must use POST /v1/case-status-lookups instead.',
+  request: {
+    params: z.object({ claimNumber: z.string().min(3).max(32) }),
+    query: z.object({ phone: z.string().min(1).openapi({ example: '+15551234567' }) }),
+  },
+  responses: {
+    200: {
+      description: 'Full legacy claim object (contains consumer PII).',
+      content: { 'application/json': { schema: legacyConsumerClaimLookupResponseSchema } },
     },
     ...commonProblemResponses,
   },

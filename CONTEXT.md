@@ -38,6 +38,10 @@ _Avoid_: eligibility check, product lookup.
 
 ## Claim lifecycle
 
+**Claim**:
+The consumer-facing name for a recall application, covering its draft and the recall case created on submission. It is not a separate operations record or a review stage before a case exists.
+_Avoid_: separate claim approval, claim-to-case conversion after review.
+
 **Claim draft** (claim_draft):
 An expiring, anonymous workspace a consumer creates before submitting. Authorised by a one-time **draft token** (stored as `tokenHash`); has `active` / `submitted` / `expired` / `abandoned` status and an expiry. Holds the documents that become the eventual case's evidence.
 _Avoid_: session, cart, claim-in-progress.
@@ -55,7 +59,7 @@ One evidence file attached to a draft or case. Tracks its own lifecycle (`author
 _Avoid_: attachment, file, evidence item.
 
 **Recall case** (recall_case):
-The submitted, durable record of a consumer's claim. Identified to the consumer by a `publicReference` (`KOI-XXXX-XXXXXXXX`); has a triage lifecycle (`submitted` → `triage` → `under_review` → `need_info` → `approved`/`rejected`/`duplicate`/`withdrawn` → `closure_review` → `closed`). Created from a draft at submission.
+The submitted, durable record of a consumer's claim, created from a draft at submission without waiting for approval. Identified to the consumer by a `publicReference` (`KOI-XXXX-XXXXXXXX`), the same case carries the original application and its subsequent handling through the triage lifecycle (`submitted` → `triage` → `under_review` → `need_info` → `approved`/`rejected`/`duplicate`/`withdrawn` → `closure_review` → `closed`).
 _Avoid_: ticket, claim (a draft + its case together are "the claim" to a consumer — in code keep them distinct), report.
 
 **Public reference**:
