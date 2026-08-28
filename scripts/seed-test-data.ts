@@ -11,7 +11,7 @@
 //   pnpm tsx scripts/seed-test-data.ts
 //
 // This creates:
-//   - 3 staff users (admin / reviewer / viewer) with scrypt passwords
+//   - 2 staff users (ADMIN / MANAGER) with scrypt passwords
 //   - 3 campaigns in different statuses (active / paused / scheduled)
 //   - ~15 active claim drafts
 //   - ~18 recall cases across all statuses
@@ -123,7 +123,7 @@ async function main() {
   console.log('    ✓ Cleaned\n');
 
   // ================================================================
-  // 1. STAFF USERS — 3 roles for RBAC testing
+  // 1. STAFF USERS — ADMIN and MANAGER for RBAC testing
   // ================================================================
   console.log('  [1/7] Staff users...');
 
@@ -131,39 +131,28 @@ async function main() {
   // Dev-only synthetic credentials — override via env in any shared environment.
   // When unset, a fresh random password is generated per run and printed below.
   const adminPassword = process.env.SEED_ADMIN_PASSWORD ?? randomUUID().replace(/-/g, '');
-  const reviewerPassword = process.env.SEED_REVIEWER_PASSWORD ?? randomUUID().replace(/-/g, '');
-  const viewerPassword = process.env.SEED_VIEWER_PASSWORD ?? randomUUID().replace(/-/g, '');
+  const managerPassword = process.env.SEED_MANAGER_PASSWORD ?? randomUUID().replace(/-/g, '');
   const pw1 = await hashPassword(adminPassword);
-  const pw2 = await hashPassword(reviewerPassword);
-  const pw3 = await hashPassword(viewerPassword);
+  const pw2 = await hashPassword(managerPassword);
 
   const staffInserted = await db.insert(staffUsers).values([
     {
       email: 'admin@koi-platform.com',
       emailLookupHash: await crypto.lookupHash('admin@koi-platform.com'),
       displayName: 'Lin Wei (Admin)',
-      role: 'administrator',
+      role: 'ADMIN',
       status: 'active',
       passwordHash: pw1,
       lastLoginAt: new Date(now - 1 * DAY),
     },
     {
-      email: 'reviewer@koi-platform.com',
-      emailLookupHash: await crypto.lookupHash('reviewer@koi-platform.com'),
-      displayName: 'Chen Mei (Reviewer)',
-      role: 'reviewer',
+      email: 'manager@koi-platform.com',
+      emailLookupHash: await crypto.lookupHash('manager@koi-platform.com'),
+      displayName: 'Chen Mei (Manager)',
+      role: 'MANAGER',
       status: 'active',
       passwordHash: pw2,
       lastLoginAt: new Date(now - 2 * DAY),
-    },
-    {
-      email: 'viewer@koi-platform.com',
-      emailLookupHash: await crypto.lookupHash('viewer@koi-platform.com'),
-      displayName: 'Wang Lei (Viewer)',
-      role: 'viewer',
-      status: 'active',
-      passwordHash: pw3,
-      lastLoginAt: new Date(now - 5 * DAY),
     },
   ]).returning({ id: staffUsers.id, email: staffUsers.email }).onConflictDoNothing();
 
@@ -498,7 +487,7 @@ async function main() {
       status,
       incidentFlag: i % 5 === 0,
       submittedAt,
-      assignedToStaffUserId: i % 3 === 0 ? (staffIds['reviewer@koi-platform.com'] ?? null) : null,
+      assignedToStaffUserId: i % 3 === 0 ? (staffIds['manager@koi-platform.com'] ?? null) : null,
       assignedAt: i % 3 === 0 ? new Date(submittedAt.getTime() + 1 * DAY) : null,
     }).onConflictDoNothing();
 
@@ -561,7 +550,7 @@ async function main() {
       status,
       consumer,
       submittedAt,
-      ...(i % 3 === 0 ? { assignedTo: 'reviewer@koi-platform.com' } : {}),
+      ...(i % 3 === 0 ? { assignedTo: 'manager@koi-platform.com' } : {}),
     });
   }
 
@@ -642,7 +631,7 @@ async function main() {
         caseId: c.id,
         eventType: e === 0 ? 'case.created' : eventTypes[(etIdx + e) % eventTypes.length]!,
         actorType: e % 3 === 0 ? 'consumer' : 'staff',
-        actorId: e % 3 === 0 ? null : (staffIds['reviewer@koi-platform.com'] ?? null),
+        actorId: e % 3 === 0 ? null : (staffIds['manager@koi-platform.com'] ?? null),
         data: { status: c.status, automated: e === 0 } as Record<string, unknown>,
         occurredAt: new Date(c.submittedAt.getTime() + e * 8 * 3600000),
       }).onConflictDoNothing();
@@ -723,10 +712,10 @@ async function main() {
   for (let i = 0; i < 45; i++) {
     const c = caseRecords[i % caseRecords.length]!;
     const aa = auditActions[i % auditActions.length]!;
-    const actorEmail = i % 3 === 0 ? 'admin@koi-platform.com' : 'reviewer@koi-platform.com';
+    const actorEmail = i % 3 === 0 ? 'admin@koi-platform.com' : 'manager@koi-platform.com';
     await db.insert(adminAuditEvents).values({
       actorUserId: staffIds[actorEmail] ?? null,
-      actorRole: actorEmail.includes('admin') ? 'administrator' : 'reviewer',
+      actorRole: actorEmail.includes('admin') ? 'ADMIN' : 'MANAGER',
       action: aa.action,
       resourceType: aa.resourceType,
       resourceId: aa.resourceType === 'case' ? c.caseRef : randomUUID().slice(0, 12),
@@ -772,9 +761,8 @@ async function main() {
   console.log(`  ║  Audit events:       ${String(auditCount).padStart(3)}                ║`);
   console.log('  ╚══════════════════════════════════════════╝');
   console.log('\n  Staff logins:');
-  console.log(`    admin@koi-platform.com     / ${adminPassword}        (administrator)`);
-  console.log(`    reviewer@koi-platform.com  / ${reviewerPassword}        (reviewer)`);
-  console.log(`    viewer@koi-platform.com    / ${viewerPassword}        (viewer)`);
+  console.log(`    admin@koi-platform.com     / ${adminPassword}        (ADMIN)`);
+  console.log(`    manager@koi-platform.com   / ${managerPassword}        (MANAGER)`);
   console.log('\n  Campaigns:');
   for (const c of allCampaigns) {
     console.log(`    ${c.code}  [${c.status}]  /v1/recall-campaigns/${c.slug}`);

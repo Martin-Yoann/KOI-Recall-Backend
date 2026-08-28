@@ -1,5 +1,6 @@
 import { NotImplementedServiceError } from '../../shared/errors.js';
 import type {
+  BlobAccessUrl,
   PrivateBlobPort,
   UploadAuthorization,
   UploadAuthorizationRequest,
@@ -19,5 +20,9 @@ export class NotImplementedPrivateBlobAdapter implements PrivateBlobPort {
 
   delete(_pathname: string): Promise<void> {
     return Promise.reject(new NotImplementedServiceError('Private Blob deletion'));
+  }
+
+  createAccessUrl(_pathname: string): Promise<BlobAccessUrl> {
+    return Promise.reject(new NotImplementedServiceError('Private Blob access URLs'));
   }
 }

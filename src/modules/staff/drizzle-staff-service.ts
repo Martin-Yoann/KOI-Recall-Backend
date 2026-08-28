@@ -1,9 +1,9 @@
-import { and, desc, eq, gt } from 'drizzle-orm';
+import { and, desc, eq, gt, ne } from 'drizzle-orm';
 
 import type { DatabaseExecutor } from '../../db/client.js';
-import { staffSessions, staffUsers } from '../../db/schema/index.js';
+import { refundExportBatches, staffSessions, staffUsers } from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
-import { ClaimConflictError, ResourceNotFoundError } from '../../shared/errors.js';
+import { ClaimConflictError, ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
 import { hashPassword, verifyPassword } from './password.js';
 import {
   DEFAULT_SESSION_LIFETIME_MS,
@@ -159,6 +159,50 @@ export class DrizzleStaffService implements StaffService {
       .where(and(eq(staffSessions.userId, userId), eq(staffSessions.status, 'active')));
   }
 
+  async changePassword(input: {
+    userId: string;
+    currentPassword: string;
+    newPassword: string;
+    keepSessionId?: string;
+  }): Promise<void> {
+    const [user] = await this.db
+      .select()
+      .from(staffUsers)
+      .where(eq(staffUsers.id, input.userId))
+      .limit(1);
+    if (!user || !user.passwordHash) {
+      throw new ResourceNotFoundError('Staff user was not found.');
+    }
+
+    const ok = await verifyPassword(input.currentPassword, user.passwordHash);
+    if (!ok) {
+      throw new ClaimValidationError('The current password is incorrect.');
+    }
+
+    // hashPassword enforces the same staff policy as creation (min 12 chars);
+    // it throws a descriptive error we surface as a 422.
+    let passwordHash: string;
+    try {
+      passwordHash = await hashPassword(input.newPassword);
+    } catch (err) {
+      throw new ClaimValidationError(err instanceof Error ? err.message : 'New password is invalid.');
+    }
+
+    await this.db
+      .update(staffUsers)
+      .set({ passwordHash, failedLoginAttempts: 0, lockedUntil: null })
+      .where(eq(staffUsers.id, user.id));
+
+    // Revoke every other active session so the new password is required
+    // elsewhere, but keep the caller's own session alive.
+    const sessionConditions = [eq(staffSessions.userId, user.id), eq(staffSessions.status, 'active')];
+    if (input.keepSessionId) sessionConditions.push(ne(staffSessions.id, input.keepSessionId));
+    await this.db
+      .update(staffSessions)
+      .set({ status: 'revoked', revokedAt: new Date() })
+      .where(and(...sessionConditions));
+  }
+
   async refreshSession(sessionId: string): Promise<SessionIssueResult | null> {
     const [existing] = await this.db
       .select()
@@ -209,6 +253,47 @@ export class DrizzleStaffService implements StaffService {
     const row = inserted[0];
     if (!row) throw new Error('Staff user insert returned no row.');
     return toStaffUser(row);
+  }
+
+  /**
+   * Permanently removes an account only when doing so cannot remove the last
+   * ADMIN or violate immutable refund-export ownership history.
+   */
+  async deleteStaffUser(userId: string, actorUserId: string): Promise<void> {
+    if (userId === actorUserId) {
+      throw new ClaimConflictError('You cannot delete your own staff account.');
+    }
+
+    const [target] = await this.db
+      .select({ id: staffUsers.id, role: staffUsers.role })
+      .from(staffUsers)
+      .where(eq(staffUsers.id, userId))
+      .limit(1);
+    if (!target) throw new ResourceNotFoundError('Staff user was not found.');
+
+    if (target.role === 'ADMIN') {
+      const admins = await this.db
+        .select({ id: staffUsers.id })
+        .from(staffUsers)
+        .where(eq(staffUsers.role, 'ADMIN'));
+      if (admins.length <= 1) {
+        throw new ClaimConflictError('The last ADMIN account cannot be deleted.');
+      }
+    }
+
+    const [exportHistory] = await this.db
+      .select({ id: refundExportBatches.id })
+      .from(refundExportBatches)
+      .where(eq(refundExportBatches.requestedByStaffUserId, userId))
+      .limit(1);
+    if (exportHistory) {
+      throw new ClaimConflictError(
+        'This staff account owns refund export history and cannot be deleted. Disable it instead.',
+      );
+    }
+
+    await this.revokeAllSessions(userId);
+    await this.db.delete(staffUsers).where(eq(staffUsers.id, userId));
   }
 
   async updateStaffUser(userId: string, input: UpdateStaffUserInput): Promise<StaffUser> {

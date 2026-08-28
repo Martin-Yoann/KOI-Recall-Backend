@@ -89,5 +89,21 @@ export interface StaffService {
   listStaff(): Promise<StaffUser[]>;
   createStaffUser(input: CreateStaffUserInput): Promise<StaffUser>;
   updateStaffUser(userId: string, input: UpdateStaffUserInput): Promise<StaffUser>;
+  /**
+   * Self-service password change for the authenticated staff user. Verifies the
+   * current password, sets a new one (min 12 chars), resets lock counters, and
+   * revokes every session except the one passed as `keepSessionId`. Throws
+   * ResourceNotFoundError if the user is missing, or ClaimValidationError when
+   * the current password is wrong or the new password is too weak.
+   */
+  changePassword(input: {
+    userId: string;
+    currentPassword: string;
+    newPassword: string;
+    keepSessionId?: string;
+  }): Promise<void>;
+
+  /** Permanently removes a staff account after enforcing ADMIN safety rules. */
+  deleteStaffUser(userId: string, actorUserId: string): Promise<void>;
   getStaffUserByEmail(email: string): Promise<StaffUser | null>;
 }

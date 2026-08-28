@@ -70,9 +70,14 @@ export interface AdminCaseProduct {
   dateCode: string;
   purchaseChannel: string;
   purchaseDate?: string | null;
+  /** Order number per the viewer's PII tier (masked keeps the last 4 chars). */
+  orderNumber?: string | null;
   checkResult: string;
   identificationMode?: string | null;
   reasonCodes?: string[] | null;
+  /** Purchase corroboration outcome, when purchase evidence was submitted. */
+  purchaseCorroboration?: string | null;
+  riskFlags?: string[] | null;
 }
 
 /** Evidence file metadata for a case. Never includes storage pathnames. */
@@ -86,6 +91,15 @@ export interface AdminCaseDocument {
   uploadStatus: string;
   scanStatus: string;
   uploadedAt?: string | null;
+}
+
+/** Short-lived blob access for one evidence file (image preview / download). */
+export interface AdminDocumentAccess {
+  documentId: string;
+  fileName: string;
+  contentType: string;
+  url: string;
+  downloadUrl: string;
 }
 
 /** The safety incident reported with a case, plus its reportability gate. */
@@ -224,7 +238,15 @@ export interface AdminService {
     nextStatus: string,
     actorUserId: string,
     note?: string,
+    /** ADMIN may bypass workflow transition preconditions. */
+    bypassWorkflow?: boolean,
   ): Promise<void>;
+
+  /**
+   * Mints short-lived access URLs for one evidence file of a case, verifying
+   * the document belongs to the case. Returns null when either is not found.
+   */
+  getDocumentAccess?(caseReference: string, documentId: string): Promise<AdminDocumentAccess | null>;
 
   approveResolution?(caseReference: string, input: Omit<ApproveResolutionInput, 'caseId'>): Promise<CaseResolution>;
   completeResolution?(caseReference: string, input: Omit<CompleteResolutionInput, 'caseId'>): Promise<CaseResolution>;

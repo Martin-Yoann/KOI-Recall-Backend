@@ -308,9 +308,7 @@ async function buildConsumerClaim(caseId: string): Promise<ConsumerClaimSummary 
         typeof (eventRow.data as Record<string, unknown> | null)?.note === 'string',
     );
   const infoRequest =
-    infoRequestEvent !== undefined
-      ? ((infoRequestEvent.data as Record<string, unknown>).note as string)
-      : undefined;
+    infoRequestEvent !== undefined ? (infoRequestEvent.data.note as string) : undefined;
 
   const remedyType =
     joined.resolutionApprovedType ?? joined.resolutionRequestedType ?? 'replacement';

@@ -1,4 +1,4 @@
-﻿import type { OpenAPIHono } from '@hono/zod-openapi';
+import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 
 import type { AdminTransactionRunner, ApplicationRegistry } from '../composition.js';
@@ -133,6 +133,18 @@ const asString = (value: unknown): string | undefined =>
   typeof value === 'string' ? value : undefined;
 
 const STAFF_USER_STATUSES = ['active', 'disabled'] as const;
+const CASE_STATUSES = [
+  'submitted',
+  'triage',
+  'under_review',
+  'need_info',
+  'approved',
+  'rejected',
+  'duplicate',
+  'withdrawn',
+  'closure_review',
+  'closed',
+] as const;
 
 function isStaffRole(value: string | undefined): value is StaffRole {
   return value !== undefined && STAFF_ROLES.includes(value as StaffRole);
@@ -193,7 +205,7 @@ export function registerAdminRoutes(
         staffUserId: profile?.id ?? null,
         displayName: profile?.displayName ?? email,
         avatarDataUrl: profile?.avatarDataUrl ?? null,
-        role: profile?.role ?? 'viewer',
+        role: profile?.role ?? 'MANAGER',
       },
       201,
     );
@@ -255,6 +267,39 @@ export function registerAdminRoutes(
     );
   });
 
+  // ---- Self-service password change (valid session, staff.change_password audit) ----
+
+  app.post('/admin/profile/password', async (context) => {
+    const principal = context.get('principal');
+    if (!principal) return unauthorized(context);
+    if (context.get('legacyAdminKey')) {
+      return unauthorized(context);
+    }
+    const body = await bodyRecord(context);
+    const currentPassword = asString(body.currentPassword) ?? '';
+    const newPassword = asString(body.newPassword) ?? '';
+    if (!currentPassword || !newPassword) {
+      return validationError(context, 'currentPassword and newPassword are required.');
+    }
+    await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      await staff.changePassword({
+        userId: principal.userId,
+        currentPassword,
+        newPassword,
+        keepSessionId: principal.sessionId,
+      });
+      await audit.record({
+        actorUserId: principal.userId,
+        actorRole: principal.role,
+        action: 'staff.change_password',
+        resourceType: 'staff',
+        resourceId: principal.userId,
+        outcome: 'success',
+      });
+    });
+    return context.body(null, 204);
+  });
+
   app.delete('/admin/sessions', async (context) => {
     const principal = context.get('principal');
     if (!principal) return unauthorized(context);
@@ -295,16 +340,27 @@ export function registerAdminRoutes(
       return session;
     });
     if (!refreshed) return unauthorized(context);
+    // The middleware already resolved the current active staff principal. Do
+    // not perform another DB lookup after rotating the token: if that lookup
+    // failed, the client would retain the old (now invalid) token despite a
+    // successful rotation.
     return context.json(
-      { token: refreshed.token, sessionId: refreshed.sessionId, expiresAt: refreshed.expiresAt },
+      {
+        token: refreshed.token,
+        sessionId: refreshed.sessionId,
+        expiresAt: refreshed.expiresAt,
+        staffUserId: principal.userId,
+        displayName: principal.displayName,
+        role: principal.role,
+      },
       200,
     );
   });
 
-  // ---- Staff management (staff.manage) ----
+  // ---- Staff management (staff.read for listing; staff.manage for mutations) ----
 
   app.get('/admin/staff', async (context) => {
-    const guard = await requirePermission(context, registry, 'staff.manage');
+    const guard = await requirePermission(context, registry, 'staff.read');
     if (guard instanceof Response) return guard;
     const staff = registry.services.staff;
     if (!staff) return json(context, 501, { title: 'Staff service not configured.', status: 501 });
@@ -377,6 +433,24 @@ export function registerAdminRoutes(
       return user;
     });
     return context.json({ staff: updated }, 200);
+  });
+
+  app.delete('/admin/staff/:id', async (context) => {
+    const guard = await requirePermission(context, registry, 'staff.manage');
+    if (guard instanceof Response) return guard;
+    const staffUserId = context.req.param('id');
+    await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      await staff.deleteStaffUser(staffUserId, guard.userId);
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'staff.delete',
+        resourceType: 'user',
+        resourceId: staffUserId,
+        outcome: 'success',
+      });
+    });
+    return context.body(null, 204);
   });
 
   app.delete('/admin/sessions/by-user/:id', async (context) => {
@@ -517,6 +591,41 @@ export function registerAdminRoutes(
     return context.json({ case: detail }, 200);
   });
 
+  // ---- Evidence file access (image preview / download, audited) ----
+
+  app.get('/admin/cases/:caseRef/documents/:documentId/url', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.detail.read');
+    if (guard instanceof Response) return guard;
+    const caseRef = context.req.param('caseRef');
+    const documentId = context.req.param('documentId');
+    // document ids are uuids; a malformed id must not hit the DB driver.
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(documentId)) {
+      return validationError(context, 'documentId must be a UUID.');
+    }
+    const admin = registry.services.admin;
+    if (!admin?.getDocumentAccess) throw new Error('Admin service is not configured.');
+    const access = await admin.getDocumentAccess(caseRef, documentId);
+    if (!access) {
+      return json(context, 404, {
+        type: problemType('not-found'),
+        title: 'Not Found',
+        status: 404,
+        detail: 'Document was not found on this case.',
+        requestId: context.get('requestId'),
+      });
+    }
+    await requireAuditService(registry).record({
+      actorUserId: guard.userId,
+      actorRole: guard.role,
+      action: 'document.download',
+      resourceType: 'document',
+      resourceId: documentId,
+      outcome: 'success',
+      metadata: { caseReference: caseRef, fileName: access.fileName },
+    });
+    return context.json(access, 200);
+  });
+
   app.post('/admin/cases/:caseRef/assign', async (context) => {
     const guard = await requirePermission(context, registry, 'case.assign');
     if (guard instanceof Response) return guard;
@@ -544,12 +653,12 @@ export function registerAdminRoutes(
     const caseRef = context.req.param('caseRef');
     const body = await bodyRecord(context);
     const nextStatus = asString(body.status);
-    if (!nextStatus) {
+    if (!nextStatus || !CASE_STATUSES.includes(nextStatus as (typeof CASE_STATUSES)[number])) {
       return json(context, 422, {
         type: problemType('validation-error'),
         title: 'Invalid Request',
         status: 422,
-        detail: 'status is required.',
+        detail: 'status must be one of the supported case statuses.',
         requestId: context.get('requestId'),
       });
     }
@@ -557,7 +666,7 @@ export function registerAdminRoutes(
     const trimmedNote = note?.trim();
     // The consumer must be told what to provide: a need_info transition
     // without a note would strand them in "action required" with no guidance.
-    if (nextStatus === 'need_info' && (!trimmedNote || trimmedNote.length < 10)) {
+    if (guard.role !== 'ADMIN' && nextStatus === 'need_info' && (!trimmedNote || trimmedNote.length < 10)) {
       return validationError(
         context,
         'A note of at least 10 characters is required when requesting additional information.',
@@ -567,7 +676,7 @@ export function registerAdminRoutes(
       return validationError(context, 'The transition note must be at most 2000 characters.');
     }
     await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
-      await admin.transitionCaseStatus(caseRef, nextStatus, guard.userId, trimmedNote);
+      await admin.transitionCaseStatus(caseRef, nextStatus, guard.userId, trimmedNote, guard.role === 'ADMIN');
       await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
@@ -575,7 +684,11 @@ export function registerAdminRoutes(
         resourceType: 'case',
         resourceId: caseRef,
         outcome: 'success',
-        metadata: { nextStatus: body.status, ...(trimmedNote ? { note: trimmedNote } : {}) },
+        metadata: {
+          nextStatus: body.status,
+          ...(guard.role === 'ADMIN' ? { forced: true } : {}),
+          ...(trimmedNote ? { note: trimmedNote } : {}),
+        },
       });
     });
     return context.body(null, 204);
@@ -626,7 +739,7 @@ export function registerAdminRoutes(
     const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
     if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion)) return validationError(context, 'note (10-2000 characters) and integer expectedVersion are required.');
     if (!registry.services.admin?.cancelResolution) throw new Error('Resolution service is not configured.');
-    const result = await registry.services.admin.cancelResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, actorIsAdministrator: guard.role === 'administrator' });
+    const result = await registry.services.admin.cancelResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, actorIsAdministrator: guard.role === 'ADMIN' });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });

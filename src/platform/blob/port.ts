@@ -27,6 +27,15 @@ export interface UploadCompletion {
   pathname: string;
 }
 
+/** Short-lived access URLs for an uploaded object (admin evidence review). */
+export interface BlobAccessUrl {
+  /** Inline-view URL (images render in <img>). Signed/temporary on private stores. */
+  url: string;
+  /** URL variant that forces a browser download instead of inline display. */
+  downloadUrl: string;
+  contentType: string;
+}
+
 export interface PrivateBlobPort {
   /**
    * Mints a short-lived client-upload token for a draft document. The token
@@ -45,4 +54,11 @@ export interface PrivateBlobPort {
 
   /** Deletes a Private Blob object by its pathname. */
   delete(pathname: string): Promise<void>;
+
+  /**
+   * Mints short-lived access URLs for an uploaded object so an authorized
+   * admin session can view (inline) or download the evidence file without
+   * ever receiving the storage token itself.
+   */
+  createAccessUrl(pathname: string): Promise<BlobAccessUrl>;
 }

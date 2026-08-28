@@ -12,6 +12,7 @@ import { createDatabase } from '../src/db/client.js';
 import { claimDrafts, documentUploads } from '../src/db/schema/index.js';
 import { DrizzleDraftCleanupWorker } from '../src/jobs/draft-cleanup-worker.js';
 import type {
+  BlobAccessUrl,
   PrivateBlobPort,
   UploadAuthorization,
   UploadCompletion,
@@ -35,6 +36,9 @@ class RecordingBlob implements PrivateBlobPort {
     if (this.fail) return Promise.reject(new Error('blob down'));
     this.deleted.push(pathname);
     return Promise.resolve();
+  }
+  createAccessUrl(): Promise<BlobAccessUrl> {
+    return Promise.reject(new Error('not used in cleanup'));
   }
 }
 

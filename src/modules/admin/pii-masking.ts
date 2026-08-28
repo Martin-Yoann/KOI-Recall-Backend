@@ -70,3 +70,15 @@ export function maskAddress(address: MaskableAddress | null | undefined): Maskab
     countryCode: address.countryCode,
   };
 }
+
+/**
+ * Mask an order number, keep the last 4 characters so a reviewer can
+ * distinguish two orders without reading the full reference.
+ * `AMZ-99182734` → `••••••••2734`.
+ */
+export function maskOrderNumber(orderNumber: string): string {
+  if (!orderNumber) return '•';
+  const trimmed = orderNumber.trim();
+  if (trimmed.length <= 4) return '•'.repeat(trimmed.length);
+  return `${'•'.repeat(Math.min(trimmed.length - 4, 12))}${trimmed.slice(-4)}`;
+}

@@ -106,17 +106,17 @@ Claim 的姓名、联系方式、地址、订单号、事故叙述和提交快�
 
 初版单一后台用户模型已由 [ADR-0004](docs/adr/0004-internal-operations-identity-rbac.md) 的固定角色与两级 PII 模型取代。人工查看和处理应经过授权 Admin API，不要把数据库直连当作人工查看接口。
 
-> B 端运营升级（ADR-0004）：后台已升级为具名运营主体（`staff_users`）+ 会话令牌 + 固定角色
-> RBAC（`viewer` / `reviewer` / `compliance` / `administrator`）+ 两级 PII（默认脱敏，`compliance`/
-> `administrator` 可看明文并写审计）+ 跨表面审计（`admin_audit_events`）。首个 `administrator` 通过
+> B 端运营升级：后台使用具名运营主体（`staff_users`）+ 会话令牌 + 两级固定角色
+> RBAC（`ADMIN` / `MANAGER`）。两种角色都可以管理业务数据；只有 `ADMIN` 可以创建、修改、停用、删除员工账户，
+> 并且状态强制操作会跳过工作流前置校验。密码以哈希保存，审计事件写入 `admin_audit_events`。首个 `ADMIN` 通过
 > `pnpm staff:bootstrap` 创建，之后以 `POST /admin/sessions` 登录获取会话令牌。迁移期（M2）旧的
-> `ADMIN_API_KEY` 仍被接受作为 `administrator` 角色；M3 切换后仅接受会话令牌。
+> `ADMIN_API_KEY` 仍被接受作为 `ADMIN` 角色；M3 切换后仅接受会话令牌。
 
 ## 关键入口
 
 - `src/app.ts`：Hono 应用与中间件注册。
 - `CONTEXT.md`：统一领域词汇表，区分 Claim、Claim Draft 与 Recall Case。
-- `src/routes/admin.ts`：后台 Case 列表、详情、分派、状态流转与补救操作入口；另含事故列表（`GET /admin/incidents`）、活动只读总览（`GET /admin/campaigns`）与审计查询。状态流转支持可选 `note`（流转到 `need_info` 时必填，记录要求消费者补充的内容并透出给 C 端）。
+- `src/routes/admin.ts`：后台 Case 列表、详情、分派、状态流转与补救操作入口；另含事故列表（`GET /admin/incidents`）、活动只读总览（`GET /admin/campaigns`）与审计查询。状态流转支持可选 `note`（MANAGER 流转到 `need_info` 时必填）；ADMIN 可强制跳过工作流前置校验，但仍必须使用合法状态值。
 - `src/contracts/`：按资源拆分的 Zod 运行时校验、TypeScript 类型和 OpenAPI 契约；`toc.ts` 为兼容导出。
 - `src/db/schema/`：按领域拆分的 Drizzle PostgreSQL Schema；`index.ts` 为统一导出。
 - `drizzle/`：生成的首个迁移及元数据。

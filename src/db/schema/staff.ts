@@ -23,12 +23,7 @@ const timestamps = {
  * in `src/modules/staff/permissions.ts`; the enum is deliberately not a
  * free-form string so the matrix stays closed.
  */
-export const staffRoleEnum = pgEnum('staff_role', [
-  'viewer',
-  'reviewer',
-  'compliance',
-  'administrator',
-]);
+export const staffRoleEnum = pgEnum('staff_role', ['ADMIN', 'MANAGER']);
 
 /**
  * Staff account status. `disabled` blocks login and session use but preserves

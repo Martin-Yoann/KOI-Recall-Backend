@@ -1,6 +1,7 @@
 import { generateClientTokenFromReadWriteToken, handleUpload } from '@vercel/blob/client';
 
 import type {
+  BlobAccessUrl,
   PrivateBlobPort,
   UploadAuthorization,
   UploadAuthorizationRequest,
@@ -96,6 +97,25 @@ export class VercelBlobAdapter implements PrivateBlobPort {
   async delete(pathname: string): Promise<void> {
     const { del } = await import('@vercel/blob');
     await del(pathname, this.token ? { token: this.token } : undefined);
+  }
+
+  async createAccessUrl(pathname: string): Promise<BlobAccessUrl> {
+    const { head, issueSignedToken, presignUrl } = await import('@vercel/blob');
+    // `head()` supplies the authoritative content type. On private stores the
+    // URLs it returns are the canonical object URLs — not browser-fetchable —
+    // so mint a short-lived presigned GET URL the admin client can use directly.
+    const [meta, token] = await Promise.all([
+      head(pathname, this.token ? { token: this.token } : undefined),
+      issueSignedToken({
+        pathname,
+        ...(this.token ? { token: this.token } : {}),
+      }),
+    ]);
+    const { presignedUrl } = await presignUrl(
+      { clientSigningToken: token.clientSigningToken, delegationToken: token.delegationToken },
+      { operation: 'get', pathname, access: 'private' },
+    );
+    return { url: presignedUrl, downloadUrl: presignedUrl, contentType: meta.contentType };
   }
 }
 

@@ -169,6 +169,7 @@ export function createApplicationRegistry(
               handle.db,
               crypto,
               new DrizzleCaseResolutionService(handle, crypto),
+              blob,
             ),
             staff: new DrizzleStaffService(handle.db, crypto),
             audit: new DrizzleAuditService(handle.db),
@@ -238,14 +239,18 @@ function validateDatabaseUrl(databaseUrl: string): void {
 
 /**
  * Builds a Private Blob adapter from configuration. Returns the real Vercel
- * adapter when a `BLOB_READ_WRITE_TOKEN` is configured; otherwise the
- * not-implemented stub so the service still constructs (blob operations will
- * surface 501/503 rather than crashing at startup).
+ * adapter when a `BLOB_READ_WRITE_TOKEN` is configured OR when running on
+ * Vercel — on the serverless runtime the Blob SDK authenticates via OIDC
+ * (`VERCEL_OIDC_TOKEN`) without a static token, so the adapter must be wired
+ * even when the legacy token is absent. Locally, where neither is available,
+ * the not-implemented stub keeps blob operations at 501 rather than crashing.
  */
 function createBlobAdapter(config: AppConfig): PrivateBlobPort {
-  if (!config.BLOB_READ_WRITE_TOKEN) return new NotImplementedPrivateBlobAdapter();
+  const onVercel = process.env.VERCEL === '1';
+  if (!config.BLOB_READ_WRITE_TOKEN && !onVercel) return new NotImplementedPrivateBlobAdapter();
   // An empty callback URL signals local dev where Vercel cannot reach the host;
-  // the adapter omits the callback option in that case.
+  // the adapter omits the callback option in that case. On Vercel the token is
+  // undefined and the SDK resolves auth via OIDC automatically.
   return new VercelBlobAdapter(
     config.BLOB_WEBHOOK_CALLBACK_URL ?? '',
     config.BLOB_READ_WRITE_TOKEN,

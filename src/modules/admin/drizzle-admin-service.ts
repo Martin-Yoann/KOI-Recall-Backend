@@ -16,16 +16,18 @@ import {
   recallCases,
   reportabilityReviews,
 } from '../../db/schema/index.js';
+import type { PrivateBlobPort } from '../../platform/blob/port.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import { piiTierFor } from '../staff/permissions.js';
 import type { CaseResolution, ApproveResolutionInput, CompleteResolutionInput, CancelResolutionInput, CaseResolutionService } from '../resolutions/service.js';
 import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
-import { maskAddress, maskEmail, maskName, maskPhone } from './pii-masking.js';
+import { maskAddress, maskEmail, maskName, maskOrderNumber, maskPhone } from './pii-masking.js';
 import type {
   AdminCaseDetail,
   AdminCaseProduct,
   AdminCaseSummary,
   AdminCampaignSummary,
+  AdminDocumentAccess,
   AdminIncidentSummary,
   AdminQueue,
   AdminService,
@@ -53,6 +55,7 @@ export class DrizzleAdminService implements AdminService {
     private readonly db: DatabaseExecutor,
     private readonly crypto: SensitiveDataCryptoPort,
     private readonly resolutions?: CaseResolutionService,
+    private readonly blob?: PrivateBlobPort,
   ) {}
 
   async listCases(filter: ListCasesFilter): Promise<AdminCaseSummary[]> {
@@ -252,7 +255,7 @@ export class DrizzleAdminService implements AdminService {
       assignedToStaffUserId: caseRow.assignedToStaffUserId,
       assignedAt: caseRow.assignedAt ? caseRow.assignedAt.toISOString() : null,
       ...(campaign ? { campaign } : {}),
-      products: await this.productsFor(caseRow.id),
+      products: await this.productsFor(caseRow.id, tier),
       documents: await this.documentsFor(caseRow.id),
       incident,
       consumer,
@@ -285,7 +288,7 @@ export class DrizzleAdminService implements AdminService {
     return { slug: row.slug, code: row.code, ...(row.title ? { title: row.title } : {}) };
   }
 
-  private async productsFor(caseId: string): Promise<AdminCaseProduct[]> {
+  private async productsFor(caseId: string, tier: 'masked' | 'raw'): Promise<AdminCaseProduct[]> {
     const rows = await this.db
       .select({
         id: claimedProducts.id,
@@ -296,26 +299,51 @@ export class DrizzleAdminService implements AdminService {
         dateCode: claimedProducts.dateCode,
         purchaseChannel: claimedProducts.purchaseChannel,
         purchaseDate: claimedProducts.purchaseDate,
+        orderNumberEncrypted: claimedProducts.orderNumberEncrypted,
         checkResult: claimedProducts.checkResult,
         identificationMode: claimedProducts.identificationMode,
         reasonCodes: claimedProducts.reasonCodes,
+        purchaseCorroboration: claimedProducts.purchaseCorroboration,
+        riskFlags: claimedProducts.riskFlags,
       })
       .from(claimedProducts)
       .where(eq(claimedProducts.caseId, caseId))
       .orderBy(asc(claimedProducts.createdAt));
-    return rows.map((row) => ({
-      id: row.id,
-      quantity: row.quantity,
-      shape: row.shape,
-      flavor: row.flavor,
-      lotCode: row.lotCode,
-      dateCode: row.dateCode,
-      purchaseChannel: row.purchaseChannel,
-      purchaseDate: row.purchaseDate ?? null,
-      checkResult: row.checkResult,
-      identificationMode: row.identificationMode ?? null,
-      reasonCodes: row.reasonCodes ?? null,
-    }));
+    return await Promise.all(
+      rows.map(async (row) => {
+        // The order-number column stores only the ciphertext (no key_version
+        // column); the envelope embeds `v1`, so decrypt with the fixed version
+        // and degrade gracefully if the value is malformed/legacy.
+        let orderNumber: string | null | undefined;
+        if (row.orderNumberEncrypted) {
+          try {
+            const plaintext = await this.crypto.decrypt({
+              value: row.orderNumberEncrypted,
+              keyVersion: 'v1',
+            });
+            orderNumber = tier === 'raw' ? plaintext : maskOrderNumber(plaintext);
+          } catch {
+            orderNumber = null;
+          }
+        }
+        return {
+          id: row.id,
+          quantity: row.quantity,
+          shape: row.shape,
+          flavor: row.flavor,
+          lotCode: row.lotCode,
+          dateCode: row.dateCode,
+          purchaseChannel: row.purchaseChannel,
+          purchaseDate: row.purchaseDate ?? null,
+          ...(orderNumber !== undefined ? { orderNumber } : {}),
+          checkResult: row.checkResult,
+          identificationMode: row.identificationMode ?? null,
+          reasonCodes: row.reasonCodes ?? null,
+          purchaseCorroboration: row.purchaseCorroboration ?? null,
+          riskFlags: row.riskFlags ?? null,
+        };
+      }),
+    );
   }
 
   /** Evidence metadata for the case — never storage pathnames, never blobs. */
@@ -493,6 +521,43 @@ export class DrizzleAdminService implements AdminService {
     return this.resolutions.cancel({ ...input, caseId: await this.caseIdForReference(caseReference) });
   }
 
+  async getDocumentAccess(
+    caseReference: string,
+    documentId: string,
+  ): Promise<AdminDocumentAccess | null> {
+    if (!this.blob) throw new Error('Blob service is not configured.');
+    const db = this.db;
+    const [caseRow] = await db
+      .select({ id: recallCases.id })
+      .from(recallCases)
+      .where(eq(recallCases.publicReference, caseReference))
+      .limit(1);
+    if (!caseRow) return null;
+
+    const [doc] = await db
+      .select({
+        id: documentUploads.id,
+        caseId: documentUploads.caseId,
+        storagePathname: documentUploads.storagePathname,
+        originalFileName: documentUploads.originalFileName,
+      })
+      .from(documentUploads)
+      .where(eq(documentUploads.id, documentId))
+      .limit(1);
+    // The document must exist AND belong to this case — never hand out access
+    // to a file the viewer cannot already see in the case detail.
+    if (!doc || doc.caseId !== caseRow.id) return null;
+
+    const access = await this.blob.createAccessUrl(doc.storagePathname);
+    return {
+      documentId: doc.id,
+      fileName: doc.originalFileName,
+      contentType: access.contentType,
+      url: access.url,
+      downloadUrl: access.downloadUrl,
+    };
+  }
+
   private async caseIdForReference(caseReference: string): Promise<string> {
     const [row] = await this.db.select({ id: recallCases.id }).from(recallCases).where(eq(recallCases.publicReference, caseReference)).limit(1);
     if (!row) throw new ResourceNotFoundError('Case was not found.');
@@ -514,6 +579,7 @@ export class DrizzleAdminService implements AdminService {
     nextStatus: string,
     actorUserId: string,
     note?: string,
+    bypassWorkflow = false,
   ): Promise<void> {
     const db = this.db;
     const [caseRow] = await db
@@ -531,7 +597,7 @@ export class DrizzleAdminService implements AdminService {
     // The consumer must be told what to provide: a need_info transition
     // without a note would strand them in "action required" with no guidance.
     const trimmedNote = note?.trim();
-    if (nextStatus === 'need_info' && (!trimmedNote || trimmedNote.length < 10)) {
+    if (!bypassWorkflow && nextStatus === 'need_info' && (!trimmedNote || trimmedNote.length < 10)) {
       throw new ClaimValidationError(
         'A note of at least 10 characters is required when requesting additional information.',
       );
@@ -562,6 +628,26 @@ export class DrizzleAdminService implements AdminService {
       .from(caseResolutions)
       .where(eq(caseResolutions.caseId, caseRow.id))
       .limit(1);
+
+    if (bypassWorkflow) {
+      await db
+        .update(recallCases)
+        .set({ status: nextStatus as never })
+        .where(eq(recallCases.id, caseRow.id));
+      await db.insert(caseEvents).values({
+        caseId: caseRow.id,
+        eventType: 'case.status.transitioned',
+        actorType: 'staff',
+        actorId: actorUserId,
+        data: {
+          previousStatus: caseRow.status,
+          nextStatus,
+          forced: true,
+          ...(trimmedNote ? { note: trimmedNote } : {}),
+        },
+      });
+      return;
+    }
 
     const workflow = evaluate({
       caseStatus: caseRow.status,

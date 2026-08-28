@@ -340,6 +340,14 @@ class FakeBlobAdapter implements PrivateBlobPort {
   delete() {
     return Promise.resolve();
   }
+
+  createAccessUrl() {
+    return Promise.resolve({
+      url: 'https://blob.example.test/file',
+      downloadUrl: 'https://blob.example.test/file?download=1',
+      contentType: 'image/png',
+    });
+  }
 }
 
 describe('DrizzleDocumentService upload quotas', () => {

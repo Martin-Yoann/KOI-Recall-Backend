@@ -12,7 +12,7 @@ import type { StaffService } from '../modules/staff/service.js';
  *
  * M2 dual-mode: when `legacyAdminApiKey` is provided, a request carrying that
  * exact bearer secret is accepted as a legacy principal (marked
- * `legacyAdminKey` on the context) with an `administrator` role. This path is
+ * `legacyAdminKey` on the context) with an `ADMIN` role. This path is
  * removed in M3.
  */
 export function createStaffAuthMiddleware(deps: {
@@ -24,12 +24,12 @@ export function createStaffAuthMiddleware(deps: {
     const authHeader = context.req.header('Authorization') ?? '';
     const bearer = authHeader.replace(/^Bearer\s+/i, '');
 
-    // M2 dual-mode: legacy shared secret, full administrator, no session row.
+    // M2 dual-mode: legacy shared secret, full ADMIN role, no session row.
     if (deps.legacyAdminApiKey && bearer === deps.legacyAdminApiKey) {
       context.set('principal', {
         userId: '00000000-0000-0000-0000-000000000000',
         sessionId: '',
-        role: 'administrator',
+        role: 'ADMIN',
         displayName: 'Legacy Admin Key',
         email: '',
       });

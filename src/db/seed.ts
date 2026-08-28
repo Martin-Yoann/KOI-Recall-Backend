@@ -43,8 +43,8 @@ const ids = {
 const staffFixture = {
   id: ids.staffReviewer,
   email: 'reviewer.demo@example.com',
-  displayName: 'Demo Reviewer',
-  role: 'reviewer',
+  displayName: 'Demo Manager',
+  role: 'MANAGER',
   password: 'Password123!@#',
 } as const;
 

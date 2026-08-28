@@ -9,7 +9,7 @@ import { promptSecret } from '../src/modules/staff/terminal-prompt.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 
 /**
- * ADR-0004 B6: bootstraps the first `administrator` staff user. Run once per
+ * Bootstraps the first `ADMIN` staff user. Run once per
  * fresh deployment before the B-end surface is usable:
  *
  *   pnpm staff:bootstrap
@@ -43,7 +43,7 @@ async function main() {
     );
   }
 
-  const email = await prompt('Administrator email: ');
+  const email = await prompt('ADMIN email: ');
   if (!email.includes('@')) {
     throw new Error('That does not look like an email address.');
   }
@@ -67,11 +67,11 @@ async function main() {
   const created = await staff.createStaffUser({
     email,
     displayName: displayName || email.split('@')[0]!,
-    role: 'administrator',
+    role: 'ADMIN',
     password,
   });
   process.stdout.write(
-    `Created administrator ${created.email} (id ${created.id}). You can now log in at /admin/sessions.\n`,
+    `Created ADMIN ${created.email} (id ${created.id}). You can now log in at /admin/sessions.\n`,
   );
   await handle.close();
 }

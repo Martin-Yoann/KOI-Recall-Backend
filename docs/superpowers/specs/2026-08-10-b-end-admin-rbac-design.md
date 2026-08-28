@@ -264,7 +264,7 @@ admin routes). Session endpoints are unauthenticated for login only.
 
 | Method + Path                        | Permission     | Body / Result                                                                                                     |
 | ------------------------------------ | -------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `GET /admin/staff`                   | `staff.manage` | list users (id, email, displayName, role, status, lastLoginAt)                                                    |
+| `GET /admin/staff`                   | `staff.read`   | list users (id, email, displayName, role, status, lastLoginAt); MANAGER is read-only                         |
 | `POST /admin/staff`                  | `staff.manage` | `{ email, displayName, role, password }` → create user; 409 if email exists                                       |
 | `PATCH /admin/staff/:id`             | `staff.manage` | `{ role?, status?, displayName? }`; role/status change writes audit `staff.role.change` and revokes user sessions |
 | `DELETE /admin/sessions/by-user/:id` | `staff.manage` | revoke all sessions of a user (disable/role-down)                                                                 |

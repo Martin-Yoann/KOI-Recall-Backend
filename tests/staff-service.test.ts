@@ -57,7 +57,7 @@ describe('DrizzleStaffService session security', () => {
       emailLookupHash: 'hash:staff@example.com',
       email: 'staff@example.com',
       displayName: 'Staff',
-      role: 'reviewer',
+      role: 'MANAGER',
       status: 'active',
       passwordHash,
       failedLoginAttempts: 0,
