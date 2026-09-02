@@ -13,22 +13,22 @@
 
 设计第 3 节「当前实现证据」逐条核对如下。行号/文件名均为当前仓库实际位置。
 
-| 设计主张 | 代码证据 | 结论 |
-| --- | --- | --- |
-| Campaign 已配置 Replacement/Refund | `src/db/schema/campaigns.ts:267` `campaignRemedyOptions`(`code`/`requiresMailingAddress`/`active`/`sortOrder`) | ✅ |
-| Claim 校验 remedyCode 属于锁定 Version 且 active | `src/modules/cases/drizzle-case-service.ts:216-230` 按 `campaignRemedyOptions.code` + pinned version 查询并判空 | ✅ |
-| recall_cases 含 status/assigned_to/assigned_at | `src/db/schema/claims.ts:73` `recallCases`(`status`/`assignedToStaffUserId`/`assignedAt`) | ✅ |
-| case_events 已提供时间线 | `src/db/schema/operations.ts:46` `caseEvents` | ✅ |
-| Staff 会话 + 固定角色 RBAC + 两级 PII + audit | `src/db/schema/staff.ts`、`src/modules/staff/permissions.ts`、`src/modules/staff/drizzle-audit-service.ts` | ✅ |
-| /admin/cases 支持列表/详情/分派/状态流转 | `src/routes/admin.ts`、`src/modules/admin/drizzle-admin-service.ts` | ✅ |
-| vercel.json 固定 Function Region iad1 | `vercel.json` `"regions": ["iad1"]` | ✅ |
-| **缺口**：remedyCode 校验后未写 Resolution 表 | `drizzle-case-service.ts` 校验 remedy 后只走 claim 提交 + snapshot,无 `case_resolutions` | ✅ 属实 |
-| **缺口**：Admin Case Detail 只返回基础字段+Consumer | `drizzle-admin-service.ts:136 getCaseDetail` 只返回 case 基础字段 + `consumer` | ✅ 属实 |
-| **缺口**：Legal transitions 前后端重复 | 后端 `drizzle-admin-service.ts:30-37 LEGAL_TRANSITIONS`;admin 前端 `cases/[id]/page.tsx:165` 同款映射 | ✅ 属实 |
-| **缺口**：export 只 5 列 | `src/routes/admin.ts:437-443` 导出 `caseReference,status,subtype,incidentFlag,submittedAt` | ✅ 属实 |
-| **缺口**：status 不能表达「退款已批准未导出」 | `recall_case_status` 枚举只有 `submitted…closed`,无 resolution/export 维度 | ✅ 属实 |
-| **缺口**：Privacy 只记版本不校验 | `caseConsents.textVersion`(`claims.ts:217`)已记录,但 `campaign_versions` 无 privacy 版本字段,提交不比对当前版本 | ✅ 属实 |
-| **外部事实**：美国数据驻留 | Neon/Blob/第三方区域属于基础设施事实,不在代码内 | ⚠️ 待核验(见 F3) |
+| 设计主张                                            | 代码证据                                                                                                        | 结论             |
+| --------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------- |
+| Campaign 已配置 Replacement/Refund                  | `src/db/schema/campaigns.ts:267` `campaignRemedyOptions`(`code`/`requiresMailingAddress`/`active`/`sortOrder`)  | ✅               |
+| Claim 校验 remedyCode 属于锁定 Version 且 active    | `src/modules/cases/drizzle-case-service.ts:216-230` 按 `campaignRemedyOptions.code` + pinned version 查询并判空 | ✅               |
+| recall_cases 含 status/assigned_to/assigned_at      | `src/db/schema/claims.ts:73` `recallCases`(`status`/`assignedToStaffUserId`/`assignedAt`)                       | ✅               |
+| case_events 已提供时间线                            | `src/db/schema/operations.ts:46` `caseEvents`                                                                   | ✅               |
+| Staff 会话 + 固定角色 RBAC + 两级 PII + audit       | `src/db/schema/staff.ts`、`src/modules/staff/permissions.ts`、`src/modules/staff/drizzle-audit-service.ts`      | ✅               |
+| /admin/cases 支持列表/详情/分派/状态流转            | `src/routes/admin.ts`、`src/modules/admin/drizzle-admin-service.ts`                                             | ✅               |
+| vercel.json 固定 Function Region iad1               | `vercel.json` `"regions": ["iad1"]`                                                                             | ✅               |
+| **缺口**：remedyCode 校验后未写 Resolution 表       | `drizzle-case-service.ts` 校验 remedy 后只走 claim 提交 + snapshot,无 `case_resolutions`                        | ✅ 属实          |
+| **缺口**：Admin Case Detail 只返回基础字段+Consumer | `drizzle-admin-service.ts:136 getCaseDetail` 只返回 case 基础字段 + `consumer`                                  | ✅ 属实          |
+| **缺口**：Legal transitions 前后端重复              | 后端 `drizzle-admin-service.ts:30-37 LEGAL_TRANSITIONS`;admin 前端 `cases/[id]/page.tsx:165` 同款映射           | ✅ 属实          |
+| **缺口**：export 只 5 列                            | `src/routes/admin.ts:437-443` 导出 `caseReference,status,subtype,incidentFlag,submittedAt`                      | ✅ 属实          |
+| **缺口**：status 不能表达「退款已批准未导出」       | `recall_case_status` 枚举只有 `submitted…closed`,无 resolution/export 维度                                      | ✅ 属实          |
+| **缺口**：Privacy 只记版本不校验                    | `caseConsents.textVersion`(`claims.ts:217`)已记录,但 `campaign_versions` 无 privacy 版本字段,提交不比对当前版本 | ✅ 属实          |
+| **外部事实**：美国数据驻留                          | Neon/Blob/第三方区域属于基础设施事实,不在代码内                                                                 | ⚠️ 待核验(见 F3) |
 
 **绿线**：`pnpm typecheck / openapi:check / db:check` 通过;默认 Vitest 通过(集成套件需 `RUN_DB_INTEGRATION=true`)。当前 drizzle 迁移最新为 `0009_bumpy_alex_power.sql`,新迁移从 `0010` 起。
 
@@ -37,6 +37,7 @@
 ## 1. 改造目标与不做清单
 
 **目标**(设计第 2.1 节):
+
 - 每个 Recall Case 可回答 Requested 与 Approved Resolution;运营可批准金额/币种/批准人/时间。
 - Case 详情可展示当前步骤、责任部门、下一步动作与完整历史。
 - Finance 可获得经授权、可审计的 Refund CSV(不调用支付,不存卡/银行资料)。
@@ -44,6 +45,7 @@
 - Claim 记录并校验消费者接受的 Privacy Notice 实际版本。
 
 **明确不做**(设计第 2.2 节):
+
 - 不从 KOI 发起退款;不接 Stripe/PayPal/ERP/WMS/银行;不保存卡/借记卡/银行账户资料。
 - 不把导出成功解释为退款成功。
 - 不建部门账号/部门队列/在线审批/通知/SLA;不自动提交 CPSC;不自动删除已提交 Case。
@@ -53,15 +55,15 @@
 
 ## 2. Decision Gates(默认值已在用,确认前不进对应实现)
 
-| Gate | 暂用默认值 | 影响任务 |
-| --- | --- | --- |
-| **G1 退款金额单位** | `refund_amount_minor` 为**分**(ISO 4217 最小货币单位),仅支持两位小数货币;其他货币上 UAT 前需确认 | A1/A2/C2 |
-| **G2 多商品退款取数** | Refund CSV 的 `purchaseChannel`/`orderNumber` 取**首个 claimed product**;多商品多订单时本阶段不拆分行,进异常清单 | C2 |
-| **G3 批准权限** | Resolution approve/complete 沿用 `case.status.transition`(reviewer 及以上);`approved→cancelled` 仅 administrator(设计 §8.1) | A4/B3 |
-| **G4 CSV 字段清单** | 采用设计 §9.5 的 12 列;增列可 UAT 追加,删/改含义需新契约版本 | C2 |
-| **G5 补充信息阻塞** | `closure_review→closed` 的「无未处理补充信息阻塞」暂以 `status ≠ need_info` 表达;若需跟踪多次往返,再建模 `information_requests` 表 | B3 |
-| **G6 共享限流方案** | `case-status-lookup` 生产限流需跨实例(Upstash Redis 等),替换 `InMemoryRateLimiter` 的进程内 Map | E4/F4 |
-| **G7 publicStatus 文案** | 采用设计 §9.9 映射表;消费者可读文案进入 Campaign Localization,不在代码写死 | E4/B1 |
+| Gate                     | 暂用默认值                                                                                                                         | 影响任务 |
+| ------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| **G1 退款金额单位**      | `refund_amount_minor` 为**分**(ISO 4217 最小货币单位),仅支持两位小数货币;其他货币上 UAT 前需确认                                   | A1/A2/C2 |
+| **G2 多商品退款取数**    | Refund CSV 的 `purchaseChannel`/`orderNumber` 取**首个 claimed product**;多商品多订单时本阶段不拆分行,进异常清单                   | C2       |
+| **G3 批准权限**          | Resolution approve/complete 沿用 `case.status.transition`(reviewer 及以上);`approved→cancelled` 仅 administrator(设计 §8.1)        | A4/B3    |
+| **G4 CSV 字段清单**      | 采用设计 §9.5 的 12 列;增列可 UAT 追加,删/改含义需新契约版本                                                                       | C2       |
+| **G5 补充信息阻塞**      | `closure_review→closed` 的「无未处理补充信息阻塞」暂以 `status ≠ need_info` 表达;若需跟踪多次往返,再建模 `information_requests` 表 | B3       |
+| **G6 共享限流方案**      | `case-status-lookup` 生产限流需跨实例(Upstash Redis 等),替换 `InMemoryRateLimiter` 的进程内 Map                                    | E4/F4    |
+| **G7 publicStatus 文案** | 采用设计 §9.9 映射表;消费者可读文案进入 Campaign Localization,不在代码写死                                                         | E4/B1    |
 
 > 业务确认与默认值不同时,只调整对应任务的 schema 枚举 / 契约字段,不改变任务序列与依赖。
 
@@ -86,29 +88,29 @@ M3 收紧  [F2 约束 NOT NULL; E5 移除旧 export]
    ── 横切: F3 美国数据驻留核验、F4 共享限流,与 M1 并行
 ```
 
-| ID | 任务 | 优先级 | 依赖 | 迁移阶段 |
-| --- | --- | --- | --- | --- |
-| A1 | case_resolutions 表 + 2 枚举 | P0 | — | M1 |
-| A2 | CaseResolutionModule(接口 + 实现) | P0 | A1 | M1 |
-| A3 | CaseService.submit 双写 Resolution | P0 | A1, A2 | M1 |
-| A4 | resolution approve/complete 路由 | P0 | A2 | M1 |
-| B1 | CaseWorkflowPolicy 纯函数 | P0 | —(并行) | M1 |
-| B2 | Admin list/detail 接入 workflow + 移除前端重复 transitions | P0 | B1, A1, E1 | M1 |
-| B3 | 关闭门槛 + 并发安全 | P0 | A2, B1 | M1 |
-| C1 | refund_export_batches/items 表 | P0 | — | M1 |
-| C2 | RefundExportModule + CSV 生成 | P0 | C1, A2 | M1 |
-| C3 | refund-exports 路由 | P0 | C2 | M1 |
-| D1 | campaign_versions 加 privacy 字段 + 契约 | P0 | — | M1 |
-| D2 | Claim 校验 privacy 版本 | P0 | D1 | M1 |
-| E1 | Case Detail 扩展(产品/证据/Incident/Resolution/Workflow/Events) | P0 | A2, B1 | M1 |
-| E2 | GET /admin/incidents | P1 | — | M1 |
-| E3 | GET /v1/claim-drafts/{id}/documents | P1 | — | M1 |
-| E4 | POST /v1/case-status-lookups 公开查询 | P0 | B1, G6 | M1 |
-| E5 | 移除旧 /admin/cases/export | P1 | C3 | M3 |
-| F1 | M2 回填脚本 | P0 | A1 | M2 |
-| F2 | M3 收紧约束 | P0 | F1 | M3 |
-| F3 | 美国数据驻留核验清单 | P0 | —(横切) | 上线门 |
-| F4 | 共享限流 + Upload 上线门槛 | P0 | —(横切) | 上线门 |
+| ID  | 任务                                                            | 优先级 | 依赖       | 迁移阶段 |
+| --- | --------------------------------------------------------------- | ------ | ---------- | -------- |
+| A1  | case_resolutions 表 + 2 枚举                                    | P0     | —          | M1       |
+| A2  | CaseResolutionModule(接口 + 实现)                               | P0     | A1         | M1       |
+| A3  | CaseService.submit 双写 Resolution                              | P0     | A1, A2     | M1       |
+| A4  | resolution approve/complete 路由                                | P0     | A2         | M1       |
+| B1  | CaseWorkflowPolicy 纯函数                                       | P0     | —(并行)    | M1       |
+| B2  | Admin list/detail 接入 workflow + 移除前端重复 transitions      | P0     | B1, A1, E1 | M1       |
+| B3  | 关闭门槛 + 并发安全                                             | P0     | A2, B1     | M1       |
+| C1  | refund_export_batches/items 表                                  | P0     | —          | M1       |
+| C2  | RefundExportModule + CSV 生成                                   | P0     | C1, A2     | M1       |
+| C3  | refund-exports 路由                                             | P0     | C2         | M1       |
+| D1  | campaign_versions 加 privacy 字段 + 契约                        | P0     | —          | M1       |
+| D2  | Claim 校验 privacy 版本                                         | P0     | D1         | M1       |
+| E1  | Case Detail 扩展(产品/证据/Incident/Resolution/Workflow/Events) | P0     | A2, B1     | M1       |
+| E2  | GET /admin/incidents                                            | P1     | —          | M1       |
+| E3  | GET /v1/claim-drafts/{id}/documents                             | P1     | —          | M1       |
+| E4  | POST /v1/case-status-lookups 公开查询                           | P0     | B1, G6     | M1       |
+| E5  | 移除旧 /admin/cases/export                                      | P1     | C3         | M3       |
+| F1  | M2 回填脚本                                                     | P0     | A1         | M2       |
+| F2  | M3 收紧约束                                                     | P0     | F1         | M3       |
+| F3  | 美国数据驻留核验清单                                            | P0     | —(横切)    | 上线门   |
+| F4  | 共享限流 + Upload 上线门槛                                      | P0     | —(横切)    | 上线门   |
 
 ---
 
@@ -378,15 +380,15 @@ UAT(设计 §16 九条):Replacement/Refund 全链路、CPSC 改判 Refund、Refu
 
 ## 8. 风险与回滚
 
-| 风险 | 缓解 |
-| --- | --- |
+| 风险                                  | 缓解                                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------------------------ |
 | Resolution 与 Case 状态两套枚举不一致 | 只由 CaseResolutionModule 写 resolution;CaseWorkflowPolicy 统一计算;前后端不各自映射 |
-| 退款金额单位/取数口径争议 | G1/G2 先按默认值,业务确认后局部调整,不改任务序列 |
-| 共享限流(Upstash)引入外部依赖 | G6 先隔离在 E4/Upload 端点;存量端点继续用 InMemory 作为单实例兜底 |
-| 回填脚本误解密/误映射 | F1 强制 dry-run + allowlist + 幂等 + 异常清单,不静默猜测 |
-| M3 约束收紧破坏旧数据 | 收紧前先跑 F1 回填 + 完整性校验,确认 100% 覆盖再 `NOT NULL` |
-| CSV 公式注入/金额精度 | C2 专项单测 + UAT;金额用整数 minor 单位 |
-| 数据驻留不达标 | F3 作为独立上线门槛,任何一项不满足即阻断 |
+| 退款金额单位/取数口径争议             | G1/G2 先按默认值,业务确认后局部调整,不改任务序列                                     |
+| 共享限流(Upstash)引入外部依赖         | G6 先隔离在 E4/Upload 端点;存量端点继续用 InMemory 作为单实例兜底                    |
+| 回填脚本误解密/误映射                 | F1 强制 dry-run + allowlist + 幂等 + 异常清单,不静默猜测                             |
+| M3 约束收紧破坏旧数据                 | 收紧前先跑 F1 回填 + 完整性校验,确认 100% 覆盖再 `NOT NULL`                          |
+| CSV 公式注入/金额精度                 | C2 专项单测 + UAT;金额用整数 minor 单位                                              |
+| 数据驻留不达标                        | F3 作为独立上线门槛,任何一项不满足即阻断                                             |
 
 ---
 

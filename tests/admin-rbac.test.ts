@@ -86,7 +86,8 @@ function makeStaffFake(): StaffService & {
     },
     async revokeAllSessions() {},
     async changePassword({ currentPassword }) {
-      if (currentPassword !== 'password1234') throw new ClaimValidationError('The current password is incorrect.');
+      if (currentPassword !== 'password1234')
+        throw new ClaimValidationError('The current password is incorrect.');
       return Promise.resolve();
     },
     async refreshSession(sessionId) {
@@ -347,7 +348,12 @@ describe('B-end RBAC (ADR-0004)', () => {
     const managerCreate = await app.request('/admin/staff', {
       method: 'POST',
       headers: { Authorization: `Bearer ${managerToken}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: 'blocked@x.com', displayName: 'Blocked', role: 'MANAGER', password: 'password1234' }),
+      body: JSON.stringify({
+        email: 'blocked@x.com',
+        displayName: 'Blocked',
+        role: 'MANAGER',
+        password: 'password1234',
+      }),
     });
     expect(managerCreate.status).toBe(403);
 
@@ -650,7 +656,13 @@ describe('B-end RBAC (ADR-0004)', () => {
           medicalTreatment: 'yes',
           occurredAt: '2026-08-01T00:00:00.000Z',
           createdAt: '2026-08-02T00:00:00.000Z',
-          reportability: { id: 'r-1', status: 'pending', cpscReference: null, filedAt: null, decisionAt: null },
+          reportability: {
+            id: 'r-1',
+            status: 'pending',
+            cpscReference: null,
+            filedAt: null,
+            decisionAt: null,
+          },
         },
       ]);
     await staff.createStaffUser({
@@ -818,10 +830,9 @@ describe('B-end RBAC (ADR-0004)', () => {
     const token = (await staff.login('mgr2@x.com', 'password1234'))!.token;
     const app = appWith({ admin, staff, audit: makeAuditFake() });
 
-    const malformed = await app.request(
-      '/admin/cases/KOI-7N4Q-A91M2X6P/documents/not-a-uuid/url',
-      { headers: { Authorization: `Bearer ${token}` } },
-    );
+    const malformed = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/documents/not-a-uuid/url', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
     expect(malformed.status).toBe(422);
 
     const missing = await app.request(
@@ -861,5 +872,4 @@ describe('B-end RBAC (ADR-0004)', () => {
     });
     expect(bad.status).toBe(422);
   });
-
 });

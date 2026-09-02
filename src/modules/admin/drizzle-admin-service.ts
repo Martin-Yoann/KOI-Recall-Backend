@@ -19,7 +19,13 @@ import {
 import type { PrivateBlobPort } from '../../platform/blob/port.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import { piiTierFor } from '../staff/permissions.js';
-import type { CaseResolution, ApproveResolutionInput, CompleteResolutionInput, CancelResolutionInput, CaseResolutionService } from '../resolutions/service.js';
+import type {
+  CaseResolution,
+  ApproveResolutionInput,
+  CompleteResolutionInput,
+  CancelResolutionInput,
+  CaseResolutionService,
+} from '../resolutions/service.js';
 import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
 import { maskAddress, maskEmail, maskName, maskOrderNumber, maskPhone } from './pii-masking.js';
 import type {
@@ -85,12 +91,41 @@ export class DrizzleAdminService implements AdminService {
       .orderBy(desc(recallCases.submittedAt))
       .limit(filter.limit);
 
-    return Promise.all(rows.map(async (row): Promise<AdminCaseSummary> => {
-      const [caseRow] = await db.select({ id: recallCases.id, status: recallCases.status, subtype: recallCases.subtype, incidentFlag: recallCases.incidentFlag }).from(recallCases).where(eq(recallCases.publicReference, row.caseReference)).limit(1);
-      const resolution = caseRow ? await db.select({ requestedType: caseResolutions.requestedType, approvedType: caseResolutions.approvedType, status: caseResolutions.status }).from(caseResolutions).where(eq(caseResolutions.caseId, caseRow.id)).limit(1) : [];
-      const workflow = caseRow ? await this.workflowFor(caseRow) : undefined;
-      return { caseReference: row.caseReference, status: row.status, subtype: row.subtype, incidentFlag: row.incidentFlag, submittedAt: row.submittedAt.toISOString(), ...(resolution[0] ? { resolution: resolution[0] } : { resolution: null }), ...(workflow ? { workflow } : {}) };
-    }));
+    return Promise.all(
+      rows.map(async (row): Promise<AdminCaseSummary> => {
+        const [caseRow] = await db
+          .select({
+            id: recallCases.id,
+            status: recallCases.status,
+            subtype: recallCases.subtype,
+            incidentFlag: recallCases.incidentFlag,
+          })
+          .from(recallCases)
+          .where(eq(recallCases.publicReference, row.caseReference))
+          .limit(1);
+        const resolution = caseRow
+          ? await db
+              .select({
+                requestedType: caseResolutions.requestedType,
+                approvedType: caseResolutions.approvedType,
+                status: caseResolutions.status,
+              })
+              .from(caseResolutions)
+              .where(eq(caseResolutions.caseId, caseRow.id))
+              .limit(1)
+          : [];
+        const workflow = caseRow ? await this.workflowFor(caseRow) : undefined;
+        return {
+          caseReference: row.caseReference,
+          status: row.status,
+          subtype: row.subtype,
+          incidentFlag: row.incidentFlag,
+          submittedAt: row.submittedAt.toISOString(),
+          ...(resolution[0] ? { resolution: resolution[0] } : { resolution: null }),
+          ...(workflow ? { workflow } : {}),
+        };
+      }),
+    );
   }
 
   async exportCases(): Promise<AdminCaseSummary[]> {
@@ -261,7 +296,23 @@ export class DrizzleAdminService implements AdminService {
       consumer,
       resolution: this.resolutions ? await this.resolutions.getForCase(caseRow.id) : null,
       workflow: await this.workflowFor(caseRow, incident?.reportability?.status ?? null),
-      events: (await db.select().from(caseEvents).where(eq(caseEvents.caseId, caseRow.id)).orderBy(desc(caseEvents.occurredAt)).limit(100)).reverse().map((event) => ({ id: event.id, eventType: event.eventType, actorType: event.actorType, actorId: event.actorId, data: event.data, occurredAt: event.occurredAt.toISOString() })),
+      events: (
+        await db
+          .select()
+          .from(caseEvents)
+          .where(eq(caseEvents.caseId, caseRow.id))
+          .orderBy(desc(caseEvents.occurredAt))
+          .limit(100)
+      )
+        .reverse()
+        .map((event) => ({
+          id: event.id,
+          eventType: event.eventType,
+          actorType: event.actorType,
+          actorId: event.actorId,
+          data: event.data,
+          occurredAt: event.occurredAt.toISOString(),
+        })),
     };
   }
 
@@ -435,20 +486,39 @@ export class DrizzleAdminService implements AdminService {
    * incident (getCaseDetail); when omitted it is queried (listCases path).
    */
   private async workflowFor(
-    caseRow: { id: string; status: CaseStatus; subtype: 'standard' | 'injury_hazard'; incidentFlag: boolean },
+    caseRow: {
+      id: string;
+      status: CaseStatus;
+      subtype: 'standard' | 'injury_hazard';
+      incidentFlag: boolean;
+    },
     reportabilityStatus?: string | null,
   ) {
     let reviewStatus = reportabilityStatus;
     if (reviewStatus === undefined) {
-      const [incidentRow] = await this.db.select({ reportabilityStatus: reportabilityReviews.status }).from(incidents).leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id)).where(eq(incidents.caseId, caseRow.id)).limit(1);
+      const [incidentRow] = await this.db
+        .select({ reportabilityStatus: reportabilityReviews.status })
+        .from(incidents)
+        .leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id))
+        .where(eq(incidents.caseId, caseRow.id))
+        .limit(1);
       reviewStatus = incidentRow?.reportabilityStatus ?? null;
     }
-    const [resolutionRow] = await this.db.select({ requestedType: caseResolutions.requestedType, approvedType: caseResolutions.approvedType, status: caseResolutions.status }).from(caseResolutions).where(eq(caseResolutions.caseId, caseRow.id)).limit(1);
+    const [resolutionRow] = await this.db
+      .select({
+        requestedType: caseResolutions.requestedType,
+        approvedType: caseResolutions.approvedType,
+        status: caseResolutions.status,
+      })
+      .from(caseResolutions)
+      .where(eq(caseResolutions.caseId, caseRow.id))
+      .limit(1);
     return evaluate({
       caseStatus: caseRow.status,
       subtype: caseRow.subtype,
       incidentFlag: caseRow.incidentFlag,
-      reportabilityStatus: (reviewStatus as 'pending' | 'filed' | 'documented_non_reportable' | null) ?? null,
+      reportabilityStatus:
+        (reviewStatus as 'pending' | 'filed' | 'documented_non_reportable' | null) ?? null,
       resolution: resolutionRow ?? null,
     });
   }
@@ -506,19 +576,37 @@ export class DrizzleAdminService implements AdminService {
     };
   }
 
-  async approveResolution(caseReference: string, input: Omit<ApproveResolutionInput, 'caseId'>): Promise<CaseResolution> {
+  async approveResolution(
+    caseReference: string,
+    input: Omit<ApproveResolutionInput, 'caseId'>,
+  ): Promise<CaseResolution> {
     if (!this.resolutions) throw new Error('Resolution service not configured.');
-    return this.resolutions.approve({ ...input, caseId: await this.caseIdForReference(caseReference) });
+    return this.resolutions.approve({
+      ...input,
+      caseId: await this.caseIdForReference(caseReference),
+    });
   }
 
-  async completeResolution(caseReference: string, input: Omit<CompleteResolutionInput, 'caseId'>): Promise<CaseResolution> {
+  async completeResolution(
+    caseReference: string,
+    input: Omit<CompleteResolutionInput, 'caseId'>,
+  ): Promise<CaseResolution> {
     if (!this.resolutions) throw new Error('Resolution service not configured.');
-    return this.resolutions.recordExternalCompletion({ ...input, caseId: await this.caseIdForReference(caseReference) });
+    return this.resolutions.recordExternalCompletion({
+      ...input,
+      caseId: await this.caseIdForReference(caseReference),
+    });
   }
 
-  async cancelResolution(caseReference: string, input: Omit<CancelResolutionInput, 'caseId'>): Promise<CaseResolution> {
+  async cancelResolution(
+    caseReference: string,
+    input: Omit<CancelResolutionInput, 'caseId'>,
+  ): Promise<CaseResolution> {
     if (!this.resolutions) throw new Error('Resolution service not configured.');
-    return this.resolutions.cancel({ ...input, caseId: await this.caseIdForReference(caseReference) });
+    return this.resolutions.cancel({
+      ...input,
+      caseId: await this.caseIdForReference(caseReference),
+    });
   }
 
   async getDocumentAccess(
@@ -559,7 +647,11 @@ export class DrizzleAdminService implements AdminService {
   }
 
   private async caseIdForReference(caseReference: string): Promise<string> {
-    const [row] = await this.db.select({ id: recallCases.id }).from(recallCases).where(eq(recallCases.publicReference, caseReference)).limit(1);
+    const [row] = await this.db
+      .select({ id: recallCases.id })
+      .from(recallCases)
+      .where(eq(recallCases.publicReference, caseReference))
+      .limit(1);
     if (!row) throw new ResourceNotFoundError('Case was not found.');
     return row.id;
   }
@@ -597,7 +689,11 @@ export class DrizzleAdminService implements AdminService {
     // The consumer must be told what to provide: a need_info transition
     // without a note would strand them in "action required" with no guidance.
     const trimmedNote = note?.trim();
-    if (!bypassWorkflow && nextStatus === 'need_info' && (!trimmedNote || trimmedNote.length < 10)) {
+    if (
+      !bypassWorkflow &&
+      nextStatus === 'need_info' &&
+      (!trimmedNote || trimmedNote.length < 10)
+    ) {
       throw new ClaimValidationError(
         'A note of at least 10 characters is required when requesting additional information.',
       );

@@ -32,10 +32,7 @@ const MANAGER: ReadonlySet<Permission> = new Set([
   'audit.read',
   'staff.read',
 ]);
-const ADMIN: ReadonlySet<Permission> = new Set<Permission>([
-  ...MANAGER,
-  'staff.manage',
-]);
+const ADMIN: ReadonlySet<Permission> = new Set<Permission>([...MANAGER, 'staff.manage']);
 
 export const ROLE_PERMISSIONS: Readonly<Record<StaffRole, ReadonlySet<Permission>>> = {
   ADMIN,

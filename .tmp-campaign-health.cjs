@@ -12,7 +12,7 @@ const client = new Client({ connectionString });
     products: `select count(*)::int as count from campaign_products where campaign_version_id = (select published_version_id from recall_campaigns where slug = 'music-lollipop-demo-2026')`,
     lots: `select count(*)::int as count from campaign_product_lots where campaign_product_id in (select id from campaign_products where campaign_version_id = (select published_version_id from recall_campaigns where slug = 'music-lollipop-demo-2026'))`,
     remedies: `select count(*)::int as count from campaign_remedy_options where campaign_version_id = (select published_version_id from recall_campaigns where slug = 'music-lollipop-demo-2026')`,
-    evidence: `select count(*)::int as count from campaign_evidence_requirements where campaign_version_id = (select published_version_id from recall_campaigns where slug = 'music-lollipop-demo-2026')`
+    evidence: `select count(*)::int as count from campaign_evidence_requirements where campaign_version_id = (select published_version_id from recall_campaigns where slug = 'music-lollipop-demo-2026')`,
   };
   for (const [label, sql] of Object.entries(checks)) {
     const res = await client.query(sql);
@@ -22,6 +22,8 @@ const client = new Client({ connectionString });
   await client.end();
 })().catch(async (error) => {
   console.error(error);
-  try { await client.end(); } catch {}
+  try {
+    await client.end();
+  } catch {}
   process.exit(1);
 });

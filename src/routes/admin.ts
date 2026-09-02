@@ -240,23 +240,21 @@ export function registerAdminRoutes(
       }
     }
 
-    const updated = await requireAdminTransactions(registry).run(
-      async ({ staff, audit }) => {
-        const user = await staff.updateStaffUser(principal.userId, {
-          ...(displayName !== undefined ? { displayName: displayName.trim() } : {}),
-          ...(avatarDataUrl !== undefined ? { avatarDataUrl } : {}),
-        });
-        await audit.record({
-          actorUserId: principal.userId,
-          actorRole: principal.role,
-          action: 'staff.update_profile',
-          resourceType: 'staff',
-          resourceId: principal.userId,
-          outcome: 'success',
-        });
-        return user;
-      },
-    );
+    const updated = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      const user = await staff.updateStaffUser(principal.userId, {
+        ...(displayName !== undefined ? { displayName: displayName.trim() } : {}),
+        ...(avatarDataUrl !== undefined ? { avatarDataUrl } : {}),
+      });
+      await audit.record({
+        actorUserId: principal.userId,
+        actorRole: principal.role,
+        action: 'staff.update_profile',
+        resourceType: 'staff',
+        resourceId: principal.userId,
+        outcome: 'success',
+      });
+      return user;
+    });
 
     return context.json(
       {
@@ -488,13 +486,21 @@ export function registerAdminRoutes(
     const resolutionType = context.req.query('resolutionType');
     const resolutionStatus = context.req.query('resolutionStatus');
     const incidentParam = context.req.query('incident');
-    const incident = incidentParam === 'true' ? true : incidentParam === 'false' ? false : undefined;
+    const incident =
+      incidentParam === 'true' ? true : incidentParam === 'false' ? false : undefined;
     const limit = Math.min(Number(context.req.query('limit') ?? 100) || 100, 1000);
     const cases = await registry.services.admin?.listCases({
       ...(queue ? { queue } : {}),
       ...(status ? { status } : {}),
-      ...((resolutionType === 'replacement' || resolutionType === 'refund') ? { resolutionType } : {}),
-      ...((resolutionStatus === 'requested' || resolutionStatus === 'approved' || resolutionStatus === 'externally_completed' || resolutionStatus === 'cancelled') ? { resolutionStatus } : {}),
+      ...(resolutionType === 'replacement' || resolutionType === 'refund'
+        ? { resolutionType }
+        : {}),
+      ...(resolutionStatus === 'requested' ||
+      resolutionStatus === 'approved' ||
+      resolutionStatus === 'externally_completed' ||
+      resolutionStatus === 'cancelled'
+        ? { resolutionStatus }
+        : {}),
       ...(incident !== undefined ? { incident } : {}),
       limit,
     });
@@ -666,7 +672,11 @@ export function registerAdminRoutes(
     const trimmedNote = note?.trim();
     // The consumer must be told what to provide: a need_info transition
     // without a note would strand them in "action required" with no guidance.
-    if (guard.role !== 'ADMIN' && nextStatus === 'need_info' && (!trimmedNote || trimmedNote.length < 10)) {
+    if (
+      guard.role !== 'ADMIN' &&
+      nextStatus === 'need_info' &&
+      (!trimmedNote || trimmedNote.length < 10)
+    ) {
       return validationError(
         context,
         'A note of at least 10 characters is required when requesting additional information.',
@@ -676,7 +686,13 @@ export function registerAdminRoutes(
       return validationError(context, 'The transition note must be at most 2000 characters.');
     }
     await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
-      await admin.transitionCaseStatus(caseRef, nextStatus, guard.userId, trimmedNote, guard.role === 'ADMIN');
+      await admin.transitionCaseStatus(
+        caseRef,
+        nextStatus,
+        guard.userId,
+        trimmedNote,
+        guard.role === 'ADMIN',
+      );
       await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
@@ -702,15 +718,53 @@ export function registerAdminRoutes(
     const body = await bodyRecord(context);
     const type = asString(body.type);
     const note = asString(body.note) ?? '';
-    const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
-    if ((type !== 'replacement' && type !== 'refund') || note.trim().length < 10 || note.length > 1000 || !Number.isInteger(expectedVersion)) return validationError(context, 'type, note (10-1000 characters), and integer expectedVersion are required.');
-    const refundAmountMinor = typeof body.refundAmountMinor === 'number' ? body.refundAmountMinor : Number(body.refundAmountMinor);
+    const expectedVersion =
+      typeof body.expectedVersion === 'number'
+        ? body.expectedVersion
+        : Number(body.expectedVersion);
+    if (
+      (type !== 'replacement' && type !== 'refund') ||
+      note.trim().length < 10 ||
+      note.length > 1000 ||
+      !Number.isInteger(expectedVersion)
+    )
+      return validationError(
+        context,
+        'type, note (10-1000 characters), and integer expectedVersion are required.',
+      );
+    const refundAmountMinor =
+      typeof body.refundAmountMinor === 'number'
+        ? body.refundAmountMinor
+        : Number(body.refundAmountMinor);
     const currency = asString(body.currency);
-    if (type === 'refund' && (!Number.isInteger(refundAmountMinor) || refundAmountMinor <= 0 || !currency)) return validationError(context, 'refund approvals require a positive integer refundAmountMinor and currency.');
-    if (!registry.services.admin?.approveResolution) throw new Error('Resolution service is not configured.');
-    const result = type === 'refund' && currency
-      ? await registry.services.admin.approveResolution(context.req.param('caseRef'), { type, note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, refundAmountMinor, currency })
-      : await registry.services.admin.approveResolution(context.req.param('caseRef'), { type: 'replacement', note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
+    if (
+      type === 'refund' &&
+      (!Number.isInteger(refundAmountMinor) || refundAmountMinor <= 0 || !currency)
+    )
+      return validationError(
+        context,
+        'refund approvals require a positive integer refundAmountMinor and currency.',
+      );
+    if (!registry.services.admin?.approveResolution)
+      throw new Error('Resolution service is not configured.');
+    const result =
+      type === 'refund' && currency
+        ? await registry.services.admin.approveResolution(context.req.param('caseRef'), {
+            type,
+            note,
+            expectedVersion,
+            actorUserId: guard.userId,
+            actorRole: guard.role,
+            refundAmountMinor,
+            currency,
+          })
+        : await registry.services.admin.approveResolution(context.req.param('caseRef'), {
+            type: 'replacement',
+            note,
+            expectedVersion,
+            actorUserId: guard.userId,
+            actorRole: guard.role,
+          });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });
@@ -720,13 +774,32 @@ export function registerAdminRoutes(
     if (guard instanceof Response) return guard;
     const body = await bodyRecord(context);
     const note = asString(body.note) ?? '';
-    const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
-    if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion)) return validationError(context, 'note (10-2000 characters) and integer expectedVersion are required.');
-    if (!registry.services.admin?.completeResolution) throw new Error('Resolution service is not configured.');
+    const expectedVersion =
+      typeof body.expectedVersion === 'number'
+        ? body.expectedVersion
+        : Number(body.expectedVersion);
+    if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion))
+      return validationError(
+        context,
+        'note (10-2000 characters) and integer expectedVersion are required.',
+      );
+    if (!registry.services.admin?.completeResolution)
+      throw new Error('Resolution service is not configured.');
     const externalReference = asString(body.externalReference);
     const result = externalReference
-      ? await registry.services.admin.completeResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, externalReference })
-      : await registry.services.admin.completeResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role });
+      ? await registry.services.admin.completeResolution(context.req.param('caseRef'), {
+          note,
+          expectedVersion,
+          actorUserId: guard.userId,
+          actorRole: guard.role,
+          externalReference,
+        })
+      : await registry.services.admin.completeResolution(context.req.param('caseRef'), {
+          note,
+          expectedVersion,
+          actorUserId: guard.userId,
+          actorRole: guard.role,
+        });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });
@@ -736,20 +809,34 @@ export function registerAdminRoutes(
     if (guard instanceof Response) return guard;
     const body = await bodyRecord(context);
     const note = asString(body.note) ?? '';
-    const expectedVersion = typeof body.expectedVersion === 'number' ? body.expectedVersion : Number(body.expectedVersion);
-    if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion)) return validationError(context, 'note (10-2000 characters) and integer expectedVersion are required.');
-    if (!registry.services.admin?.cancelResolution) throw new Error('Resolution service is not configured.');
-    const result = await registry.services.admin.cancelResolution(context.req.param('caseRef'), { note, expectedVersion, actorUserId: guard.userId, actorRole: guard.role, actorIsAdministrator: guard.role === 'ADMIN' });
+    const expectedVersion =
+      typeof body.expectedVersion === 'number'
+        ? body.expectedVersion
+        : Number(body.expectedVersion);
+    if (note.trim().length < 10 || note.length > 2000 || !Number.isInteger(expectedVersion))
+      return validationError(
+        context,
+        'note (10-2000 characters) and integer expectedVersion are required.',
+      );
+    if (!registry.services.admin?.cancelResolution)
+      throw new Error('Resolution service is not configured.');
+    const result = await registry.services.admin.cancelResolution(context.req.param('caseRef'), {
+      note,
+      expectedVersion,
+      actorUserId: guard.userId,
+      actorRole: guard.role,
+      actorIsAdministrator: guard.role === 'ADMIN',
+    });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });
-
 
   app.get('/admin/refund-exports', async (context) => {
     const guard = await requirePermission(context, registry, 'case.export');
     if (guard instanceof Response) return guard;
     const service = registry.services.refundExports;
-    if (!service) return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
+    if (!service)
+      return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
     const batches = await service.listBatches();
     return context.json({ batches }, 200);
   });
@@ -758,12 +845,24 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'case.export');
     if (guard instanceof Response) return guard;
     const service = registry.services.refundExports;
-    if (!service) return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
+    if (!service)
+      return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
     const body = await bodyRecord(context);
     const purpose = asString(body.purpose) ?? '';
-    if (purpose.trim().length === 0 || purpose.length > 500) return validationError(context, 'purpose is required and must be at most 500 characters.');
-    const result = await service.export({ actorUserId: guard.userId, actorRole: guard.role, purpose, includeExported: body.includeExported === true });
-    return context.body(result.csv, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="refund-export-${result.batchId}.csv"`, 'X-Refund-Export-Batch-Id': result.batchId, 'X-Refund-Export-Sha256': result.sha256 });
+    if (purpose.trim().length === 0 || purpose.length > 500)
+      return validationError(context, 'purpose is required and must be at most 500 characters.');
+    const result = await service.export({
+      actorUserId: guard.userId,
+      actorRole: guard.role,
+      purpose,
+      includeExported: body.includeExported === true,
+    });
+    return context.body(result.csv, 200, {
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="refund-export-${result.batchId}.csv"`,
+      'X-Refund-Export-Batch-Id': result.batchId,
+      'X-Refund-Export-Sha256': result.sha256,
+    });
   });
   // ---- Reportability review close (review.close) ----
 

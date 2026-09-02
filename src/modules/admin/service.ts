@@ -1,5 +1,10 @@
 import type { StaffRole } from '../staff/permissions.js';
-import type { CaseResolution, ApproveResolutionInput, CompleteResolutionInput, CancelResolutionInput } from '../resolutions/service.js';
+import type {
+  CaseResolution,
+  ApproveResolutionInput,
+  CompleteResolutionInput,
+  CancelResolutionInput,
+} from '../resolutions/service.js';
 import type { WorkflowSnapshot } from '../workflow/policy.js';
 
 /** The three operational queues an admin can inspect (T8/O10). */
@@ -246,9 +251,21 @@ export interface AdminService {
    * Mints short-lived access URLs for one evidence file of a case, verifying
    * the document belongs to the case. Returns null when either is not found.
    */
-  getDocumentAccess?(caseReference: string, documentId: string): Promise<AdminDocumentAccess | null>;
+  getDocumentAccess?(
+    caseReference: string,
+    documentId: string,
+  ): Promise<AdminDocumentAccess | null>;
 
-  approveResolution?(caseReference: string, input: Omit<ApproveResolutionInput, 'caseId'>): Promise<CaseResolution>;
-  completeResolution?(caseReference: string, input: Omit<CompleteResolutionInput, 'caseId'>): Promise<CaseResolution>;
-  cancelResolution?(caseReference: string, input: Omit<CancelResolutionInput, 'caseId'>): Promise<CaseResolution>;
+  approveResolution?(
+    caseReference: string,
+    input: Omit<ApproveResolutionInput, 'caseId'>,
+  ): Promise<CaseResolution>;
+  completeResolution?(
+    caseReference: string,
+    input: Omit<CompleteResolutionInput, 'caseId'>,
+  ): Promise<CaseResolution>;
+  cancelResolution?(
+    caseReference: string,
+    input: Omit<CancelResolutionInput, 'caseId'>,
+  ): Promise<CaseResolution>;
 }

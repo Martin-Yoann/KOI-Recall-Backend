@@ -252,9 +252,8 @@ describe('CaseWorkflowPolicy — public status (§9.9)', () => {
 
   it('approved + resolution approved → resolution_approved', () => {
     expect(
-      evaluate(
-        state({ caseStatus: 'approved', resolution: resolution({ status: 'approved' }) }),
-      ).publicStatus,
+      evaluate(state({ caseStatus: 'approved', resolution: resolution({ status: 'approved' }) }))
+        .publicStatus,
     ).toBe(PUBLIC_STATUSES.RESOLUTION_APPROVED);
   });
 

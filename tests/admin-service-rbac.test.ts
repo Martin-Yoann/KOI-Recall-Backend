@@ -103,9 +103,7 @@ function createTransitionFakeDb(inserted: Record<string, unknown>[]): Database {
       from: () => ({
         where: () => ({
           limit: () =>
-            Promise.resolve([
-              { id: '11111111-1111-4111-8111-111111111111', status: 'submitted' },
-            ]),
+            Promise.resolve([{ id: '11111111-1111-4111-8111-111111111111', status: 'submitted' }]),
         }),
       }),
     }),

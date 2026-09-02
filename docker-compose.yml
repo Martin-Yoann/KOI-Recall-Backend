@@ -10,7 +10,7 @@
 #   DATABASE_URL=postgresql://koi:koi_dev@localhost:5432/koi_recall
 # ============================================================
 
-version: "3.9"
+version: '3.9'
 
 services:
   postgres:
@@ -22,11 +22,11 @@ services:
       POSTGRES_PASSWORD: koi_dev
       POSTGRES_DB: koi_recall
     ports:
-      - "5432:5432"
+      - '5432:5432'
     volumes:
       - koi_pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U koi -d koi_recall"]
+      test: ['CMD-SHELL', 'pg_isready -U koi -d koi_recall']
       interval: 10s
       timeout: 5s
       retries: 5

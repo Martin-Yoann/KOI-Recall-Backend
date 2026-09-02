@@ -9,11 +9,7 @@ import type { StaffRole } from '../staff/permissions.js';
  */
 
 export type CaseResolutionType = 'replacement' | 'refund';
-export type CaseResolutionStatus =
-  | 'requested'
-  | 'approved'
-  | 'externally_completed'
-  | 'cancelled';
+export type CaseResolutionStatus = 'requested' | 'approved' | 'externally_completed' | 'cancelled';
 
 /** The read model returned by the module (no encrypted note payloads). */
 export interface CaseResolution {
