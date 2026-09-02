@@ -85,6 +85,10 @@ jobs:
           DATABASE_URL: postgresql://koi:koi@localhost:5432/koi_recall_test
           ALLOW_SYNTHETIC_SEED: 'true'
           APP_ENV: local
+          # Same dummy keys the integration suites construct in-process; the
+          # seed only needs them to be internally consistent within this DB.
+          FIELD_ENCRYPTION_KEY: CwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCwsLCws=
+          HASH_PEPPER: DAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw=
         run: pnpm db:seed
       # Integration suites construct their own crypto keys (Buffer.alloc) so no
       # secrets are required; RUN_DB_INTEGRATION=true is the only switch.
