@@ -46,6 +46,12 @@ export function routeCategoryForPath(pathname: string): string {
     // probing case references is throttled independently of browsing traffic.
     return 'case-status-lookups';
   }
+  if (pathname.startsWith('/v1/consumer-auth/lookup')) {
+    // H1/G8: the deprecated phone-factor lookup is the same brute-forceable
+    // probing surface, so it shares the tight case-status-lookups quota
+    // instead of the loose permissive 'other' bucket.
+    return 'case-status-lookups';
+  }
   if (pathname.startsWith('/v1/recall-campaigns/')) {
     const remainder = pathname.slice('/v1/recall-campaigns/'.length);
     if (remainder.includes('/product-checks')) return 'product-checks';

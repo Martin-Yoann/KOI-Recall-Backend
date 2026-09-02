@@ -24,7 +24,14 @@ import {
   recallCampaigns,
 } from '../db/schema/index.js';
 import { hashPassword, verifyPassword } from '../modules/staff/password.js';
+import {
+  consumerNextAction,
+  mapToPublicCaseState,
+  publicStatusLabel,
+  resolutionDisplayName,
+} from '../modules/cases/public-status.js';
 import { legacyConsumerAuthLookupRoute } from '../contracts/routes.js';
+import { caseStatusLookupResponseSchema, type CaseStatusLookupResponse } from '../contracts/toc.js';
 import { NodeSensitiveDataCrypto } from '../platform/crypto/node-sensitive-data-crypto.js';
 import { problemType } from '../shared/errors.js';
 
@@ -350,6 +357,72 @@ async function buildConsumerClaim(caseId: string): Promise<ConsumerClaimSummary 
   };
 }
 
+/**
+ * Deprecated phone-factor lookup trimmed to the §9.9 whitelist (H1, plan v3).
+ * Mirrors DrizzleCaseStatusLookupService: joins the public status slice,
+ * decrypts the stored phone solely to gate the match, and emits only the
+ * whitelisted fields — never name, email, phone, lot codes, or amounts.
+ * Synthetic campaigns stay invisible so demo cases never surface here.
+ */
+async function lookupLegacyClaimView(
+  claimNumber: string,
+  phone: string,
+): Promise<CaseStatusLookupResponse | null> {
+  const [row] = await db()
+    .db.select({
+      caseStatus: recallCases.status,
+      updatedAt: recallCases.updatedAt,
+      campaignSlug: recallCampaigns.slug,
+      resolutionStatus: caseResolutions.status,
+      requestedType: caseResolutions.requestedType,
+      approvedType: caseResolutions.approvedType,
+      consumerPhoneEncrypted: caseConsumers.phoneEncrypted,
+      consumerKeyVersion: caseConsumers.keyVersion,
+      campaignTitle: campaignLocalizations.title,
+    })
+    .from(recallCases)
+    .innerJoin(recallCampaigns, eq(recallCampaigns.id, recallCases.campaignId))
+    .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+    .leftJoin(caseResolutions, eq(caseResolutions.caseId, recallCases.id))
+    .leftJoin(
+      campaignLocalizations,
+      and(
+        eq(campaignLocalizations.campaignVersionId, recallCases.campaignVersionId),
+        eq(campaignLocalizations.locale, recallCases.locale),
+      ),
+    )
+    .where(and(eq(recallCases.publicReference, claimNumber), eq(recallCampaigns.isTestData, false)))
+    .limit(1);
+  if (!row) return null;
+
+  const storedPhone = row.consumerPhoneEncrypted
+    ? await cryptoPort().decrypt({
+        value: row.consumerPhoneEncrypted,
+        keyVersion: row.consumerKeyVersion,
+      })
+    : '';
+  if (storedPhone.trim() !== phone) return null;
+
+  const mapped = mapToPublicCaseState(row.caseStatus, {
+    status: row.resolutionStatus ?? null,
+    requestedType: row.requestedType ?? null,
+    approvedType: row.approvedType ?? null,
+  });
+
+  return {
+    caseReference: claimNumber,
+    campaignTitle: row.campaignTitle ?? row.campaignSlug,
+    publicStatus: mapped.publicStatus,
+    publicStatusLabel: publicStatusLabel(mapped.publicStatus),
+    consumerNextAction: consumerNextAction(mapped.publicStatus),
+    requestedResolution: resolutionDisplayName(row.requestedType ?? null),
+    approvedResolution: mapped.approvedVisible
+      ? resolutionDisplayName(row.approvedType ?? null)
+      : null,
+    lastUpdatedAt: row.updatedAt.toISOString(),
+  };
+}
+
 export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   // ── POST /v1/consumer-auth/register ──
   app.post('/v1/consumer-auth/register', async (c) => {
@@ -368,8 +441,10 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
     if (!isValidEmail(email)) return problem(c, 400, 'Invalid Email', 'A valid email is required.');
     // Consumer passwords stay at the 6-character floor the C-end registers with
     // (the 12-character default is the staff password policy, not this one).
-    if (password.length < 6) return problem(c, 400, 'Weak Password', 'Password must be at least 6 characters.');
-    if (displayName.length < 1 || displayName.length > 160) return problem(c, 400, 'Invalid Name', 'Display name must be 1–160 characters.');
+    if (password.length < 6)
+      return problem(c, 400, 'Weak Password', 'Password must be at least 6 characters.');
+    if (displayName.length < 1 || displayName.length > 160)
+      return problem(c, 400, 'Invalid Name', 'Display name must be 1–160 characters.');
 
     try {
       const crypto = cryptoPort();
@@ -590,33 +665,18 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   });
 
   // ── GET /v1/consumer-auth/lookup/:claimNumber (deprecated) ──
-  // Formally registered so the OpenAPI document can advertise `deprecated: true`;
-  // the response still carries PII by contract — consumers must migrate to
-  // POST /v1/case-status-lookups.
+  // H1 (plan v3): response trimmed to the §9.9 whitelist — identical in shape
+  // to POST /v1/case-status-lookups. The phone factor only gates access during
+  // the transition window (G8); it is never echoed back.
   app.openapi(legacyConsumerAuthLookupRoute, async (c) => {
     const claimNumber = c.req.valid('param').claimNumber.trim().toUpperCase();
     const phone = c.req.valid('query').phone.trim();
     if (!phone) return problem(c, 400, 'Invalid Request', 'phone is required.');
 
     try {
-      const [row] = await db()
-        .db.select({ caseId: recallCases.id })
-        .from(recallCases)
-        .where(eq(recallCases.publicReference, claimNumber))
-        .limit(1);
-      if (!row) return problem(c, 404, 'Not Found', 'Claim was not found.');
-      const claim = await buildConsumerClaim(row.caseId);
-      if (!claim || claim.consumerPhone.trim() !== phone) {
-        return problem(c, 404, 'Not Found', 'Claim was not found.');
-      }
-      return c.json({
-        claim,
-        campaignTitle: claim.campaignTitle,
-        productName: claim.productName,
-        remedyTitle: claim.remedyTitle,
-        remedyType: claim.remedyType,
-        refundAmount: claim.refundAmount,
-      });
+      const view = await lookupLegacyClaimView(claimNumber, phone);
+      if (!view) return problem(c, 404, 'Not Found', 'Claim was not found.');
+      return c.json(caseStatusLookupResponseSchema.parse(view));
     } catch (err) {
       return problem(
         c,

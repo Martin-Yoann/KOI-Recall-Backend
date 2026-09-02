@@ -101,5 +101,6 @@ jobs:
           tests/product-check-integration.test.ts
           tests/case-integration.test.ts
           tests/case-http-integration.test.ts
+          tests/consumer-auth-lookup.integration.test.ts
           tests/outbox-worker.integration.test.ts
           tests/draft-cleanup-worker.integration.test.ts
