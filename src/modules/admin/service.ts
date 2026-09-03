@@ -21,12 +21,7 @@ import type { WorkflowSnapshot } from '../workflow/policy.js';
  * - incident      — any non-terminal case flagged as an injury/safety incident
  */
 export type AdminQueue =
-  | 'standard'
-  | 'manual_review'
-  | 'incident'
-  | 'need_info'
-  | 'decision'
-  | 'closure';
+  'standard' | 'manual_review' | 'incident' | 'need_info' | 'decision' | 'closure';
 
 export interface AdminCaseSummary {
   caseReference: string;
@@ -53,13 +48,18 @@ export interface ListCasesFilter {
 
 /** A stable, forward-only cursor over (submittedAt, id) — opaque to callers. */
 export function buildCaseListCursor(submittedAt: Date, id: string): string {
-  return Buffer.from(JSON.stringify({ s: submittedAt.toISOString(), i: id }), 'utf8').toString('base64url');
+  return Buffer.from(JSON.stringify({ s: submittedAt.toISOString(), i: id }), 'utf8').toString(
+    'base64url',
+  );
 }
 
 /** Decodes a case-list cursor; returns null when malformed. */
 export function parseCaseListCursor(cursor: string): { submittedAt: Date; id: string } | null {
   try {
-    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { s?: string; i?: string };
+    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
+      s?: string;
+      i?: string;
+    };
     if (!raw?.s || !raw?.i) return null;
     const submittedAt = new Date(raw.s);
     if (Number.isNaN(submittedAt.getTime()) || !/^[0-9a-f-]{36}$/i.test(raw.i)) return null;
@@ -217,13 +217,18 @@ export interface IncidentListPage {
 
 /** A stable, forward-only cursor over (createdAt, id) — opaque to callers. */
 export function buildIncidentCursor(createdAt: Date, id: string): string {
-  return Buffer.from(JSON.stringify({ c: createdAt.toISOString(), i: id }), 'utf8').toString('base64url');
+  return Buffer.from(JSON.stringify({ c: createdAt.toISOString(), i: id }), 'utf8').toString(
+    'base64url',
+  );
 }
 
 /** Decodes an incident cursor; returns null when malformed. */
 export function parseIncidentCursor(cursor: string): { createdAt: Date; id: string } | null {
   try {
-    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { c?: string; i?: string };
+    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
+      c?: string;
+      i?: string;
+    };
     if (!raw?.c || !raw?.i) return null;
     const createdAt = new Date(raw.c);
     if (Number.isNaN(createdAt.getTime()) || !/^[0-9a-f-]{36}$/i.test(raw.i)) return null;
@@ -289,8 +294,14 @@ export interface AdminCaseDetail {
 
 export interface GetCaseDetailInput {
   caseReference: string;
-  /** The resolved role of the viewer — decides masked vs raw. */
+  /** The resolved role of the viewer — gates `piiLevel: 'raw'` requests. */
   viewerRole: StaffRole;
+  /**
+   * Requested PII tier. Detail reads are masked unless the caller explicitly
+   * asks for raw; a raw request is honored only when `viewerRole` holds the
+   * raw-PII permission (every honored raw read is audited as `pii.view_raw`).
+   */
+  piiLevel: 'masked' | 'raw';
 }
 
 /**
@@ -331,8 +342,9 @@ export interface AdminService {
   closeReportabilityReview(reviewId: string, input: CloseReportabilityReviewInput): Promise<void>;
 
   /**
-   * ADR-0004 B8: case detail with two-tier PII. `viewerRole` decides masked vs
-   * raw. Returns null when the case reference does not exist.
+   * ADR-0004 B8: case detail with two-tier PII. Raw PII is returned only when
+   * `piiLevel: 'raw'` is requested and `viewerRole` permits it. Returns null
+   * when the case reference does not exist.
    */
   getCaseDetail(input: GetCaseDetailInput): Promise<AdminCaseDetail | null>;
 

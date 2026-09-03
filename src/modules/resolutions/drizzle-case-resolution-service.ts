@@ -1,7 +1,12 @@
 import { eq } from 'drizzle-orm';
 
 import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
-import { adminAuditEvents, caseEvents, caseResolutions } from '../../db/schema/index.js';
+import {
+  adminAuditEvents,
+  caseEvents,
+  caseResolutions,
+  recallCases,
+} from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import {
   ClaimConflictError,
@@ -129,6 +134,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         input.actorRole,
         'resolution.approve',
         input.caseId,
+        locked.id,
         {
           resolutionType,
           ...(refundAmountMinor !== null ? { refundAmountMinor } : {}),
@@ -179,6 +185,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         input.actorRole,
         'resolution.complete',
         input.caseId,
+        locked.id,
         {
           ...(input.externalReference ? { externalReference: input.externalReference } : {}),
         },
@@ -229,6 +236,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         input.actorRole,
         'resolution.cancel',
         input.caseId,
+        locked.id,
         {},
       );
 
@@ -285,16 +293,27 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
     actorRole: StaffRole,
     action: string,
     caseId: string,
+    resolutionId: string,
     metadata: Record<string, unknown>,
   ): Promise<void> {
+    // Resolution actions share the case-scoped audit identity (resourceType
+    // 'case', resourceId = public reference) so per-case audit queries — the
+    // case detail trail, /access filters — see them alongside status
+    // transitions. The touched resolution stays identified in metadata.
+    const [caseRow] = await tx
+      .select({ reference: recallCases.publicReference })
+      .from(recallCases)
+      .where(eq(recallCases.id, caseId))
+      .limit(1);
+    if (!caseRow) throw new Error('Resolution audit could not resolve the case reference.');
     await tx.insert(adminAuditEvents).values({
       actorUserId,
       actorRole,
       action,
-      resourceType: 'case_resolution',
-      resourceId: caseId,
+      resourceType: 'case',
+      resourceId: caseRow.reference,
       outcome: 'success',
-      metadata,
+      metadata: { ...metadata, resolutionId },
     });
   }
 }

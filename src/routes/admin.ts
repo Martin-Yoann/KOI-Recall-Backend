@@ -478,16 +478,13 @@ export function registerAdminRoutes(
     if (guard instanceof Response) return guard;
     const queueParam = context.req.query('queue');
     const queue = (
-      [
-        'standard',
-        'manual_review',
-        'incident',
-        'need_info',
-        'decision',
-        'closure',
-      ] as const
-    ).includes(queueParam as 'standard' | 'manual_review' | 'incident' | 'need_info' | 'decision' | 'closure')
-      ? (queueParam as 'standard' | 'manual_review' | 'incident' | 'need_info' | 'decision' | 'closure')
+      ['standard', 'manual_review', 'incident', 'need_info', 'decision', 'closure'] as const
+    ).includes(
+      queueParam as
+        'standard' | 'manual_review' | 'incident' | 'need_info' | 'decision' | 'closure',
+    )
+      ? (queueParam as
+          'standard' | 'manual_review' | 'incident' | 'need_info' | 'decision' | 'closure')
       : undefined;
     const status = context.req.query('status') ?? undefined;
     const resolutionType = context.req.query('resolutionType');
@@ -561,11 +558,18 @@ export function registerAdminRoutes(
     const page = await admin.listIncidents({
       ...(search ? { search } : {}),
       ...(severity ? { severity } : {}),
-      ...((reportabilityStatus === 'pending' || reportabilityStatus === 'filed' || reportabilityStatus === 'documented_non_reportable') ? { reportabilityStatus } : {}),
+      ...(reportabilityStatus === 'pending' ||
+      reportabilityStatus === 'filed' ||
+      reportabilityStatus === 'documented_non_reportable'
+        ? { reportabilityStatus }
+        : {}),
       limit,
       ...(cursor ? { cursor } : {}),
     });
-    return context.json({ incidents: page.incidents, total: page.total, nextCursor: page.nextCursor }, 200);
+    return context.json(
+      { incidents: page.incidents, total: page.total, nextCursor: page.nextCursor },
+      200,
+    );
   });
 
   app.get('/admin/incidents/:id', async (context) => {
@@ -604,9 +608,16 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'case.detail.read');
     if (guard instanceof Response) return guard;
     const caseRef = context.req.param('caseRef');
+    // PII tier must be requested explicitly; masked is the only default so a
+    // casual detail read never decrypts consumer data (raw reads are audited).
+    const rawPii = context.req.query('pii') ?? 'masked';
+    if (rawPii !== 'masked' && rawPii !== 'raw') {
+      return validationError(context, 'pii must be either "masked" or "raw".');
+    }
     const detail = await registry.services.admin?.getCaseDetail({
       caseReference: caseRef,
       viewerRole: guard.role,
+      piiLevel: rawPii,
     });
     if (!detail) {
       return json(context, 404, {
@@ -883,17 +894,28 @@ export function registerAdminRoutes(
   });
 
   app.post('/admin/refund-exports', async (context) => {
-<<<<<<< HEAD
     try {
       const guard = await requirePermission(context, registry, 'case.export');
       if (guard instanceof Response) return guard;
       const service = registry.services.refundExports;
-      if (!service) return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
+      if (!service)
+        return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
       const body = await bodyRecord(context);
       const purpose = asString(body.purpose) ?? '';
-      if (purpose.trim().length === 0 || purpose.length > 500) return validationError(context, 'purpose is required and must be at most 500 characters.');
-      const result = await service.export({ actorUserId: guard.userId, actorRole: guard.role, purpose, includeExported: body.includeExported === true });
-      return context.body(result.csv, 200, { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="refund-export-${result.batchId}.csv"`, 'X-Refund-Export-Batch-Id': result.batchId, 'X-Refund-Export-Sha256': result.sha256 });
+      if (purpose.trim().length === 0 || purpose.length > 500)
+        return validationError(context, 'purpose is required and must be at most 500 characters.');
+      const result = await service.export({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        purpose,
+        includeExported: body.includeExported === true,
+      });
+      return context.body(result.csv, 200, {
+        'Content-Type': 'text/csv; charset=utf-8',
+        'Content-Disposition': `attachment; filename="refund-export-${result.batchId}.csv"`,
+        'X-Refund-Export-Batch-Id': result.batchId,
+        'X-Refund-Export-Sha256': result.sha256,
+      });
     } catch (error: unknown) {
       console.error('Backend Export Error:', error);
       const detail = error instanceof Error ? error.message : 'Failed to complete the request.';
@@ -902,29 +924,6 @@ export function registerAdminRoutes(
       }
       return json(context, 500, { title: 'Internal Server Error', status: 500, detail });
     }
-=======
-    const guard = await requirePermission(context, registry, 'case.export');
-    if (guard instanceof Response) return guard;
-    const service = registry.services.refundExports;
-    if (!service)
-      return json(context, 501, { title: 'Refund export service not configured.', status: 501 });
-    const body = await bodyRecord(context);
-    const purpose = asString(body.purpose) ?? '';
-    if (purpose.trim().length === 0 || purpose.length > 500)
-      return validationError(context, 'purpose is required and must be at most 500 characters.');
-    const result = await service.export({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      purpose,
-      includeExported: body.includeExported === true,
-    });
-    return context.body(result.csv, 200, {
-      'Content-Type': 'text/csv; charset=utf-8',
-      'Content-Disposition': `attachment; filename="refund-export-${result.batchId}.csv"`,
-      'X-Refund-Export-Batch-Id': result.batchId,
-      'X-Refund-Export-Sha256': result.sha256,
-    });
->>>>>>> cbd31efe03510348e5f73a80a1e27d7ec6e2781e
   });
   // ---- Reportability review close (review.close) ----
 
@@ -975,7 +974,9 @@ export function registerAdminRoutes(
     const since = q('since') ?? undefined;
     const until = q('until') ?? undefined;
     const outcomeParam = q('outcome');
-    const outcome = (['success', 'denied', 'error'] as const).includes(outcomeParam as 'success' | 'denied' | 'error')
+    const outcome = (['success', 'denied', 'error'] as const).includes(
+      outcomeParam as 'success' | 'denied' | 'error',
+    )
       ? (outcomeParam as 'success' | 'denied' | 'error')
       : undefined;
     const page = await audit.query({

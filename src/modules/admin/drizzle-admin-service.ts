@@ -123,15 +123,14 @@ export class DrizzleAdminService implements AdminService {
     } else if (cursor) {
       cursorCondition = or(
         lt(recallCases.submittedAt, cursor.submittedAt),
-        and(
-          eq(recallCases.submittedAt, cursor.submittedAt),
-          lt(recallCases.id, cursor.id),
-        ),
+        and(eq(recallCases.submittedAt, cursor.submittedAt), lt(recallCases.id, cursor.id)),
       );
     }
 
     const pageWhere = cursorCondition
-      ? (filterWhere ? and(filterWhere, cursorCondition) : cursorCondition)
+      ? filterWhere
+        ? and(filterWhere, cursorCondition)
+        : cursorCondition
       : filterWhere;
 
     const rows = await db
@@ -148,20 +147,34 @@ export class DrizzleAdminService implements AdminService {
       .orderBy(desc(recallCases.submittedAt), desc(recallCases.id))
       .limit(filter.limit);
 
-<<<<<<< HEAD
     // Total matching rows for the *filter* (cursor excluded) so the UI can
     // render "page x of total" without a second request.
-    const [totalRow] = await db
-      .select({ value: count() })
-      .from(recallCases)
-      .where(filterWhere);
+    const [totalRow] = await db.select({ value: count() }).from(recallCases).where(filterWhere);
     const total = Number(totalRow?.value ?? 0);
 
-    const cases = await Promise.all(rows.map(async (row): Promise<AdminCaseSummary> => {
-      const resolution = await db.select({ requestedType: caseResolutions.requestedType, approvedType: caseResolutions.approvedType, status: caseResolutions.status }).from(caseResolutions).where(eq(caseResolutions.caseId, row.id)).limit(1);
-      const workflow = await this.workflowFor(row);
-      return { caseReference: row.caseReference, status: row.status, subtype: row.subtype, incidentFlag: row.incidentFlag, submittedAt: row.submittedAt.toISOString(), ...(resolution[0] ? { resolution: resolution[0] } : { resolution: null }), ...(workflow ? { workflow } : {}) };
-    }));
+    const cases = await Promise.all(
+      rows.map(async (row): Promise<AdminCaseSummary> => {
+        const [resolution] = await db
+          .select({
+            requestedType: caseResolutions.requestedType,
+            approvedType: caseResolutions.approvedType,
+            status: caseResolutions.status,
+          })
+          .from(caseResolutions)
+          .where(eq(caseResolutions.caseId, row.id))
+          .limit(1);
+        const workflow = await this.workflowFor(row);
+        return {
+          caseReference: row.caseReference,
+          status: row.status,
+          subtype: row.subtype,
+          incidentFlag: row.incidentFlag,
+          submittedAt: row.submittedAt.toISOString(),
+          ...(resolution ? { resolution } : { resolution: null }),
+          ...(workflow ? { workflow } : {}),
+        };
+      }),
+    );
 
     // When a page fills the limit, look ahead by one row to know whether
     // another page exists (avoids a dangling "next" on the last page).
@@ -171,17 +184,15 @@ export class DrizzleAdminService implements AdminService {
       const [lookahead] = await db
         .select({ id: recallCases.id })
         .from(recallCases)
-        .where(and(
-          pageWhere,
-          or(
-            lt(recallCases.submittedAt, last.submittedAt),
-              and(
-                eq(recallCases.submittedAt, last.submittedAt),
-                lt(recallCases.id, last.id),
-              ),
+        .where(
+          and(
+            pageWhere,
+            or(
+              lt(recallCases.submittedAt, last.submittedAt),
+              and(eq(recallCases.submittedAt, last.submittedAt), lt(recallCases.id, last.id)),
             ),
-
-        ))
+          ),
+        )
         .limit(1);
       if (lookahead) {
         nextCursor = buildCaseListCursor(last.submittedAt, last.id);
@@ -189,43 +200,6 @@ export class DrizzleAdminService implements AdminService {
     }
 
     return { cases, total, nextCursor };
-=======
-    return Promise.all(
-      rows.map(async (row): Promise<AdminCaseSummary> => {
-        const [caseRow] = await db
-          .select({
-            id: recallCases.id,
-            status: recallCases.status,
-            subtype: recallCases.subtype,
-            incidentFlag: recallCases.incidentFlag,
-          })
-          .from(recallCases)
-          .where(eq(recallCases.publicReference, row.caseReference))
-          .limit(1);
-        const resolution = caseRow
-          ? await db
-              .select({
-                requestedType: caseResolutions.requestedType,
-                approvedType: caseResolutions.approvedType,
-                status: caseResolutions.status,
-              })
-              .from(caseResolutions)
-              .where(eq(caseResolutions.caseId, caseRow.id))
-              .limit(1)
-          : [];
-        const workflow = caseRow ? await this.workflowFor(caseRow) : undefined;
-        return {
-          caseReference: row.caseReference,
-          status: row.status,
-          subtype: row.subtype,
-          incidentFlag: row.incidentFlag,
-          submittedAt: row.submittedAt.toISOString(),
-          ...(resolution[0] ? { resolution: resolution[0] } : { resolution: null }),
-          ...(workflow ? { workflow } : {}),
-        };
-      }),
-    );
->>>>>>> cbd31efe03510348e5f73a80a1e27d7ec6e2781e
   }
 
   async exportCases(): Promise<AdminCaseSummary[]> {
@@ -270,14 +244,13 @@ export class DrizzleAdminService implements AdminService {
     } else if (cursor) {
       cursorCondition = or(
         lt(incidents.createdAt, cursor.createdAt),
-        and(
-          eq(incidents.createdAt, cursor.createdAt),
-          lt(incidents.id, cursor.id),
-        ),
+        and(eq(incidents.createdAt, cursor.createdAt), lt(incidents.id, cursor.id)),
       );
     }
     const pageWhere = cursorCondition
-      ? (filterWhere ? and(filterWhere, cursorCondition) : cursorCondition)
+      ? filterWhere
+        ? and(filterWhere, cursorCondition)
+        : cursorCondition
       : filterWhere;
 
     const rows = await db
@@ -318,13 +291,15 @@ export class DrizzleAdminService implements AdminService {
       const [lookahead] = await db
         .select({ id: incidents.id })
         .from(incidents)
-        .where(and(
-          pageWhere,
-          or(
-            lt(incidents.createdAt, last.createdAt),
-            and(eq(incidents.createdAt, last.createdAt), lt(incidents.id, last.id)),
+        .where(
+          and(
+            pageWhere,
+            or(
+              lt(incidents.createdAt, last.createdAt),
+              and(eq(incidents.createdAt, last.createdAt), lt(incidents.id, last.id)),
+            ),
           ),
-        ))
+        )
         .limit(1);
       if (lookahead) nextCursor = buildIncidentCursor(last.createdAt, last.id);
     }
@@ -541,7 +516,10 @@ export class DrizzleAdminService implements AdminService {
       .where(eq(caseConsumers.caseId, caseRow.id))
       .limit(1);
 
-    const tier = piiTierFor(input.viewerRole);
+    // Fail closed: raw PII only on an explicit raw request from a role that
+    // holds the raw-PII permission. Every honored raw read is audited by the
+    // route as `pii.view_raw`.
+    const tier = input.piiLevel === 'raw' ? piiTierFor(input.viewerRole) : 'masked';
     const consumer = consumerRow
       ? await this.renderConsumer(consumerRow, tier)
       : ({ piiTier: tier } as CaseDetailConsumer);

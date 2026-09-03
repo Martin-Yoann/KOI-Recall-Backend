@@ -191,8 +191,11 @@ function makeAdminFake(): AdminService & { detailTierByRef: Map<string, 'masked'
       return [];
     },
     async closeReportabilityReview() {},
-    async getCaseDetail({ caseReference, viewerRole }) {
-      const tier = viewerRole === 'MANAGER' || viewerRole === 'ADMIN' ? 'raw' : 'masked';
+    async getCaseDetail({ caseReference, viewerRole, piiLevel }) {
+      const tier =
+        piiLevel === 'raw' && (viewerRole === 'MANAGER' || viewerRole === 'ADMIN')
+          ? 'raw'
+          : 'masked';
       detailTierByRef.set(caseReference, tier);
       return {
         caseReference,
@@ -458,7 +461,7 @@ describe('B-end RBAC (ADR-0004)', () => {
     );
   });
 
-  it('returns raw PII for both MANAGER and ADMIN, with raw-view audits', async () => {
+  it('returns raw PII for MANAGER and ADMIN only on an explicit raw request, with raw-view audits', async () => {
     const staff = makeStaffFake();
     const admin = makeAdminFake();
     const audit = makeAuditFake();
@@ -480,8 +483,21 @@ describe('B-end RBAC (ADR-0004)', () => {
     const app = appWith({ admin, staff, audit });
     const ref = 'KOI-7N4Q-A91M2X6P';
 
+    // Default and explicit masked reads stay masked for every role.
+    for (const query of ['', '?pii=masked']) {
+      const maskedResponse = await app.request(`/admin/cases/${ref}${query}`, {
+        headers: { Authorization: `Bearer ${managerToken}` },
+      });
+      expect(maskedResponse.status).toBe(200);
+      const maskedBody = (await maskedResponse.json()) as {
+        case: { consumer: { piiTier: string; firstName: string } };
+      };
+      expect(maskedBody.case.consumer.piiTier).toBe('masked');
+      expect(maskedBody.case.consumer.firstName).toBe('J•');
+    }
+
     for (const token of [managerToken, adminToken]) {
-      const response = await app.request(`/admin/cases/${ref}`, {
+      const response = await app.request(`/admin/cases/${ref}?pii=raw`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       expect(response.status).toBe(200);
@@ -492,6 +508,24 @@ describe('B-end RBAC (ADR-0004)', () => {
       expect(body.case.consumer.firstName).toBe('Jane');
     }
     expect(audit.events.filter((e) => e.action === 'pii.view_raw')).toHaveLength(2);
+  });
+
+  it('rejects an unknown pii tier with 422', async () => {
+    const staff = makeStaffFake();
+    await staff.createStaffUser({
+      email: 'manager-pii@x.com',
+      displayName: 'Manager',
+      role: 'MANAGER',
+      password: 'password1234',
+    });
+    const token = (await staff.login('manager-pii@x.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit: makeAuditFake() });
+
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P?pii=decrypted', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+
+    expect(response.status).toBe(422);
   });
 
   it('fails closed when the raw-PII audit write fails', async () => {
@@ -505,7 +539,7 @@ describe('B-end RBAC (ADR-0004)', () => {
     const token = (await staff.login('compliance@example.com', 'password1234'))!.token;
     const app = appWith({ admin: makeAdminFake(), staff, audit: makeFailingAuditFake() });
 
-    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P', {
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P?pii=raw', {
       headers: { Authorization: `Bearer ${token}` },
     });
 
@@ -649,7 +683,6 @@ describe('B-end RBAC (ADR-0004)', () => {
     const staff = makeStaffFake();
     const admin = makeAdminFake();
     admin.listIncidents = () =>
-<<<<<<< HEAD
       Promise.resolve({
         incidents: [
           {
@@ -662,34 +695,18 @@ describe('B-end RBAC (ADR-0004)', () => {
             medicalTreatment: 'yes',
             occurredAt: '2026-08-01T00:00:00.000Z',
             createdAt: '2026-08-02T00:00:00.000Z',
-            reportability: { id: 'r-1', status: 'pending', cpscReference: null, filedAt: null, decisionAt: null },
+            reportability: {
+              id: 'r-1',
+              status: 'pending',
+              cpscReference: null,
+              filedAt: null,
+              decisionAt: null,
+            },
           },
         ],
         total: 1,
         nextCursor: null,
       });
-=======
-      Promise.resolve([
-        {
-          id: 'i-1',
-          caseReference: 'KOI-7N4Q-A91M2X6P',
-          caseStatus: 'triage',
-          answer: 'yes',
-          eventTypes: ['burn'],
-          injurySeverity: 'moderate',
-          medicalTreatment: 'yes',
-          occurredAt: '2026-08-01T00:00:00.000Z',
-          createdAt: '2026-08-02T00:00:00.000Z',
-          reportability: {
-            id: 'r-1',
-            status: 'pending',
-            cpscReference: null,
-            filedAt: null,
-            decisionAt: null,
-          },
-        },
-      ]);
->>>>>>> cbd31efe03510348e5f73a80a1e27d7ec6e2781e
     await staff.createStaffUser({
       email: 'v2@x.com',
       displayName: 'Viewer2',
