@@ -10,7 +10,10 @@ import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { createApp } from '../src/app.js';
 import { createApplicationRegistry } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
-import { claimSubmissionResponseSchema, type ClaimSubmissionRequest } from '../src/contracts/toc.js';
+import {
+  claimSubmissionResponseSchema,
+  type ClaimSubmissionRequest,
+} from '../src/contracts/toc.js';
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
 import { caseConsumers } from '../src/db/schema/index.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
@@ -46,9 +49,7 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
     await handle?.close();
   });
 
-  it(
-    'submits and idempotently replays a seeded claim through Hono app.request',
-    async () => {
+  it('submits and idempotently replays a seeded claim through Hono app.request', async () => {
     fixture = await createClaimFixture(handle!);
     const crypto = new NodeSensitiveDataCrypto(config.FIELD_ENCRYPTION_KEY!, config.HASH_PEPPER!);
     const registry = createApplicationRegistry(handle!, undefined, crypto);
@@ -212,13 +213,9 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
         `idempotencyRecords=${replayAggregate.idempotency.length}`,
       ].join('\n') + '\n',
     );
-    },
-    30000,
-  );
+  }, 30000);
 
-  it(
-    'returns identical safe 410 problems before consulting a used endpoint key',
-    async () => {
+  it('returns identical safe 410 problems before consulting a used endpoint key', async () => {
     fixture = await createClaimFixture(handle!);
     const crypto = new NodeSensitiveDataCrypto(config.FIELD_ENCRYPTION_KEY!, config.HASH_PEPPER!);
     const registry = createApplicationRegistry(handle!, undefined, crypto);
@@ -281,7 +278,5 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
       expect(serializedProblem).not.toContain(secretOrExistenceDetail);
     }
     await expect(countCasesForDraft(handle!, fixture.draftId)).resolves.toBe(1);
-    },
-    30000,
-  );
+  }, 30000);
 });

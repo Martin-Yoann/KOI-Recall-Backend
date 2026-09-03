@@ -10,7 +10,11 @@ import {
   staffUsers,
 } from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
-import { ClaimConflictError, ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
+import {
+  ClaimConflictError,
+  ClaimValidationError,
+  ResourceNotFoundError,
+} from '../../shared/errors.js';
 import { hashPassword, verifyPassword } from './password.js';
 import {
   DEFAULT_SESSION_LIFETIME_MS,
@@ -192,7 +196,9 @@ export class DrizzleStaffService implements StaffService {
     try {
       passwordHash = await hashPassword(input.newPassword);
     } catch (err) {
-      throw new ClaimValidationError(err instanceof Error ? err.message : 'New password is invalid.');
+      throw new ClaimValidationError(
+        err instanceof Error ? err.message : 'New password is invalid.',
+      );
     }
 
     await this.db
@@ -202,7 +208,10 @@ export class DrizzleStaffService implements StaffService {
 
     // Revoke every other active session so the new password is required
     // elsewhere, but keep the caller's own session alive.
-    const sessionConditions = [eq(staffSessions.userId, user.id), eq(staffSessions.status, 'active')];
+    const sessionConditions = [
+      eq(staffSessions.userId, user.id),
+      eq(staffSessions.status, 'active'),
+    ];
     if (input.keepSessionId) sessionConditions.push(ne(staffSessions.id, input.keepSessionId));
     await this.db
       .update(staffSessions)

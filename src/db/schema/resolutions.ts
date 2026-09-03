@@ -26,10 +26,7 @@ const timestamps = {
  * row per Recall Case tracks the requested preference and the operationally
  * approved decision. The enum is deliberately closed — no free-form string.
  */
-export const caseResolutionTypeEnum = pgEnum('case_resolution_type', [
-  'replacement',
-  'refund',
-]);
+export const caseResolutionTypeEnum = pgEnum('case_resolution_type', ['replacement', 'refund']);
 
 /**
  * Resolution lifecycle. `exported` is intentionally NOT a status — an export is

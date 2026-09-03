@@ -227,9 +227,11 @@ export const legacyConsumerAuthLookupRoute = createRoute({
   path: '/v1/consumer-auth/lookup/{claimNumber}',
   deprecated: true,
   tags: ['Case status'],
-  summary: '[Deprecated] Legacy claim lookup returning the full claim object',
+  summary: '[Deprecated] Legacy claim lookup returning the whitelisted public status view',
   description:
-    'Returns a PII-bearing claim summary and is scheduled for removal after the transition window. ' +
+    'The response carries the §9.9 whitelist only — identical in shape to POST /v1/case-status-lookups. ' +
+    'The phone query factor is a transition-period compatibility match and is never echoed back; ' +
+    'the endpoint is scheduled for removal once Consumer Front migrates. ' +
     'New integrations must use POST /v1/case-status-lookups instead.',
   request: {
     params: z.object({ claimNumber: z.string().min(3).max(32) }),
@@ -237,7 +239,7 @@ export const legacyConsumerAuthLookupRoute = createRoute({
   },
   responses: {
     200: {
-      description: 'Full legacy claim object (contains consumer PII).',
+      description: 'Whitelisted public view, same schema as POST /v1/case-status-lookups. No PII.',
       content: { 'application/json': { schema: legacyConsumerClaimLookupResponseSchema } },
     },
     ...commonProblemResponses,

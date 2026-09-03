@@ -201,7 +201,10 @@ function stageKey(state: WorkflowCaseState): StageKey {
 }
 
 /** Case status transitions after the ADR §8.2 closure gates are applied. */
-function allowedCaseTransitions(state: WorkflowCaseState): { actions: string[]; blocking: string[] } {
+function allowedCaseTransitions(state: WorkflowCaseState): {
+  actions: string[];
+  blocking: string[];
+} {
   const base = [...BASE_TRANSITIONS[state.caseStatus]];
   const blocking: string[] = [];
 

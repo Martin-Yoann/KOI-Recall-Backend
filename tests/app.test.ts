@@ -86,8 +86,12 @@ describe('HTTP application shell', () => {
 
     expect(allowed.headers.get('Access-Control-Allow-Origin')).toBe('https://consumer.example.com');
     expect(allowed.headers.get('Access-Control-Expose-Headers')).toContain('Content-Disposition');
-    expect(allowed.headers.get('Access-Control-Expose-Headers')).toContain('X-Refund-Export-Batch-Id');
-    expect(allowed.headers.get('Access-Control-Expose-Headers')).toContain('X-Refund-Export-Sha256');
+    expect(allowed.headers.get('Access-Control-Expose-Headers')).toContain(
+      'X-Refund-Export-Batch-Id',
+    );
+    expect(allowed.headers.get('Access-Control-Expose-Headers')).toContain(
+      'X-Refund-Export-Sha256',
+    );
     expect(denied.headers.get('Access-Control-Allow-Origin')).toBeNull();
   });
 

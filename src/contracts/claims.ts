@@ -54,37 +54,36 @@ export const incidentDetailsSchema = z
   })
   .openapi('IncidentDetailsInput');
 
-const claimSubmissionRequestObject = z
-  .object({
-    draftId: uuid,
-    draftToken: z.string().min(32),
-    locale: z.literal('en-US'),
-    consumer: z.object({
-      firstName: z.string().trim().min(1).max(100),
-      lastName: z.string().trim().min(1).max(100),
-      email: z.string().email().max(254),
-      phone: z.string().max(40).optional(),
-      // M3/T4.1: current delivery address for Replacement fulfilment, optional
-      // at the contract layer — the service enforces it per Remedy (D4/D8).
-      // The original order address lives inside purchaseEvidence and is never
-      // auto-copied here.
-      currentDeliveryAddress: addressSchema.optional(),
-    }),
-    products: z.array(claimedProductSchema).min(1).max(20),
-    remedyCode: z.string().min(1).max(60),
-    documentIds: z.array(uuid).max(20),
-    consents: z
-      .array(
-        z.object({
-          type: z.enum(['privacy_notice', 'information_accuracy']),
-          textVersion: z.string().min(1).max(80),
-          accepted: z.literal(true),
-        }),
-      )
-      .min(2),
-    incidentAnswer: z.enum(['no', 'yes', 'unsure']),
-    incidentDetails: incidentDetailsSchema.optional(),
-  });
+const claimSubmissionRequestObject = z.object({
+  draftId: uuid,
+  draftToken: z.string().min(32),
+  locale: z.literal('en-US'),
+  consumer: z.object({
+    firstName: z.string().trim().min(1).max(100),
+    lastName: z.string().trim().min(1).max(100),
+    email: z.string().email().max(254),
+    phone: z.string().max(40).optional(),
+    // M3/T4.1: current delivery address for Replacement fulfilment, optional
+    // at the contract layer — the service enforces it per Remedy (D4/D8).
+    // The original order address lives inside purchaseEvidence and is never
+    // auto-copied here.
+    currentDeliveryAddress: addressSchema.optional(),
+  }),
+  products: z.array(claimedProductSchema).min(1).max(20),
+  remedyCode: z.string().min(1).max(60),
+  documentIds: z.array(uuid).max(20),
+  consents: z
+    .array(
+      z.object({
+        type: z.enum(['privacy_notice', 'information_accuracy']),
+        textVersion: z.string().min(1).max(80),
+        accepted: z.literal(true),
+      }),
+    )
+    .min(2),
+  incidentAnswer: z.enum(['no', 'yes', 'unsure']),
+  incidentDetails: incidentDetailsSchema.optional(),
+});
 
 export const claimSubmissionRequestSchema = claimSubmissionRequestObject
   .superRefine((value: z.infer<typeof claimSubmissionRequestObject>, context: z.RefinementCtx) => {

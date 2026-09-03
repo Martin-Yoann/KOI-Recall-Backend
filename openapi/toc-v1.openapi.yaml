@@ -543,108 +543,6 @@ components:
       required:
         - narrative
       type: object
-    LegacyConsumerClaim:
-      properties:
-        campaignId:
-          format: uuid
-          type: string
-        campaignSlug:
-          type: string
-        campaignTitle:
-          type: string
-        caseRef:
-          type: string
-        claimNumber:
-          type: string
-        consumerEmail:
-          type: string
-        consumerName:
-          type: string
-        consumerPhone:
-          type: string
-        dateCode:
-          type: string
-        evidenceCount:
-          type: integer
-        flavor:
-          type: string
-        id:
-          format: uuid
-          type: string
-        infoRequest:
-          type: string
-        lotCode:
-          type: string
-        productName:
-          type: string
-        refundAmount:
-          type: number
-        remedyId:
-          type: string
-        remedyTitle:
-          type: string
-        remedyType:
-          type: string
-        resolutionDate:
-          type: string
-        shape:
-          type: string
-        status:
-          $ref: "#/components/schemas/LegacyConsumerClaimStatus"
-        submittedAt:
-          type: string
-        updatedAt:
-          type: string
-      required:
-        - id
-        - claimNumber
-        - caseRef
-        - campaignId
-        - campaignTitle
-        - campaignSlug
-        - consumerName
-        - consumerEmail
-        - consumerPhone
-        - productName
-        - remedyId
-        - remedyTitle
-        - remedyType
-        - status
-        - evidenceCount
-        - submittedAt
-        - updatedAt
-      type: object
-    LegacyConsumerClaimLookupResponse:
-      properties:
-        campaignTitle:
-          type: string
-        claim:
-          $ref: "#/components/schemas/LegacyConsumerClaim"
-        productName:
-          type: string
-        refundAmount:
-          type: number
-        remedyTitle:
-          type: string
-        remedyType:
-          type: string
-      required:
-        - claim
-        - campaignTitle
-        - productName
-        - remedyTitle
-        - remedyType
-      type: object
-    LegacyConsumerClaimStatus:
-      enum:
-        - submitted
-        - under_review
-        - action_required
-        - verified
-        - remedy_issued
-        - resolved
-        - rejected
-      type: string
     ProblemDetails:
       properties:
         detail:
@@ -1273,7 +1171,7 @@ paths:
   /v1/consumer-auth/lookup/{claimNumber}:
     get:
       deprecated: true
-      description: Returns a PII-bearing claim summary and is scheduled for removal after the transition window. New integrations must use POST /v1/case-status-lookups instead.
+      description: The response carries the §9.9 whitelist only — identical in shape to POST /v1/case-status-lookups. The phone query factor is a transition-period compatibility match and is never echoed back; the endpoint is scheduled for removal once Consumer Front migrates. New integrations must use POST /v1/case-status-lookups instead.
       parameters:
         - in: path
           name: claimNumber
@@ -1294,8 +1192,8 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/LegacyConsumerClaimLookupResponse"
-          description: Full legacy claim object (contains consumer PII).
+                $ref: "#/components/schemas/CaseStatusLookupResponse"
+          description: Whitelisted public view, same schema as POST /v1/case-status-lookups. No PII.
         "400":
           content:
             application/problem+json:
@@ -1332,7 +1230,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ProblemDetails"
           description: A required dependency is unavailable.
-      summary: "[Deprecated] Legacy claim lookup returning the full claim object"
+      summary: "[Deprecated] Legacy claim lookup returning the whitelisted public status view"
       tags:
         - Case status
   /v1/recall-campaigns/{slug}:

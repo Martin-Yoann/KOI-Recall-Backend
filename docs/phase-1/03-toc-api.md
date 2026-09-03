@@ -426,8 +426,10 @@ resolution_in_progress / completed / not_approved / closed`；标签与下一步
 
 可能错误：`400/404/429/500/501/503`。
 
-### 13.1 旧查询端点弃用
+### 13.1 旧查询端点弃用（H1 已裁剪）
 
-`GET /v1/consumer-auth/lookup/{claimNumber}?phone=` 返回含完整 PII 的 Claim 对象，现已在 OpenAPI 中
-标注 `deprecated: true`，契约原样保留一个过渡窗口。新集成一律使用 `POST /v1/case-status-lookups`，
-过渡窗口结束后旧端点将被移除。
+`GET /v1/consumer-auth/lookup/{claimNumber}?phone=` 早期返回含完整 PII 的 Claim 对象；H1 热修
+（优化计划 v3）后响应已裁剪为与 `POST /v1/case-status-lookups` 完全一致的 §9.9 白名单八字段，
+phone 仅作为过渡期匹配因子、绝不回显，且与状态查询共用 10 次/分钟的限流桶。测试数据
+（`isTestData`）Campaign 在该端点不可见。新集成一律使用 `POST /v1/case-status-lookups`，
+Consumer Front 切换完成后旧端点将被移除（G8/RG-15）。

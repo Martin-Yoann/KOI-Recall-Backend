@@ -3,7 +3,11 @@ import { eq } from 'drizzle-orm';
 import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import { adminAuditEvents, caseEvents, caseResolutions } from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
-import { ClaimConflictError, ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
+import {
+  ClaimConflictError,
+  ClaimValidationError,
+  ResourceNotFoundError,
+} from '../../shared/errors.js';
 import type { StaffRole } from '../staff/permissions.js';
 import type {
   ApproveResolutionInput,
@@ -53,10 +57,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
     private readonly crypto: SensitiveDataCryptoPort,
   ) {}
 
-  async requestFromSubmission(
-    tx: DatabaseExecutor,
-    input: RequestResolutionInput,
-  ): Promise<void> {
+  async requestFromSubmission(tx: DatabaseExecutor, input: RequestResolutionInput): Promise<void> {
     await tx.insert(caseResolutions).values({
       caseId: input.caseId,
       requestedType: input.requestedType,
@@ -122,11 +123,18 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
           ...(currency !== null ? { currency } : {}),
         },
       });
-      await this.recordAudit(tx, input.actorUserId, input.actorRole, 'resolution.approve', input.caseId, {
-        resolutionType,
-        ...(refundAmountMinor !== null ? { refundAmountMinor } : {}),
-        ...(currency !== null ? { currency } : {}),
-      });
+      await this.recordAudit(
+        tx,
+        input.actorUserId,
+        input.actorRole,
+        'resolution.approve',
+        input.caseId,
+        {
+          resolutionType,
+          ...(refundAmountMinor !== null ? { refundAmountMinor } : {}),
+          ...(currency !== null ? { currency } : {}),
+        },
+      );
 
       return toCaseResolution(updated);
     });
@@ -165,9 +173,16 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
           ...(input.externalReference ? { externalReference: input.externalReference } : {}),
         },
       });
-      await this.recordAudit(tx, input.actorUserId, input.actorRole, 'resolution.complete', input.caseId, {
-        ...(input.externalReference ? { externalReference: input.externalReference } : {}),
-      });
+      await this.recordAudit(
+        tx,
+        input.actorUserId,
+        input.actorRole,
+        'resolution.complete',
+        input.caseId,
+        {
+          ...(input.externalReference ? { externalReference: input.externalReference } : {}),
+        },
+      );
 
       return toCaseResolution(updated);
     });
@@ -208,7 +223,14 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         actorId: input.actorUserId,
         data: {},
       });
-      await this.recordAudit(tx, input.actorUserId, input.actorRole, 'resolution.cancel', input.caseId, {});
+      await this.recordAudit(
+        tx,
+        input.actorUserId,
+        input.actorRole,
+        'resolution.cancel',
+        input.caseId,
+        {},
+      );
 
       return toCaseResolution(updated);
     });

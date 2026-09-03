@@ -252,6 +252,9 @@ async function createTemporaryCampaign() {
     versionNumber: 1,
     status: 'published',
     publishedAt: new Date(),
+    // Submission rejects a published version without this (consent freshness
+    // check); must match the fixture consents' textVersion.
+    privacyNoticeVersion: '2026-08-04',
   });
   await handle!.db
     .update(recallCampaigns)
@@ -520,7 +523,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(aggregate.documents.every((row) => row.uploadStatus === 'linked')).toBe(true);
     expect(aggregate.consents).toHaveLength(2);
     expect(aggregate.snapshots).toHaveLength(1);
-    expect(aggregate.events).toHaveLength(1);
+    // Submission records the claim and the requested resolution as two events.
+    expect(aggregate.events.map((row) => row.eventType).sort()).toEqual([
+      'claim.submitted',
+      'resolution.requested',
+    ]);
     expect(aggregate.communications).toHaveLength(1);
     expect(aggregate.outbox).toHaveLength(1);
     expect(aggregate.idempotency).toHaveLength(1);
@@ -557,7 +564,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       communicationId: aggregate.communications[0]?.id,
       caseId: aggregate.case.id,
     });
-    expect(aggregate.events[0]?.data).toEqual({
+    expect(aggregate.events.find((row) => row.eventType === 'claim.submitted')?.data).toEqual({
       locale: 'en-US',
       productCount: 1,
       documentCount: 2,
@@ -978,7 +985,10 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     expect(aggregate.snapshots).toHaveLength(1);
     expect(aggregate.incidents).toHaveLength(0);
     expect(aggregate.reviews).toHaveLength(0);
-    expect(aggregate.events).toHaveLength(1);
+    expect(aggregate.events.map((row) => row.eventType).sort()).toEqual([
+      'claim.submitted',
+      'resolution.requested',
+    ]);
     expect(aggregate.communications).toHaveLength(1);
     expect(aggregate.outbox).toHaveLength(1);
     expect(aggregate.idempotency).toHaveLength(1);

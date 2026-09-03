@@ -245,6 +245,10 @@ async function seed() {
         versionNumber: 1,
         status: 'published',
         publishedAt: new Date('2026-08-04T00:00:00.000Z'),
+        // Claim submission rejects a version without this (consent freshness
+        // check); the fixture consents carry the same textVersion.
+        privacyNoticeVersion: '2026-08-04',
+        privacyNoticeUrl: 'https://example.com/privacy-notice',
       })
       .onConflictDoNothing();
 

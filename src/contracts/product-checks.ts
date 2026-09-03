@@ -97,23 +97,22 @@ export const productCheckRequestSchema = z
 
 export type ProductCheckRequest = z.infer<typeof productCheckRequestSchema>;
 
-const productCheckResponseObject = z
-  .object({
-    result: z.enum(['potential_match', 'not_matched', 'manual_review']),
-    reasonCodes: z.array(z.string().min(1).max(80)),
-    matchedVariantIds: z.array(uuid),
-    identificationMode: z.enum(['product_identifiers', 'purchase_evidence', 'unknown', 'legacy']),
-    messageKey: z.enum([
-      'product_check.potential_match',
-      'product_check.manual_review.ambiguous',
-      'product_check.manual_review.insufficient_signals',
-      'product_check.not_matched',
-    ]),
-    purchaseCorroboration: z.enum(['verified', 'partial', 'not_provided', 'conflict']).optional(),
-    riskFlags: z.array(z.string().min(1).max(80)).optional(),
-    checkedCampaignVersion: z.number().int().positive(),
-    disclaimer: z.literal('This check is preliminary and is not a final eligibility decision.'),
-  });
+const productCheckResponseObject = z.object({
+  result: z.enum(['potential_match', 'not_matched', 'manual_review']),
+  reasonCodes: z.array(z.string().min(1).max(80)),
+  matchedVariantIds: z.array(uuid),
+  identificationMode: z.enum(['product_identifiers', 'purchase_evidence', 'unknown', 'legacy']),
+  messageKey: z.enum([
+    'product_check.potential_match',
+    'product_check.manual_review.ambiguous',
+    'product_check.manual_review.insufficient_signals',
+    'product_check.not_matched',
+  ]),
+  purchaseCorroboration: z.enum(['verified', 'partial', 'not_provided', 'conflict']).optional(),
+  riskFlags: z.array(z.string().min(1).max(80)).optional(),
+  checkedCampaignVersion: z.number().int().positive(),
+  disclaimer: z.literal('This check is preliminary and is not a final eligibility decision.'),
+});
 
 export const productCheckResponseSchema = productCheckResponseObject
   .superRefine((value: z.infer<typeof productCheckResponseObject>, context: z.RefinementCtx) => {

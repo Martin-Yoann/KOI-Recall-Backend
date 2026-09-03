@@ -31,6 +31,15 @@ describe('rate-limit key derivation (T6.1/O6)', () => {
     expect(routeCategoryForPath('/v1/claim-drafts/{id}/upload-tokens')).toBe('documents');
     expect(routeCategoryForPath('/webhooks/resend')).toBe('webhooks');
   });
+
+  it('shares the tight case-status-lookups quota with the deprecated legacy lookup', () => {
+    expect(routeCategoryForPath('/v1/case-status-lookups')).toBe('case-status-lookups');
+    expect(routeCategoryForPath('/v1/consumer-auth/lookup/KOI-B2C4-D6E8F0A1')).toBe(
+      'case-status-lookups',
+    );
+    // Authenticated consumer-account traffic stays in the general bucket.
+    expect(routeCategoryForPath('/v1/consumer-auth/claims')).toBe('other');
+  });
 });
 
 describe('InMemoryRateLimiter (T6.1/O6)', () => {

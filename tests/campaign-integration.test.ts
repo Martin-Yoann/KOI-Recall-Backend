@@ -35,9 +35,11 @@ describe.skipIf(!enabled)('DrizzleCampaignService (database integration)', () =>
     expect(campaign!.version).toBe(1);
     expect(campaign!.title).toBe('Music Lollipop Safety Recall');
     expect(campaign!.products[0]!.affectedLots.length).toBeGreaterThan(0);
-    expect(campaign!.evidenceRequirements.map((e: CampaignView['evidenceRequirements'][number]) => e.category)).toEqual(
-      expect.arrayContaining(['product_photo', 'proof_of_purchase']),
-    );
+    expect(
+      campaign!.evidenceRequirements.map(
+        (e: CampaignView['evidenceRequirements'][number]) => e.category,
+      ),
+    ).toEqual(expect.arrayContaining(['product_photo', 'proof_of_purchase']));
   });
 
   it('returns null for an unknown slug', async () => {
