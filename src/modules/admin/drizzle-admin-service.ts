@@ -1,9 +1,10 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, lt, notInArray, or, sql, count } from 'drizzle-orm';
 
 import { evaluate } from '../workflow/policy.js';
 
 import type { DatabaseExecutor } from '../../db/client.js';
 import {
+  adminAuditEvents,
   campaignLocalizations,
   campaignVersions,
   caseConsumers,
@@ -32,18 +33,38 @@ import type {
   AdminQueue,
   AdminService,
   CaseDetailConsumer,
+  CaseListPage,
   CloseReportabilityReviewInput,
   GetCaseDetailInput,
+  IncidentDetailView,
+  IncidentListPage,
   ListCasesFilter,
+  ListIncidentsFilter,
+} from './service.js';
+import {
+  buildCaseListCursor,
+  buildIncidentCursor,
+  parseCaseListCursor,
+  parseIncidentCursor,
 } from './service.js';
 
-/** Statuses that put a case in each operational queue (T8/O10). */
+/**
+ * Statuses that put a case in each operational queue. `incident` is special:
+ * it matches ANY non-terminal incident-flagged case (see listCases below).
+ * Single source of truth — the front-end must not re-derive these.
+ */
 type CaseStatus = (typeof recallCases.$inferSelect)['status'];
 const QUEUE_STATUS: Record<AdminQueue, readonly CaseStatus[]> = {
   standard: ['submitted'],
-  manual_review: ['triage', 'need_info'],
-  incident: ['submitted', 'triage', 'under_review'],
+  manual_review: ['triage', 'under_review'],
+  need_info: ['need_info'],
+  decision: ['under_review', 'approved'],
+  closure: ['closure_review'],
+  incident: [],
 };
+
+/** Terminal statuses never belong to an operational queue. */
+const TERMINAL_STATUSES: readonly CaseStatus[] = ['closed', 'rejected', 'duplicate', 'withdrawn'];
 
 /**
  * Single-role admin service (T8/O10): queues, export, and the
@@ -58,22 +79,58 @@ export class DrizzleAdminService implements AdminService {
     private readonly blob?: PrivateBlobPort,
   ) {}
 
-  async listCases(filter: ListCasesFilter): Promise<AdminCaseSummary[]> {
+  async listCases(filter: ListCasesFilter): Promise<CaseListPage> {
     const db = this.db;
 
-    const conditions = [];
+    const filterConditions = [];
     if (filter.status) {
-      conditions.push(eq(recallCases.status, filter.status as never));
+      filterConditions.push(eq(recallCases.status, filter.status as never));
     } else if (filter.queue) {
-      const statuses = QUEUE_STATUS[filter.queue];
-      conditions.push(inArray(recallCases.status, statuses));
       if (filter.queue === 'incident') {
-        conditions.push(eq(recallCases.incidentFlag, true));
+        // Any non-terminal case flagged as an injury/safety incident.
+        filterConditions.push(eq(recallCases.incidentFlag, true));
+        filterConditions.push(notInArray(recallCases.status, [...TERMINAL_STATUSES]));
+      } else {
+        const statuses = QUEUE_STATUS[filter.queue];
+        filterConditions.push(inArray(recallCases.status, statuses));
       }
     }
+    if (filter.search?.trim()) {
+      const term = `%${filter.search.trim().toLowerCase()}%`;
+      filterConditions.push(
+        or(
+          sql`lower(${recallCases.publicReference}) like ${term}`,
+          sql`lower(${recallCases.subtype}) like ${term}`,
+        ),
+      );
+    }
+    const filterWhere = filterConditions.length > 0 ? and(...filterConditions) : undefined;
+
+    // Forward-only cursor over (submittedAt desc, id desc). The id acts as a
+    // unique tie-breaker so equal timestamps never skip or repeat rows.
+    const cursor = filter.cursor ? parseCaseListCursor(filter.cursor) : null;
+    let cursorCondition = null;
+    if (filter.cursor && !cursor) {
+      // Malformed cursor: return an empty page instead of erroring so a stale
+      // client bookmark degrades gracefully.
+      cursorCondition = sql`false`;
+    } else if (cursor) {
+      cursorCondition = or(
+        lt(recallCases.submittedAt, cursor.submittedAt),
+        and(
+          eq(recallCases.submittedAt, cursor.submittedAt),
+          lt(recallCases.id, cursor.id),
+        ),
+      );
+    }
+
+    const pageWhere = cursorCondition
+      ? (filterWhere ? and(filterWhere, cursorCondition) : cursorCondition)
+      : filterWhere;
 
     const rows = await db
       .select({
+        id: recallCases.id,
         caseReference: recallCases.publicReference,
         status: recallCases.status,
         subtype: recallCases.subtype,
@@ -81,23 +138,180 @@ export class DrizzleAdminService implements AdminService {
         submittedAt: recallCases.submittedAt,
       })
       .from(recallCases)
-      .where(conditions.length > 0 ? and(...conditions) : undefined)
-      .orderBy(desc(recallCases.submittedAt))
+      .where(pageWhere)
+      .orderBy(desc(recallCases.submittedAt), desc(recallCases.id))
       .limit(filter.limit);
 
-    return Promise.all(rows.map(async (row): Promise<AdminCaseSummary> => {
-      const [caseRow] = await db.select({ id: recallCases.id, status: recallCases.status, subtype: recallCases.subtype, incidentFlag: recallCases.incidentFlag }).from(recallCases).where(eq(recallCases.publicReference, row.caseReference)).limit(1);
-      const resolution = caseRow ? await db.select({ requestedType: caseResolutions.requestedType, approvedType: caseResolutions.approvedType, status: caseResolutions.status }).from(caseResolutions).where(eq(caseResolutions.caseId, caseRow.id)).limit(1) : [];
-      const workflow = caseRow ? await this.workflowFor(caseRow) : undefined;
+    // Total matching rows for the *filter* (cursor excluded) so the UI can
+    // render "page x of total" without a second request.
+    const [totalRow] = await db
+      .select({ value: count() })
+      .from(recallCases)
+      .where(filterWhere);
+    const total = Number(totalRow?.value ?? 0);
+
+    const cases = await Promise.all(rows.map(async (row): Promise<AdminCaseSummary> => {
+      const resolution = await db.select({ requestedType: caseResolutions.requestedType, approvedType: caseResolutions.approvedType, status: caseResolutions.status }).from(caseResolutions).where(eq(caseResolutions.caseId, row.id)).limit(1);
+      const workflow = await this.workflowFor(row);
       return { caseReference: row.caseReference, status: row.status, subtype: row.subtype, incidentFlag: row.incidentFlag, submittedAt: row.submittedAt.toISOString(), ...(resolution[0] ? { resolution: resolution[0] } : { resolution: null }), ...(workflow ? { workflow } : {}) };
     }));
+
+    // When a page fills the limit, look ahead by one row to know whether
+    // another page exists (avoids a dangling "next" on the last page).
+    let nextCursor: string | null = null;
+    if (rows.length === filter.limit && rows.length > 0) {
+      const last = rows[rows.length - 1]!;
+      const [lookahead] = await db
+        .select({ id: recallCases.id })
+        .from(recallCases)
+        .where(and(
+          pageWhere,
+          or(
+            lt(recallCases.submittedAt, last.submittedAt),
+              and(
+                eq(recallCases.submittedAt, last.submittedAt),
+                lt(recallCases.id, last.id),
+              ),
+            ),
+
+        ))
+        .limit(1);
+      if (lookahead) {
+        nextCursor = buildCaseListCursor(last.submittedAt, last.id);
+      }
+    }
+
+    return { cases, total, nextCursor };
   }
 
   async exportCases(): Promise<AdminCaseSummary[]> {
-    return this.listCases({ limit: 10_000 });
+    // The full-archive export intentionally ignores pagination: walk pages
+    // until the cursor is exhausted.
+    const all: AdminCaseSummary[] = [];
+    const pageSize = 1000;
+    let cursor: string | null = null;
+    for (;;) {
+      const page = await this.listCases({
+        limit: pageSize,
+        ...(cursor ? { cursor } : {}),
+      });
+      all.push(...page.cases);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return all;
   }
 
-  async listIncidents(): Promise<AdminIncidentSummary[]> {
+  async listIncidents(filter?: ListIncidentsFilter): Promise<IncidentListPage> {
+    const db = this.db;
+    const filters = filter ?? { limit: 100 };
+
+    const filterConditions = [];
+    if (filters.search?.trim()) {
+      const term = `%${filters.search.trim().toLowerCase()}%`;
+      filterConditions.push(sql`lower(${recallCases.publicReference}) like ${term}`);
+    }
+    if (filters.severity) {
+      filterConditions.push(eq(incidents.injurySeverity, filters.severity as never));
+    }
+    if (filters.reportabilityStatus) {
+      filterConditions.push(eq(reportabilityReviews.status, filters.reportabilityStatus as never));
+    }
+    const filterWhere = filterConditions.length > 0 ? and(...filterConditions) : undefined;
+
+    const cursor = filters.cursor ? parseIncidentCursor(filters.cursor) : null;
+    let cursorCondition = null;
+    if (filters.cursor && !cursor) {
+      cursorCondition = sql`false`;
+    } else if (cursor) {
+      cursorCondition = or(
+        lt(incidents.createdAt, cursor.createdAt),
+        and(
+          eq(incidents.createdAt, cursor.createdAt),
+          lt(incidents.id, cursor.id),
+        ),
+      );
+    }
+    const pageWhere = cursorCondition
+      ? (filterWhere ? and(filterWhere, cursorCondition) : cursorCondition)
+      : filterWhere;
+
+    const rows = await db
+      .select({
+        id: incidents.id,
+        caseReference: recallCases.publicReference,
+        caseStatus: recallCases.status,
+        answer: incidents.answer,
+        eventTypes: incidents.eventTypes,
+        injurySeverity: incidents.injurySeverity,
+        medicalTreatment: incidents.medicalTreatment,
+        occurredAt: incidents.occurredAt,
+        createdAt: incidents.createdAt,
+        reviewId: reportabilityReviews.id,
+        reviewStatus: reportabilityReviews.status,
+        cpscReference: reportabilityReviews.cpscReference,
+        filedAt: reportabilityReviews.filedAt,
+        decisionAt: reportabilityReviews.decisionAt,
+      })
+      .from(incidents)
+      .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
+      .leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id))
+      .where(pageWhere)
+      .orderBy(desc(incidents.createdAt), desc(incidents.id))
+      .limit(filters.limit);
+
+    const [totalRow] = await db
+      .select({ value: count() })
+      .from(incidents)
+      .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
+      .leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id))
+      .where(filterWhere);
+    const total = Number(totalRow?.value ?? 0);
+
+    let nextCursor: string | null = null;
+    if (rows.length === filters.limit && rows.length > 0) {
+      const last = rows[rows.length - 1]!;
+      const [lookahead] = await db
+        .select({ id: incidents.id })
+        .from(incidents)
+        .where(and(
+          pageWhere,
+          or(
+            lt(incidents.createdAt, last.createdAt),
+            and(eq(incidents.createdAt, last.createdAt), lt(incidents.id, last.id)),
+          ),
+        ))
+        .limit(1);
+      if (lookahead) nextCursor = buildIncidentCursor(last.createdAt, last.id);
+    }
+
+    return {
+      incidents: rows.map((row) => ({
+        id: row.id,
+        caseReference: row.caseReference,
+        caseStatus: row.caseStatus,
+        answer: row.answer,
+        eventTypes: row.eventTypes,
+        injurySeverity: row.injurySeverity ?? null,
+        medicalTreatment: row.medicalTreatment ?? null,
+        occurredAt: row.occurredAt ? row.occurredAt.toISOString() : null,
+        createdAt: row.createdAt.toISOString(),
+        reportability: row.reviewId
+          ? {
+              id: row.reviewId,
+              status: row.reviewStatus ?? 'pending',
+              cpscReference: row.cpscReference ?? null,
+              filedAt: row.filedAt ? row.filedAt.toISOString() : null,
+              decisionAt: row.decisionAt ? row.decisionAt.toISOString() : null,
+            }
+          : null,
+      })),
+      total,
+      nextCursor,
+    };
+  }
+
+  async getIncidentDetail(id: string): Promise<IncidentDetailView | null> {
     const db = this.db;
     const rows = await db
       .select({
@@ -119,10 +333,12 @@ export class DrizzleAdminService implements AdminService {
       .from(incidents)
       .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
       .leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id))
-      .orderBy(desc(incidents.createdAt))
-      .limit(1000);
+      .where(eq(incidents.id, id))
+      .limit(1);
+    const row = rows[0];
+    if (!row) return null;
 
-    return rows.map((row) => ({
+    const incident: AdminIncidentSummary = {
       id: row.id,
       caseReference: row.caseReference,
       caseStatus: row.caseStatus,
@@ -141,7 +357,49 @@ export class DrizzleAdminService implements AdminService {
             decisionAt: row.decisionAt ? row.decisionAt.toISOString() : null,
           }
         : null,
-    }));
+    };
+
+    // Review history: reportability/incident-scoped audit events (best-effort;
+    // only fields already returned by the audit service are used).
+    const reviewEvents = await this.db
+      .select({
+        id: adminAuditEvents.id,
+        action: adminAuditEvents.action,
+        actorRole: adminAuditEvents.actorRole,
+        outcome: adminAuditEvents.outcome,
+        reasonCode: adminAuditEvents.reasonCode,
+        occurredAt: adminAuditEvents.occurredAt,
+      })
+      .from(adminAuditEvents)
+      .where(
+        or(
+          and(
+            eq(adminAuditEvents.resourceType, 'reportability'),
+            eq(adminAuditEvents.resourceId, id),
+          ),
+          and(
+            eq(adminAuditEvents.resourceType, 'incident'),
+            eq(adminAuditEvents.resourceId, row.caseReference),
+          ),
+        ),
+      )
+      .orderBy(desc(adminAuditEvents.occurredAt))
+      .limit(50)
+      .catch(() => []);
+
+    return {
+      incident,
+      caseReference: row.caseReference,
+      caseStatus: row.caseStatus,
+      reviewEvents: reviewEvents.map((event) => ({
+        id: event.id,
+        action: event.action,
+        actorRole: event.actorRole,
+        outcome: event.outcome,
+        reasonCode: event.reasonCode ?? null,
+        occurredAt: event.occurredAt.toISOString(),
+      })),
+    };
   }
 
   async listCampaigns(): Promise<AdminCampaignSummary[]> {

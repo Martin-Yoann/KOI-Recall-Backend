@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { and, eq, inArray } from 'drizzle-orm';
 
 import type { DatabaseHandle } from '../../db/client.js';
@@ -68,7 +68,19 @@ export class RefundExportService {
       const prior = input.includeExported || ids.length === 0 ? [] : await tx.select({ caseResolutionId: refundExportItems.caseResolutionId }).from(refundExportItems).where(inArray(refundExportItems.caseResolutionId, ids));
       const priorIds = new Set(prior.map((row) => row.caseResolutionId));
       const selected = resolutions.filter((row) => input.includeExported || !priorIds.has(row.id));
-      if (selected.length === 0) throw new Error('No refund resolutions are eligible for export.');
+      // Nothing to reconcile is a legitimate "empty" result, not an error — the
+      // export should still produce a CSV (headers only) so the operator gets a
+      // file and the frontend never sees a 500. A synthetic batch id keeps the
+      // download filename stable; no batch/items/audit rows are written.
+      if (selected.length === 0) {
+        const csv = renderRefundCsv([]);
+        return {
+          batchId: randomUUID(),
+          rowCount: 0,
+          sha256: createHash('sha256').update(csv, 'utf8').digest('hex'),
+          csv,
+        };
+      }
       const caseIds = selected.map((row) => row.caseId);
       const cases = await tx.select({ id: recallCases.id, reference: recallCases.publicReference }).from(recallCases).where(inArray(recallCases.id, caseIds));
       const referenceById = new Map(cases.map((row) => [row.id, row.reference]));

@@ -1,7 +1,14 @@
 import { and, desc, eq, gt, ne } from 'drizzle-orm';
 
 import type { DatabaseExecutor } from '../../db/client.js';
-import { refundExportBatches, staffSessions, staffUsers } from '../../db/schema/index.js';
+import {
+  adminAuditEvents,
+  caseResolutions,
+  recallCases,
+  refundExportBatches,
+  staffSessions,
+  staffUsers,
+} from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import { ClaimConflictError, ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
 import { hashPassword, verifyPassword } from './password.js';
@@ -281,6 +288,20 @@ export class DrizzleStaffService implements StaffService {
       }
     }
 
+    // When the account approved/completed case resolutions, reattribute those
+    // responsibilities to the deleting admin. The resolution CHECK constraints
+    // require the approver/completer to remain set, so the only way to remove
+    // the account without violating them is to transfer the attribution first.
+    await this.db
+      .update(caseResolutions)
+      .set({ approvedByStaffUserId: actorUserId })
+      .where(eq(caseResolutions.approvedByStaffUserId, userId));
+    await this.db
+      .update(caseResolutions)
+      .set({ completedByStaffUserId: actorUserId })
+      .where(eq(caseResolutions.completedByStaffUserId, userId));
+
+    // Refund export history cannot be transferred — keep it as a blocker.
     const [exportHistory] = await this.db
       .select({ id: refundExportBatches.id })
       .from(refundExportBatches)
@@ -291,6 +312,17 @@ export class DrizzleStaffService implements StaffService {
         'This staff account owns refund export history and cannot be deleted. Disable it instead.',
       );
     }
+
+    // Detach the user from non-blocking references (assignments, audit rows) so
+    // the delete never trips a foreign-key violation.
+    await this.db
+      .update(recallCases)
+      .set({ assignedToStaffUserId: null, assignedAt: null })
+      .where(eq(recallCases.assignedToStaffUserId, userId));
+    await this.db
+      .update(adminAuditEvents)
+      .set({ actorUserId: null })
+      .where(eq(adminAuditEvents.actorUserId, userId));
 
     await this.revokeAllSessions(userId);
     await this.db.delete(staffUsers).where(eq(staffUsers.id, userId));

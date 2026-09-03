@@ -148,12 +148,13 @@ function makeAuditFake(): AuditService & { events: AuditEvent[] } {
       });
     },
     async query(query: AuditQuery) {
-      return events.filter(
+      const events2 = events.filter(
         (e) =>
           (!query.action || e.action === query.action) &&
           (!query.resourceId || e.resourceId === query.resourceId) &&
           (!query.actorUserId || e.actorUserId === query.actorUserId),
       );
+      return { events: events2, total: events2.length, nextCursor: null };
     },
   };
 }
@@ -164,7 +165,7 @@ function makeFailingAuditFake(): AuditService {
       return Promise.reject(new Error('audit unavailable'));
     },
     query() {
-      return Promise.resolve([]);
+      return Promise.resolve({ events: [], total: 0, nextCursor: null });
     },
   };
 }
@@ -174,10 +175,13 @@ function makeAdminFake(): AdminService & { detailTierByRef: Map<string, 'masked'
   return {
     detailTierByRef,
     async listCases() {
-      return [];
+      return { cases: [], total: 0, nextCursor: null };
     },
     async listIncidents() {
-      return [];
+      return { incidents: [], total: 0, nextCursor: null };
+    },
+    async getIncidentDetail() {
+      return null;
     },
     async listCampaigns() {
       return [];
@@ -639,20 +643,24 @@ describe('B-end RBAC (ADR-0004)', () => {
     const staff = makeStaffFake();
     const admin = makeAdminFake();
     admin.listIncidents = () =>
-      Promise.resolve([
-        {
-          id: 'i-1',
-          caseReference: 'KOI-7N4Q-A91M2X6P',
-          caseStatus: 'triage',
-          answer: 'yes',
-          eventTypes: ['burn'],
-          injurySeverity: 'moderate',
-          medicalTreatment: 'yes',
-          occurredAt: '2026-08-01T00:00:00.000Z',
-          createdAt: '2026-08-02T00:00:00.000Z',
-          reportability: { id: 'r-1', status: 'pending', cpscReference: null, filedAt: null, decisionAt: null },
-        },
-      ]);
+      Promise.resolve({
+        incidents: [
+          {
+            id: 'i-1',
+            caseReference: 'KOI-7N4Q-A91M2X6P',
+            caseStatus: 'triage',
+            answer: 'yes',
+            eventTypes: ['burn'],
+            injurySeverity: 'moderate',
+            medicalTreatment: 'yes',
+            occurredAt: '2026-08-01T00:00:00.000Z',
+            createdAt: '2026-08-02T00:00:00.000Z',
+            reportability: { id: 'r-1', status: 'pending', cpscReference: null, filedAt: null, decisionAt: null },
+          },
+        ],
+        total: 1,
+        nextCursor: null,
+      });
     await staff.createStaffUser({
       email: 'v2@x.com',
       displayName: 'Viewer2',

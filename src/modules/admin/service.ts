@@ -2,8 +2,26 @@ import type { StaffRole } from '../staff/permissions.js';
 import type { CaseResolution, ApproveResolutionInput, CompleteResolutionInput, CancelResolutionInput } from '../resolutions/service.js';
 import type { WorkflowSnapshot } from '../workflow/policy.js';
 
-/** The three operational queues an admin can inspect (T8/O10). */
-export type AdminQueue = 'standard' | 'manual_review' | 'incident';
+/**
+ * The operational queues an admin can inspect. Single source of truth lives in
+ * the backend (QUEUE_STATUS in drizzle-admin-service); the front-end renders
+ * only what the API returns.
+ *
+ * - standard      — new submissions awaiting intake review (submitted)
+ * - manual_review — cases under active human review (triage + under_review)
+ * - need_info     — waiting on the consumer to respond (need_info)
+ * - decision      — a decision is due: approve/reject during review, or the
+ *                   resolution workflow after an approval (under_review + approved)
+ * - closure       — closure review is pending (closure_review)
+ * - incident      — any non-terminal case flagged as an injury/safety incident
+ */
+export type AdminQueue =
+  | 'standard'
+  | 'manual_review'
+  | 'incident'
+  | 'need_info'
+  | 'decision'
+  | 'closure';
 
 export interface AdminCaseSummary {
   caseReference: string;
@@ -21,7 +39,37 @@ export interface ListCasesFilter {
   resolutionType?: 'replacement' | 'refund';
   resolutionStatus?: 'requested' | 'approved' | 'externally_completed' | 'cancelled';
   incident?: boolean;
+  /** Case-reference / subtype substring match (case-insensitive). */
+  search?: string;
   limit: number;
+  /** Opaque cursor from a previous page (see buildCaseListCursor). */
+  cursor?: string;
+}
+
+/** A stable, forward-only cursor over (submittedAt, id) — opaque to callers. */
+export function buildCaseListCursor(submittedAt: Date, id: string): string {
+  return Buffer.from(JSON.stringify({ s: submittedAt.toISOString(), i: id }), 'utf8').toString('base64url');
+}
+
+/** Decodes a case-list cursor; returns null when malformed. */
+export function parseCaseListCursor(cursor: string): { submittedAt: Date; id: string } | null {
+  try {
+    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { s?: string; i?: string };
+    if (!raw?.s || !raw?.i) return null;
+    const submittedAt = new Date(raw.s);
+    if (Number.isNaN(submittedAt.getTime()) || !/^[0-9a-f-]{36}$/i.test(raw.i)) return null;
+    return { submittedAt, id: raw.i };
+  } catch {
+    return null;
+  }
+}
+
+export interface CaseListPage {
+  cases: AdminCaseSummary[];
+  /** Total rows matching the current filters (not just this page). */
+  total: number;
+  /** Cursor for the next page; null when exhausted. */
+  nextCursor: string | null;
 }
 
 export interface CloseReportabilityReviewInput {
@@ -146,6 +194,56 @@ export interface AdminIncidentSummary {
   } | null;
 }
 
+export interface ListIncidentsFilter {
+  /** Case-reference substring match (case-insensitive). */
+  search?: string;
+  severity?: string;
+  reportabilityStatus?: 'pending' | 'filed' | 'documented_non_reportable';
+  limit: number;
+  /** Opaque cursor from a previous page (see buildIncidentCursor). */
+  cursor?: string;
+}
+
+export interface IncidentListPage {
+  incidents: AdminIncidentSummary[];
+  total: number;
+  nextCursor: string | null;
+}
+
+/** A stable, forward-only cursor over (createdAt, id) — opaque to callers. */
+export function buildIncidentCursor(createdAt: Date, id: string): string {
+  return Buffer.from(JSON.stringify({ c: createdAt.toISOString(), i: id }), 'utf8').toString('base64url');
+}
+
+/** Decodes an incident cursor; returns null when malformed. */
+export function parseIncidentCursor(cursor: string): { createdAt: Date; id: string } | null {
+  try {
+    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { c?: string; i?: string };
+    if (!raw?.c || !raw?.i) return null;
+    const createdAt = new Date(raw.c);
+    if (Number.isNaN(createdAt.getTime()) || !/^[0-9a-f-]{36}$/i.test(raw.i)) return null;
+    return { createdAt, id: raw.i };
+  } catch {
+    return null;
+  }
+}
+
+/** A single incident's review history (audit trail filtered to this incident). */
+export interface IncidentDetailView {
+  incident: AdminIncidentSummary;
+  caseReference: string;
+  caseStatus: string;
+  /** Incident-linked audit events (reportability + incident actions). */
+  reviewEvents: Array<{
+    id: string;
+    action: string;
+    actorRole: string | null;
+    outcome: string;
+    reasonCode?: string | null;
+    occurredAt: string;
+  }>;
+}
+
 /** Campaign overview row for the intake surface (read-only). */
 export interface AdminCampaignSummary {
   id: string;
@@ -197,13 +295,22 @@ export interface GetCaseDetailInput {
  * obligation closed" transition.
  */
 export interface AdminService {
-  listCases(filter: ListCasesFilter): Promise<AdminCaseSummary[]>;
+  /**
+   * Cursor-paginated case list. Returns the page plus the total matching rows
+   * and an opaque next-page cursor; callers that ignore them keep working
+   * with the first page (backward compatible).
+   */
+  listCases(filter: ListCasesFilter): Promise<CaseListPage>;
 
   /**
    * Incident operations list: every incident joined to its case reference and
-   * reportability gate. Feeds the incidents & safety surface (case.queue.read).
+   * reportability gate (case.queue.read). Server-side cursor pagination with
+   * optional case-reference search and reportability/severity filters.
    */
-  listIncidents(): Promise<AdminIncidentSummary[]>;
+  listIncidents(filter?: ListIncidentsFilter): Promise<IncidentListPage>;
+
+  /** A single incident joined to its case + reportability review history. */
+  getIncidentDetail(id: string): Promise<IncidentDetailView | null>;
 
   /** Read-only campaign overview with case counts (case.queue.read). */
   listCampaigns(): Promise<AdminCampaignSummary[]>;

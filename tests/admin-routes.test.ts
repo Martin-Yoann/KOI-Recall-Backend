@@ -29,8 +29,9 @@ const summary = {
 };
 
 const admin: AdminService = {
-  listCases: () => Promise.resolve([summary]),
-  listIncidents: () => Promise.resolve([]),
+  listCases: () => Promise.resolve({ cases: [summary], total: 1, nextCursor: null }),
+  listIncidents: () => Promise.resolve({ incidents: [], total: 0, nextCursor: null }),
+  getIncidentDetail: () => Promise.resolve(null),
   listCampaigns: () => Promise.resolve([]),
   exportCases: () => Promise.resolve([summary]),
   closeReportabilityReview: () => Promise.resolve(),

@@ -23,6 +23,7 @@
     "db:migrate": "tsx scripts/migrate.ts",
     "db:check": "drizzle-kit check",
     "db:seed": "tsx src/db/seed.ts",
+    "db:seed:refund-exports": "tsx scripts/seed-refund-exports.ts",
     "db:benchmark": "tsx scripts/capacity-benchmark.ts",
     "staff:bootstrap": "tsx scripts/bootstrap-staff.ts"
   },
