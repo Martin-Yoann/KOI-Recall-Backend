@@ -54,8 +54,9 @@ describe.skipIf(!enabled)('Legacy consumer-auth lookup (H1 §9.9 whitelist)', ()
 
     // The seeded demo campaign is synthetic and its published version may
     // predate the privacy-notice column (older local databases). Public
-    // lookups exclude isTestData campaigns and submissions require a privacy
-    // notice version, so patch both for this proof and restore afterwards.
+    // lookups match on the campaign's email lookup hash and submissions
+    // require a privacy notice version, so patch both for this proof and
+    // restore afterwards.
     await handle!.db
       .update(recallCampaigns)
       .set({ isTestData: false })

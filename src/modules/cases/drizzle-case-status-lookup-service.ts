@@ -73,9 +73,12 @@ export class DrizzleCaseStatusLookupService implements CaseStatusLookupService {
           eq(campaignLocalizations.locale, recallCases.locale),
         ),
       )
-      .where(
-        and(eq(recallCases.publicReference, caseReference), eq(recallCampaigns.isTestData, false)),
-      )
+      // Visibility contract: a case is publicly queryable whenever its
+      // campaign is publicly visible. Campaign endpoints filter only on
+      // status='active' (isTestData included), so excluding test data here
+      // would let consumers submit claims they can then never track. If test
+      // campaigns must vanish at launch, tighten both sides together.
+      .where(eq(recallCases.publicReference, caseReference))
       .limit(1);
 
     if (!row || !secureHexEqual(emailHash, row.emailLookupHash)) return null;
