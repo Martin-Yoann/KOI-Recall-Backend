@@ -83,9 +83,55 @@ describe('GET /v1/recall-campaigns/{slug}', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('ETag')).toBe('"v1:en-US"');
     expect(response.headers.get('Content-Language')).toBe('en-US');
+    expect(response.headers.get('Cache-Control')).toBe(
+      'public, max-age=60, s-maxage=600, stale-while-revalidate=300',
+    );
     const body = (await response.json()) as { campaign: CampaignView };
     expect(body.campaign.slug).toBe('music-lollipop-demo-2026');
     expect(body.campaign.products[0]!.affectedLots[0]!.lotCode).toBe('ML-2406-A');
+  });
+
+  it('returns 304 with validators when If-None-Match matches the current ETag', async () => {
+    const service = mockCampaignService(() => Promise.resolve(campaign));
+    const response = await appWith(service).request(
+      '/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US',
+      { headers: { 'If-None-Match': '"v1:en-US"' } },
+    );
+
+    expect(response.status).toBe(304);
+    expect(await response.text()).toBe('');
+    expect(response.headers.get('ETag')).toBe('"v1:en-US"');
+    expect(response.headers.get('Cache-Control')).toBe(
+      'public, max-age=60, s-maxage=600, stale-while-revalidate=300',
+    );
+  });
+
+  it('treats weak validators and ETag lists as matches; mismatches revalidate to 200', async () => {
+    const service = mockCampaignService(() => Promise.resolve(campaign));
+    const app = appWith(service);
+    const url = '/v1/recall-campaigns/music-lollipop-demo-2026?locale=en-US';
+
+    const weak = await app.request(url, { headers: { 'If-None-Match': 'W/"v1:en-US"' } });
+    expect(weak.status).toBe(304);
+
+    const list = await app.request(url, {
+      headers: { 'If-None-Match': '"v0:en-US", "v1:en-US"' },
+    });
+    expect(list.status).toBe(304);
+
+    const mismatch = await app.request(url, { headers: { 'If-None-Match': '"v2:en-US"' } });
+    expect(mismatch.status).toBe(200);
+    expect(mismatch.headers.get('ETag')).toBe('"v1:en-US"');
+  });
+
+  it('does not set Cache-Control on 404 problem responses', async () => {
+    const service = mockCampaignService(() => Promise.resolve(null));
+    const response = await appWith(service).request(
+      '/v1/recall-campaigns/missing-slug?locale=en-US',
+    );
+
+    expect(response.status).toBe(404);
+    expect(response.headers.get('Cache-Control')).toBeNull();
   });
 
   it('returns a 404 problem when the campaign is not found', async () => {

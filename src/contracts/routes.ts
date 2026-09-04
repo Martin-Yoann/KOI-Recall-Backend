@@ -39,8 +39,22 @@ export const getCampaignRoute = createRoute({
       headers: {
         ETag: { schema: { type: 'string' }, description: 'Published version entity tag.' },
         'Content-Language': { schema: { type: 'string' } },
+        'Cache-Control': {
+          schema: { type: 'string' },
+          description:
+            'Public, immutable-per-version content: short browser max-age, longer edge s-maxage, stale-while-revalidate.',
+        },
       },
       content: { 'application/json': { schema: campaignResponseSchema } },
+    },
+    304: {
+      description:
+        'Not Modified — the request If-None-Match matched the current published-version ETag. ' +
+        'No body; validators and cache directives are repeated so caches can keep serving.',
+      headers: {
+        ETag: { schema: { type: 'string' }, description: 'Published version entity tag.' },
+        'Cache-Control': { schema: { type: 'string' } },
+      },
     },
     ...commonProblemResponses,
   },

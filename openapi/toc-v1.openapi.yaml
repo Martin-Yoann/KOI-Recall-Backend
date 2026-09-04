@@ -1261,7 +1261,21 @@ paths:
                 $ref: "#/components/schemas/CampaignResponse"
           description: Published campaign content.
           headers:
+            Cache-Control:
+              description: "Public, immutable-per-version content: short browser max-age, longer edge s-maxage, stale-while-revalidate."
+              schema:
+                type: string
             Content-Language:
+              schema:
+                type: string
+            ETag:
+              description: Published version entity tag.
+              schema:
+                type: string
+        "304":
+          description: Not Modified — the request If-None-Match matched the current published-version ETag. No body; validators and cache directives are repeated so caches can keep serving.
+          headers:
+            Cache-Control:
               schema:
                 type: string
             ETag:

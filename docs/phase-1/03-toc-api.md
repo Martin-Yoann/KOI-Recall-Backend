@@ -114,7 +114,7 @@ Query：
 }
 ```
 
-响应包含 `ETag` 和 `Content-Language`，允许浏览器/CDN 缓存公开内容。可能错误：`400/404/429/500/503`；未配置 `DATABASE_URL` 时该端点仍返回 `501`。
+响应包含 `ETag`、`Content-Language` 和 `Cache-Control: public, max-age=60, s-maxage=600, stale-while-revalidate=300`：内容按发布版本不可变且无 PII，允许浏览器与 CDN 缓存；携带匹配 `If-None-Match` 的请求返回 `304`（无响应体）。发布新版本会自然改变 `ETag`，无需缓存失效。其余任何含 PII 的接口不设置缓存头。可能错误：`400/404/429/500/503`；未配置 `DATABASE_URL` 时该端点仍返回 `501`。
 
 ## 5. 商品预筛
 
