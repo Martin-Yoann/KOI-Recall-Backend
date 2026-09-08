@@ -76,7 +76,7 @@ export const templateVersions = pgTable(
   (table) => [
     index('idx_template_lookup').on(table.templateKey, table.locale),
     uniqueIndex('idx_template_version').on(table.templateKey, table.locale, table.version),
-  ]
+  ],
 );
 
 export const communications = pgTable(
@@ -86,11 +86,13 @@ export const communications = pgTable(
     caseId: uuid('case_id')
       .notNull()
       .references(() => recallCases.id, { onDelete: 'restrict' }),
-    templateId: uuid('template_id')
-      .notNull()
-      .references(() => campaignMessageTemplates.id, { onDelete: 'restrict' }),
-    templateVersionId: uuid('template_version_id')
-      .references(() => templateVersions.id, { onDelete: 'restrict' }),
+    /** Legacy campaign-scoped template; nullable — template_versions is the source of truth. */
+    templateId: uuid('template_id').references(() => campaignMessageTemplates.id, {
+      onDelete: 'restrict',
+    }),
+    templateVersionId: uuid('template_version_id').references(() => templateVersions.id, {
+      onDelete: 'restrict',
+    }),
     messageKey: varchar('message_key', { length: 160 }).notNull(),
     channel: varchar('channel', { length: 20 }).notNull().default('email'),
     recipientKeyVersion: varchar('recipient_key_version', { length: 40 }).notNull(),

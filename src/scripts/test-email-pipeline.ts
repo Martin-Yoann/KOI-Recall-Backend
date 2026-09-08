@@ -1,7 +1,11 @@
 import { EmailRenderer } from '../platform/email/renderer.js';
 
-async function testPipeline() {
-  console.log('--- Start: email engine safety/compliance test ---');
+/**
+ * Smoke script mirroring the EmailRenderer unit tests (see
+ * tests/email-trigger.test.ts) — handy for a quick manual check.
+ */
+function testPipeline() {
+  console.log('--- Start: email engine render-safety test ---');
 
   const template = 'Hello {{NAME}}, your case {{ID}} is processed.';
   const vars = { NAME: 'John', ID: 'C-123' };
@@ -11,18 +15,23 @@ async function testPipeline() {
   try {
     EmailRenderer.render('Hello {{NAME}}, your case {{ID}}.', { NAME: 'John' });
     console.error('Test 2 (missing placeholder): FAILED - did not block');
-  } catch (e) {
+  } catch {
     console.log('Test 2 (missing placeholder): Pass - blocked');
   }
 
-  try {
-    EmailRenderer.render('Your status is approved.', {});
-    console.error('Test 3 (state wording): FAILED - did not block');
-  } catch (e) {
-    console.log('Test 3 (state wording): Pass - blocked');
-  }
+  const escaped = EmailRenderer.render('Hi {{NAME}}', { NAME: '<b>Ann</b> & Co' });
+  const escapedOk = escaped === 'Hi &lt;b&gt;Ann&lt;/b&gt; &amp; Co';
+  console.log(
+    escapedOk ? 'Test 3 (html escaping): Pass' : `Test 3 (html escaping): FAILED - ${escaped}`,
+  );
 
   console.log('--- End of test ---');
+  if (!escapedOk) process.exitCode = 1;
 }
 
-testPipeline().catch(console.error);
+try {
+  testPipeline();
+} catch (error) {
+  console.error(error);
+  process.exitCode = 1;
+}

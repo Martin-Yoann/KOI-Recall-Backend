@@ -1,17 +1,19 @@
 import { eq } from 'drizzle-orm';
+
 import { caseConsumers } from '../../db/schema/index.js';
 import type { DatabaseExecutor } from '../../db/client.js';
-import type { NotificationService } from './service.js';
+import { CaseConsumerMissingError } from '../../shared/errors.js';
+import type { CommunicationQueueService } from './queue-service.js';
 import { getLatestTemplateVersionId } from './template-loader.js';
 
 /**
- * Service to orchestrate email triggering:
- * 1. Resolves the latest template version ID.
- * 2. Fetches encrypted recipient data.
- * 3. Enqueues the notification into the outbox.
+ * Orchestrates one transactional email for a case:
+ * 1. resolves the encrypted recipient from the case's consumer record,
+ * 2. resolves the latest template version for the key + locale,
+ * 3. enqueues the communication + outbox event in the caller's transaction.
  */
 export class EmailTriggerService {
-  constructor(private readonly notifications: NotificationService) {}
+  constructor(private readonly queue: CommunicationQueueService) {}
 
   async trigger(
     tx: DatabaseExecutor,
@@ -19,11 +21,11 @@ export class EmailTriggerService {
       caseId: string;
       templateKey: string;
       locale: string;
-      variables: Record<string, any>;
+      variables: Record<string, string>;
       deduplicationKey: string;
-    }
-  ) {
-    // 1. 获取收件人加密信息
+      eventType: string;
+    },
+  ): Promise<void> {
     const [consumer] = await tx
       .select({
         keyVersion: caseConsumers.keyVersion,
@@ -33,18 +35,22 @@ export class EmailTriggerService {
       .where(eq(caseConsumers.caseId, params.caseId))
       .limit(1);
 
-    if (!consumer) throw new Error(`[EmailTrigger] Case consumer not found for ${params.caseId}`);
+    if (!consumer)
+      throw new CaseConsumerMissingError(`No case consumer for case ${params.caseId}.`);
 
-    // 2. 获取最新版本模板 ID
-    const templateVersionId = await getLatestTemplateVersionId(tx, params.templateKey, params.locale);
+    const templateVersionId = await getLatestTemplateVersionId(
+      tx,
+      params.templateKey,
+      params.locale,
+    );
 
-    // 3. 入队通知
-    await this.notifications.queueNotification(tx, {
+    await this.queue.queue(tx, {
       caseId: params.caseId,
       templateVersionId,
       recipientKeyVersion: consumer.keyVersion,
       recipientEncrypted: consumer.emailEncrypted,
       deduplicationKey: params.deduplicationKey,
+      eventType: params.eventType,
       variables: params.variables,
     });
   }

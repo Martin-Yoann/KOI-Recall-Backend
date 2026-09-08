@@ -1,11 +1,22 @@
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 
 import type { Database } from '../db/client.js';
-import { communications, outboxEvents, templateVersions } from '../db/schema/index.js';
+import {
+  campaignMessageTemplates,
+  communications,
+  outboxEvents,
+  templateVersions,
+} from '../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../platform/crypto/port.js';
 import type { TransactionalEmailPort } from '../platform/email/port.js';
 import { EmailRenderer } from '../platform/email/renderer.js';
 import type { OutboxJobResult, OutboxWorker } from './outbox.js';
+
+/** Payload shape written by every email-requesting trigger. */
+interface EmailOutboxPayload {
+  communicationId?: string;
+  variables?: Record<string, string>;
+}
 
 const MAX_ATTEMPTS = 5;
 const BATCH_LIMIT = 50;
@@ -79,7 +90,7 @@ export class DrizzleOutboxWorker implements OutboxWorker {
     const [event] = await db.select().from(outboxEvents).where(eq(outboxEvents.id, id)).limit(1);
     if (!event) return 'failed';
 
-    const payload = event.payload as { communicationId?: string };
+    const payload = event.payload as EmailOutboxPayload;
     if (!payload.communicationId) {
       await this.fail(id, event.attempts, 'communication_id_missing');
       return 'failed';
@@ -95,19 +106,50 @@ export class DrizzleOutboxWorker implements OutboxWorker {
       return 'failed';
     }
 
-    if (!communication.templateVersionId) {
-      await this.fail(id, event.attempts, 'template_version_missing');
-      return 'failed';
-    }
+    // Versioned path: render at send time from template_versions. Legacy rows
+    // queued before template versioning carry only a campaignMessageTemplates
+    // id and no variables — send their stored subject/body verbatim so
+    // in-flight events keep draining instead of dead-lettering.
+    let subject: string;
+    let html: string;
+    let text: string;
+    if (communication.templateVersionId) {
+      const [template] = await db
+        .select()
+        .from(templateVersions)
+        .where(eq(templateVersions.id, communication.templateVersionId))
+        .limit(1);
+      if (!template) {
+        await this.fail(id, event.attempts, 'template_version_not_found');
+        return 'failed';
+      }
 
-    const [template] = await db
-      .select()
-      .from(templateVersions)
-      .where(eq(templateVersions.id, communication.templateVersionId))
-      .limit(1);
-    if (!template) {
-      await this.fail(id, event.attempts, 'template_version_not_found');
-      return 'failed';
+      const variables = payload.variables ?? {};
+      subject = EmailRenderer.render(template.subject, variables);
+      html = EmailRenderer.render(template.htmlBody, variables);
+      text = EmailRenderer.render(template.textBody, variables);
+    } else {
+      if (!communication.templateId) {
+        await this.fail(id, event.attempts, 'template_missing');
+        return 'failed';
+      }
+      const [template] = await db
+        .select({
+          subject: campaignMessageTemplates.subject,
+          htmlBody: campaignMessageTemplates.htmlBody,
+          textBody: campaignMessageTemplates.textBody,
+        })
+        .from(campaignMessageTemplates)
+        .where(eq(campaignMessageTemplates.id, communication.templateId))
+        .limit(1);
+      if (!template) {
+        await this.fail(id, event.attempts, 'template_not_found');
+        return 'failed';
+      }
+
+      subject = template.subject;
+      html = template.htmlBody;
+      text = template.textBody;
     }
 
     const recipient = await this.crypto.decrypt({
@@ -115,17 +157,12 @@ export class DrizzleOutboxWorker implements OutboxWorker {
       value: communication.recipientEncrypted,
     });
 
-    const variables = (payload as any).variables || {};
-    const renderedSubject = EmailRenderer.render(template.subject, variables);
-    const renderedHtml = EmailRenderer.render(template.htmlBody, variables);
-    const renderedText = EmailRenderer.render(template.textBody, variables);
-
     const result = await this.email.send({
       messageKey: communication.messageKey,
       to: recipient,
-      subject: renderedSubject,
-      html: renderedHtml,
-      text: renderedText,
+      subject,
+      html,
+      text,
     });
 
     await db.transaction(async (tx) => {

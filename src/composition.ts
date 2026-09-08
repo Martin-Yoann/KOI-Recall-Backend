@@ -8,8 +8,11 @@ import type { CaseStatusLookupService } from './modules/cases/case-status-lookup
 import { DrizzleAdminService } from './modules/admin/drizzle-admin-service.js';
 import type { AdminService } from './modules/admin/service.js';
 import { DrizzleCaseResolutionService } from './modules/resolutions/drizzle-case-resolution-service.js';
-import { DrizzleNotificationService } from './modules/notifications/service.js';
-import { EmailTriggerService } from './modules/notifications/email-trigger-service.js';
+import { EmailTriggerService } from './modules/communications/email-trigger-service.js';
+import {
+  DrizzleCommunicationQueueService,
+  type CommunicationQueueService,
+} from './modules/communications/queue-service.js';
 import { DrizzleStaffService } from './modules/staff/drizzle-staff-service.js';
 import { DrizzleAuditService } from './modules/staff/drizzle-audit-service.js';
 import type { StaffService } from './modules/staff/service.js';
@@ -19,7 +22,6 @@ import { DrizzleClaimDraftService } from './modules/claim-drafts/drizzle-claim-d
 import type { ClaimDraftService } from './modules/claim-drafts/service.js';
 import { DrizzleCommunicationService } from './modules/communications/drizzle-communication-service.js';
 import type { CommunicationService } from './modules/communications/service.js';
-import type { NotificationService } from './modules/notifications/service.js';
 import { DrizzleDocumentService } from './modules/documents/drizzle-document-service.js';
 import type { DocumentService } from './modules/documents/service.js';
 import { DrizzleProductCheckService } from './modules/product-checks/drizzle-product-check-service.js';
@@ -51,7 +53,7 @@ export interface ApplicationServices {
   documents: DocumentService;
   cases: CaseService;
   caseStatusLookups: CaseStatusLookupService;
-      communications: CommunicationService;
+  communications: CommunicationService;
   admin?: AdminService;
   /** ADR-0004: staff identity, sessions, and audit (B-end RBAC). */
   staff?: StaffService;
@@ -140,11 +142,13 @@ export function createApplicationRegistry(
   blob: PrivateBlobPort = new NotImplementedPrivateBlobAdapter(),
   crypto: SensitiveDataCryptoPort = new NotImplementedCryptoAdapter(),
   email: TransactionalEmailPort = new NotImplementedEmailAdapter(),
-  notifications: NotificationService = { queueNotification: () => unavailable('Notification service') },
+  communicationQueue: CommunicationQueueService = {
+    queue: () => unavailable('Communication queue'),
+  },
   malwareScanRequired = false,
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
-  const emailTrigger = new EmailTriggerService(notifications);
+  const emailTrigger = new EmailTriggerService(communicationQueue);
   return {
     services: {
       ...placeholder.services,
@@ -168,6 +172,7 @@ export function createApplicationRegistry(
               undefined,
               undefined,
               malwareScanRequired,
+              communicationQueue,
             ),
             caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
             admin: new DrizzleAdminService(
@@ -194,7 +199,7 @@ export function createApplicationRegistry(
                           close: async () => {},
                         },
                         crypto,
-                        emailTrigger
+                        emailTrigger,
                       ),
                     ),
                     staff: new DrizzleStaffService(tx, crypto),
@@ -276,7 +281,7 @@ function createEmailAdapter(config: AppConfig): TransactionalEmailPort {
 export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
   if (config.DATABASE_URL !== undefined) validateDatabaseUrl(config.DATABASE_URL);
   const crypto = createCryptoAdapter(config);
-  const notifications = new DrizzleNotificationService();
+  const communicationQueue = new DrizzleCommunicationQueueService();
 
   if (config.DATABASE_URL === undefined) {
     const placeholder = createPlaceholderRegistry();
@@ -287,7 +292,7 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     createBlobAdapter(config),
     crypto,
     createEmailAdapter(config),
-    notifications,
+    communicationQueue,
     config.MALWARE_SCAN_REQUIRED,
   );
 }

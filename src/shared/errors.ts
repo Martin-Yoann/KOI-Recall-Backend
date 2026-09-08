@@ -116,6 +116,28 @@ export class CampaignValidationError extends HttpProblemError {
   readonly title = 'Unprocessable Entity';
 }
 
+/**
+ * Thrown when a required email template version is not configured for a
+ * template key + locale at trigger time (server configuration gap). Maps to
+ * 500 Internal Server Error as a typed problem.
+ */
+export class EmailTemplateMissingError extends HttpProblemError {
+  readonly status = 500;
+  readonly type = problemType('email-template-missing');
+  readonly title = 'Email Template Missing';
+}
+
+/**
+ * Thrown when the case consumer record needed to address a transactional
+ * email cannot be found for a case that must have one (data integrity gap).
+ * Maps to 500 Internal Server Error as a typed problem.
+ */
+export class CaseConsumerMissingError extends HttpProblemError {
+  readonly status = 500;
+  readonly type = problemType('case-consumer-missing');
+  readonly title = 'Case Consumer Missing';
+}
+
 export class NotImplementedServiceError extends Error {
   constructor(readonly capability: string) {
     super(

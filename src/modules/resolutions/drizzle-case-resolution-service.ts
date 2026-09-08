@@ -8,7 +8,7 @@ import {
   recallCases,
 } from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
-import { EmailTriggerService } from '../notifications/email-trigger-service.js';
+import type { EmailTriggerService } from '../communications/email-trigger-service.js';
 import {
   ClaimConflictError,
   ClaimValidationError,
@@ -144,17 +144,18 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         },
       );
 
-      // 获取 case 详细信息用于触发邮件
+      // Resolve case display fields for the approval email (03A/03B).
       const [caseInfo] = await tx
         .select({ publicReference: recallCases.publicReference, locale: recallCases.locale })
         .from(recallCases)
         .where(eq(recallCases.id, input.caseId));
 
-      if (!caseInfo) throw new Error('Case not found');
+      if (!caseInfo) {
+        throw new ResourceNotFoundError(`Case ${input.caseId} not found for resolution approval.`);
+      }
 
-      // 触发邮件: 03A/03B
       const templateKey = resolutionType === 'refund' ? 'refund_approved' : 'replacement_approved';
-      const variables: Record<string, any> = { caseReference: caseInfo.publicReference };
+      const variables: Record<string, string> = { caseReference: caseInfo.publicReference };
       if (resolutionType === 'refund') {
         variables.refundAmount = (refundAmountMinor! / 100).toFixed(2);
         variables.refundCurrency = currency!;
@@ -168,6 +169,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         locale: caseInfo.locale,
         variables,
         deduplicationKey: `res-approve:${input.caseId}:${resolutionType}`,
+        eventType: 'resolution.approval.requested',
       });
 
       return toCaseResolution(updated);

@@ -1,22 +1,34 @@
+/**
+ * Renders `{{placeholder}}` tokens in a stored email template. Values are
+ * HTML-escaped once here so the same rendered string serves both the HTML and
+ * text parts; rendering happens at send time (outbox worker) so the stored
+ * template can be corrected without re-queueing communications.
+ *
+ * Fail-closed: a template that still contains an unresolved placeholder after
+ * substitution throws instead of sending half-filled content to a consumer.
+ */
+export class EmailRenderError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = 'EmailRenderError';
+  }
+}
+
 export class EmailRenderer {
-  static render(template: string, variables: Record<string, any>): string {
+  static render(template: string, variables: Record<string, string>): string {
     let result = template;
     for (const [key, value] of Object.entries(variables)) {
-      const sanitizedValue = String(value).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), sanitizedValue);
+      const sanitizedValue = String(value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+      // A function replacement keeps `$`-sequences in the value (e.g. `$&`)
+      // from being interpreted as replacement patterns.
+      result = result.replace(new RegExp(`\\{\\{${key}\\}\\}`, 'g'), () => sanitizedValue);
     }
 
-    // Fail-Closed: 检查是否有剩余的占位符未渲染
     if (/\{\{[^}]+\}\}/.test(result)) {
-      throw new Error(`[Render Error] Unresolved template variables in template`);
-    }
-
-    // Compliance Check: 禁止状态词越界
-    const forbidden = ['approved', 'eligible', '退款已确认'];
-    for (const word of forbidden) {
-      if (result.toLowerCase().includes(word.toLowerCase())) {
-        throw new Error(`[Compliance Error] Forbidden status wording detected: ${word}`);
-      }
+      throw new EmailRenderError('Unresolved template variables remain after rendering.');
     }
 
     return result;

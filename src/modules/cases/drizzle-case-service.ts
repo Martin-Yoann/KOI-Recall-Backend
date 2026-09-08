@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto';
 
-import { and, desc, eq, gt, inArray, lte } from 'drizzle-orm';
+import { and, eq, gt, inArray, lte } from 'drizzle-orm';
 
 import {
   claimSubmissionResponseSchema,
   type ClaimSubmissionRequest,
   type ClaimSubmissionResponse,
 } from '../../contracts/toc.js';
-import { type NotificationService } from '../notifications/service.js';
+import { EmailTriggerService } from '../communications/email-trigger-service.js';
+import { getLatestTemplateVersionId } from '../communications/template-loader.js';
+import { type CommunicationQueueService } from '../communications/queue-service.js';
 import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
   campaignEvidenceRequirements,
@@ -26,7 +28,6 @@ import {
   recallCases,
   reportabilityReviews,
   submissionSnapshots,
-  templateVersions,
 } from '../../db/schema/index.js';
 import type { Ciphertext, SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import {
@@ -122,7 +123,7 @@ export class DrizzleCaseService implements CaseService {
   private readonly referenceGenerator: () => string;
   private readonly beforeIdempotencyInsert: () => Promise<void>;
   private readonly malwareScanRequired: boolean;
-  private readonly notifications: NotificationService | undefined;
+  private readonly notifications: CommunicationQueueService | undefined;
 
   constructor(
     handle: DatabaseHandle,
@@ -131,12 +132,15 @@ export class DrizzleCaseService implements CaseService {
     referenceOrBefore?: (() => string) | (() => Promise<void>),
     beforeOrMalware?: (() => Promise<void>) | boolean,
     malwareScanRequired = false,
-    notifications?: NotificationService,
+    notifications?: CommunicationQueueService,
   ) {
     this.handle = handle;
     this.crypto = crypto;
     this.notifications = notifications;
-    const defaultResolution = new DrizzleCaseResolutionService(handle, crypto);
+    // The fallback resolution service must fire approval emails the same way
+    // the injected one does, so build it on the same queue.
+    const emailTrigger = notifications ? new EmailTriggerService(notifications) : undefined;
+    const defaultResolution = new DrizzleCaseResolutionService(handle, crypto, emailTrigger);
     const legacyReference =
       typeof resolutionsOrReference === 'function' ? resolutionsOrReference : undefined;
     this.resolutions =
@@ -557,20 +561,11 @@ export class DrizzleCaseService implements CaseService {
           incidentAnswer: command.body.incidentAnswer,
         },
       });
-      const [templateVersion] = await tx
-        .select({ id: templateVersions.id })
-        .from(templateVersions)
-        .where(
-          and(
-            eq(templateVersions.templateKey, 'claim_confirmation'),
-            eq(templateVersions.locale, command.body.locale),
-          ),
-        )
-        .orderBy(desc(templateVersions.version))
-        .limit(1);
-      if (!templateVersion) {
-        throw new Error('An active Claim confirmation template version is required.');
-      }
+      const templateVersionId = await getLatestTemplateVersionId(
+        tx,
+        'claim_confirmation',
+        command.body.locale,
+      );
       await this.beforeIdempotencyInsert();
       await tx.insert(idempotencyRecords).values({
         endpoint,
@@ -581,12 +576,13 @@ export class DrizzleCaseService implements CaseService {
         caseId,
         expiresAt: new Date(submittedAt.getTime() + IDEMPOTENCY_TTL_MS),
       });
-      await this.notifications?.queueNotification(tx, {
+      await this.notifications?.queue(tx, {
         caseId,
-        templateVersionId: templateVersion.id,
+        templateVersionId,
         recipientKeyVersion: encrypted.recipientEmail.keyVersion,
         recipientEncrypted: encrypted.recipientEmail.value,
         deduplicationKey: `claim-confirmation:${caseReference}`,
+        eventType: 'claim.confirmation.requested',
         variables: { caseReference, submittedAt: submittedAt.toISOString() },
       });
 
