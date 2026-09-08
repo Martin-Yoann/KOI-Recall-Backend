@@ -2,7 +2,13 @@ import { and, count, desc, eq, gte, lt, lte, or, sql } from 'drizzle-orm';
 
 import type { DatabaseExecutor } from '../../db/client.js';
 import { adminAuditEvents } from '../../db/schema/index.js';
-import type { AuditEvent, AuditEventInput, AuditQuery, AuditQueryPage, AuditService } from './audit-service.js';
+import type {
+  AuditEvent,
+  AuditEventInput,
+  AuditQuery,
+  AuditQueryPage,
+  AuditService,
+} from './audit-service.js';
 import { buildAuditCursor, parseAuditCursor } from './audit-service.js';
 
 /**
@@ -31,8 +37,10 @@ export class DrizzleAuditService implements AuditService {
 
   async query(query: AuditQuery): Promise<AuditQueryPage> {
     const filterConditions = [];
-    if (query.actorUserId) filterConditions.push(eq(adminAuditEvents.actorUserId, query.actorUserId));
-    if (query.resourceType) filterConditions.push(eq(adminAuditEvents.resourceType, query.resourceType));
+    if (query.actorUserId)
+      filterConditions.push(eq(adminAuditEvents.actorUserId, query.actorUserId));
+    if (query.resourceType)
+      filterConditions.push(eq(adminAuditEvents.resourceType, query.resourceType));
     if (query.resourceId) filterConditions.push(eq(adminAuditEvents.resourceId, query.resourceId));
     if (query.action) filterConditions.push(eq(adminAuditEvents.action, query.action));
     if (query.outcome) filterConditions.push(eq(adminAuditEvents.outcome, query.outcome));
@@ -51,15 +59,14 @@ export class DrizzleAuditService implements AuditService {
     } else if (cursor) {
       cursorCondition = or(
         lt(adminAuditEvents.occurredAt, cursor.occurredAt),
-        and(
-          eq(adminAuditEvents.occurredAt, cursor.occurredAt),
-          lt(adminAuditEvents.id, cursor.id),
-        ),
+        and(eq(adminAuditEvents.occurredAt, cursor.occurredAt), lt(adminAuditEvents.id, cursor.id)),
       );
     }
 
     const pageWhere = cursorCondition
-      ? (filterWhere ? and(filterWhere, cursorCondition) : cursorCondition)
+      ? filterWhere
+        ? and(filterWhere, cursorCondition)
+        : cursorCondition
       : filterWhere;
 
     const rows = await this.db
@@ -83,17 +90,18 @@ export class DrizzleAuditService implements AuditService {
       const [lookahead] = await this.db
         .select({ id: adminAuditEvents.id })
         .from(adminAuditEvents)
-        .where(and(
-          pageWhere,
-          or(
-            lt(adminAuditEvents.occurredAt, last.occurredAt),
-            and(
-              eq(adminAuditEvents.occurredAt, last.occurredAt),
-              lt(adminAuditEvents.id, last.id),
+        .where(
+          and(
+            pageWhere,
+            or(
+              lt(adminAuditEvents.occurredAt, last.occurredAt),
+              and(
+                eq(adminAuditEvents.occurredAt, last.occurredAt),
+                lt(adminAuditEvents.id, last.id),
               ),
             ),
-
-        ))
+          ),
+        )
         .limit(1);
       if (lookahead) {
         nextCursor = buildAuditCursor(last.occurredAt, last.id);

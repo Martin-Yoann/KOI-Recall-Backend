@@ -45,11 +45,46 @@ function randomRef(): string {
 }
 
 const SALES = [
-  { name: 'Alice Newton', email: 'alice.newton@example.com', phone: '14155558101', amount: 749, currency: 'USD', external: 'REF-2026-9001' },
-  { name: 'Marcus Ford', email: 'marcus.ford@example.com', phone: '14155558102', amount: 1250, currency: 'USD', external: 'REF-2026-9002' },
-  { name: 'Sofia Gomez', email: 'sofia.gomez@example.com', phone: '14155558103', amount: 599, currency: 'USD', external: 'REF-2026-9003' },
-  { name: 'Darsh Patel', email: 'darsh.patel@example.com', phone: '14155558104', amount: 899, currency: 'USD', external: 'REF-2026-9004' },
-  { name: 'Lena Voss', email: 'lena.voss@example.com', phone: '14155558105', amount: 1149, currency: 'USD', external: 'REF-2026-9005' },
+  {
+    name: 'Alice Newton',
+    email: 'alice.newton@example.com',
+    phone: '14155558101',
+    amount: 749,
+    currency: 'USD',
+    external: 'REF-2026-9001',
+  },
+  {
+    name: 'Marcus Ford',
+    email: 'marcus.ford@example.com',
+    phone: '14155558102',
+    amount: 1250,
+    currency: 'USD',
+    external: 'REF-2026-9002',
+  },
+  {
+    name: 'Sofia Gomez',
+    email: 'sofia.gomez@example.com',
+    phone: '14155558103',
+    amount: 599,
+    currency: 'USD',
+    external: 'REF-2026-9003',
+  },
+  {
+    name: 'Darsh Patel',
+    email: 'darsh.patel@example.com',
+    phone: '14155558104',
+    amount: 899,
+    currency: 'USD',
+    external: 'REF-2026-9004',
+  },
+  {
+    name: 'Lena Voss',
+    email: 'lena.voss@example.com',
+    phone: '14155558105',
+    amount: 1149,
+    currency: 'USD',
+    external: 'REF-2026-9005',
+  },
 ];
 
 async function main() {
@@ -59,7 +94,8 @@ async function main() {
     .from(recallCampaigns)
     .where(eq(recallCampaigns.slug, 'music-lollipop-demo-2026'))
     .limit(1);
-  if (!campaign?.id) throw new Error('Seed campaign not found — run scripts/seed-test-data.ts first.');
+  if (!campaign?.id)
+    throw new Error('Seed campaign not found — run scripts/seed-test-data.ts first.');
 
   const [version] = await db
     .select({ id: campaignVersions.id })
@@ -84,54 +120,69 @@ async function main() {
     const submittedAt = new Date(now.getTime() - (SALES.length - i) * DAY);
     const keyVersion = 'v1';
 
-    await db.insert(recallCases).values({
-      id: caseId,
-      publicReference: caseRef,
-      campaignId: campaign.id,
-      campaignVersionId: version.id,
-      locale: 'en-US',
-      subtype: 'standard',
-      status: 'closed',
-      incidentFlag: false,
-      submittedAt,
-    }).onConflictDoNothing();
+    await db
+      .insert(recallCases)
+      .values({
+        id: caseId,
+        publicReference: caseRef,
+        campaignId: campaign.id,
+        campaignVersionId: version.id,
+        locale: 'en-US',
+        subtype: 'standard',
+        status: 'closed',
+        incidentFlag: false,
+        submittedAt,
+      })
+      .onConflictDoNothing();
 
     const emailEnc = await crypto.encrypt(sale.email);
     const phoneEnc = sale.phone ? await crypto.encrypt(sale.phone) : null;
     const addrEnc = await crypto.encrypt('123 Test Street, Test City, CA, 94105, US');
-    await db.insert(caseConsumers).values({
-      caseId,
-      keyVersion,
-      firstNameEncrypted: (await crypto.encrypt(sale.name.split(' ')[0]!)).value,
-      lastNameEncrypted: (await crypto.encrypt(sale.name.split(' ').slice(1).join(' ') || sale.name)).value,
-      emailEncrypted: emailEnc.value,
-      emailLookupHash: await crypto.lookupHash(sale.email.toLowerCase().trim()),
-      phoneEncrypted: phoneEnc?.value ?? null,
-      addressEncrypted: addrEnc.value,
-      addressLookupHash: await crypto.lookupHash('123 Test Street, Test City, CA, 94105, US'.toLowerCase().trim()),
-      countryCode: 'US',
-    }).onConflictDoNothing();
+    await db
+      .insert(caseConsumers)
+      .values({
+        caseId,
+        keyVersion,
+        firstNameEncrypted: (await crypto.encrypt(sale.name.split(' ')[0]!)).value,
+        lastNameEncrypted: (
+          await crypto.encrypt(sale.name.split(' ').slice(1).join(' ') || sale.name)
+        ).value,
+        emailEncrypted: emailEnc.value,
+        emailLookupHash: await crypto.lookupHash(sale.email.toLowerCase().trim()),
+        phoneEncrypted: phoneEnc?.value ?? null,
+        addressEncrypted: addrEnc.value,
+        addressLookupHash: await crypto.lookupHash(
+          '123 Test Street, Test City, CA, 94105, US'.toLowerCase().trim(),
+        ),
+        countryCode: 'US',
+      })
+      .onConflictDoNothing();
 
     const approvedNote = await crypto.encrypt('Approved refund for reconciliation test data.');
-    const completionNote = await crypto.encrypt('Refund processed in the finance system (test data).');
-    await db.insert(caseResolutions).values({
-      caseId,
-      requestedType: 'refund',
-      approvedType: 'refund',
-      status: 'externally_completed',
-      refundAmountMinor: sale.amount,
-      currency: sale.currency,
-      approvedByStaffUserId: approver?.id ?? null,
-      approvedAt: new Date(submittedAt.getTime() + DAY),
-      approvalNoteEncrypted: approvedNote.value,
-      approvalNoteKeyVersion: keyVersion,
-      externalReference: sale.external,
-      completionNoteEncrypted: completionNote.value,
-      completionNoteKeyVersion: keyVersion,
-      completedByStaffUserId: approver?.id ?? null,
-      completedAt: new Date(submittedAt.getTime() + 2 * DAY),
-      version: 1,
-    }).onConflictDoNothing();
+    const completionNote = await crypto.encrypt(
+      'Refund processed in the finance system (test data).',
+    );
+    await db
+      .insert(caseResolutions)
+      .values({
+        caseId,
+        requestedType: 'refund',
+        approvedType: 'refund',
+        status: 'externally_completed',
+        refundAmountMinor: sale.amount,
+        currency: sale.currency,
+        approvedByStaffUserId: approver?.id ?? null,
+        approvedAt: new Date(submittedAt.getTime() + DAY),
+        approvalNoteEncrypted: approvedNote.value,
+        approvalNoteKeyVersion: keyVersion,
+        externalReference: sale.external,
+        completionNoteEncrypted: completionNote.value,
+        completionNoteKeyVersion: keyVersion,
+        completedByStaffUserId: approver?.id ?? null,
+        completedAt: new Date(submittedAt.getTime() + 2 * DAY),
+        version: 1,
+      })
+      .onConflictDoNothing();
 
     created.push(`${caseRef} → ${sale.amount} ${sale.currency}`);
   }

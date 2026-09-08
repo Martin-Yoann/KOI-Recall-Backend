@@ -58,13 +58,18 @@ export interface AuditQueryPage {
 
 /** A stable, forward-only cursor over (occurredAt, id) — opaque to callers. */
 export function buildAuditCursor(occurredAt: Date, id: string): string {
-  return Buffer.from(JSON.stringify({ o: occurredAt.toISOString(), i: id }), 'utf8').toString('base64url');
+  return Buffer.from(JSON.stringify({ o: occurredAt.toISOString(), i: id }), 'utf8').toString(
+    'base64url',
+  );
 }
 
 /** Decodes an audit cursor; returns null when malformed. */
 export function parseAuditCursor(cursor: string): { occurredAt: Date; id: string } | null {
   try {
-    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as { o?: string; i?: string };
+    const raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
+      o?: string;
+      i?: string;
+    };
     if (!raw?.o || !raw?.i) return null;
     const occurredAt = new Date(raw.o);
     if (Number.isNaN(occurredAt.getTime()) || !/^[0-9a-f-]{36}$/i.test(raw.i)) return null;
