@@ -1,9 +1,10 @@
 import { and, eq, inArray, lte, sql } from 'drizzle-orm';
 
 import type { Database } from '../db/client.js';
-import { campaignMessageTemplates, communications, outboxEvents } from '../db/schema/index.js';
+import { communications, outboxEvents, templateVersions } from '../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../platform/crypto/port.js';
 import type { TransactionalEmailPort } from '../platform/email/port.js';
+import { EmailRenderer } from '../platform/email/renderer.js';
 import type { OutboxJobResult, OutboxWorker } from './outbox.js';
 
 const MAX_ATTEMPTS = 5;
@@ -94,17 +95,18 @@ export class DrizzleOutboxWorker implements OutboxWorker {
       return 'failed';
     }
 
+    if (!communication.templateVersionId) {
+      await this.fail(id, event.attempts, 'template_version_missing');
+      return 'failed';
+    }
+
     const [template] = await db
-      .select({
-        subject: campaignMessageTemplates.subject,
-        htmlBody: campaignMessageTemplates.htmlBody,
-        textBody: campaignMessageTemplates.textBody,
-      })
-      .from(campaignMessageTemplates)
-      .where(eq(campaignMessageTemplates.id, communication.templateId))
+      .select()
+      .from(templateVersions)
+      .where(eq(templateVersions.id, communication.templateVersionId))
       .limit(1);
     if (!template) {
-      await this.fail(id, event.attempts, 'template_not_found');
+      await this.fail(id, event.attempts, 'template_version_not_found');
       return 'failed';
     }
 
@@ -113,12 +115,17 @@ export class DrizzleOutboxWorker implements OutboxWorker {
       value: communication.recipientEncrypted,
     });
 
+    const variables = (payload as any).variables || {};
+    const renderedSubject = EmailRenderer.render(template.subject, variables);
+    const renderedHtml = EmailRenderer.render(template.htmlBody, variables);
+    const renderedText = EmailRenderer.render(template.textBody, variables);
+
     const result = await this.email.send({
       messageKey: communication.messageKey,
       to: recipient,
-      subject: template.subject,
-      html: template.htmlBody,
-      text: template.textBody,
+      subject: renderedSubject,
+      html: renderedHtml,
+      text: renderedText,
     });
 
     await db.transaction(async (tx) => {

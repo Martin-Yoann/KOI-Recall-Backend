@@ -86,6 +86,8 @@ export const caseResolutions = pgTable(
       onDelete: 'set null',
     }),
     completedAt: timestamp('completed_at', { withTimezone: true, mode: 'date' }),
+    trackingNumber: text('tracking_number'),
+    shippedAt: timestamp('shipped_at', { withTimezone: true, mode: 'date' }),
     /** Optimistic concurrency token; must be > 0. */
     version: integer('version').notNull().default(1),
     ...timestamps,

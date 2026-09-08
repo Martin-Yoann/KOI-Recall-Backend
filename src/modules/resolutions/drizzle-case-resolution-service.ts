@@ -8,6 +8,7 @@ import {
   recallCases,
 } from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
+import { EmailTriggerService } from '../notifications/email-trigger-service.js';
 import {
   ClaimConflictError,
   ClaimValidationError,
@@ -60,6 +61,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
   constructor(
     private readonly handle: DatabaseHandle,
     private readonly crypto: SensitiveDataCryptoPort,
+    private readonly emailTrigger?: EmailTriggerService,
   ) {}
 
   async requestFromSubmission(tx: DatabaseExecutor, input: RequestResolutionInput): Promise<void> {
@@ -141,6 +143,32 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
           ...(currency !== null ? { currency } : {}),
         },
       );
+
+      // 获取 case 详细信息用于触发邮件
+      const [caseInfo] = await tx
+        .select({ publicReference: recallCases.publicReference, locale: recallCases.locale })
+        .from(recallCases)
+        .where(eq(recallCases.id, input.caseId));
+
+      if (!caseInfo) throw new Error('Case not found');
+
+      // 触发邮件: 03A/03B
+      const templateKey = resolutionType === 'refund' ? 'refund_approved' : 'replacement_approved';
+      const variables: Record<string, any> = { caseReference: caseInfo.publicReference };
+      if (resolutionType === 'refund') {
+        variables.refundAmount = (refundAmountMinor! / 100).toFixed(2);
+        variables.refundCurrency = currency!;
+      } else {
+        variables.replacementItem = 'Replacement Product';
+      }
+
+      await this.emailTrigger?.trigger(tx, {
+        caseId: input.caseId,
+        templateKey,
+        locale: caseInfo.locale,
+        variables,
+        deduplicationKey: `res-approve:${input.caseId}:${resolutionType}`,
+      });
 
       return toCaseResolution(updated);
     });

@@ -7,10 +7,10 @@ import {
   type ClaimSubmissionRequest,
   type ClaimSubmissionResponse,
 } from '../../contracts/toc.js';
+import { type NotificationService } from '../notifications/service.js';
 import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
   campaignEvidenceRequirements,
-  campaignMessageTemplates,
   campaignProducts,
   campaignRemedyOptions,
   campaignVersions,
@@ -19,15 +19,14 @@ import {
   caseEvents,
   claimedProducts,
   claimDrafts,
-  communications,
   documentUploads,
   idempotencyRecords,
   incidents,
-  outboxEvents,
   recallCampaigns,
   recallCases,
   reportabilityReviews,
   submissionSnapshots,
+  templateVersions,
 } from '../../db/schema/index.js';
 import type { Ciphertext, SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import {
@@ -123,6 +122,7 @@ export class DrizzleCaseService implements CaseService {
   private readonly referenceGenerator: () => string;
   private readonly beforeIdempotencyInsert: () => Promise<void>;
   private readonly malwareScanRequired: boolean;
+  private readonly notifications: NotificationService | undefined;
 
   constructor(
     handle: DatabaseHandle,
@@ -131,9 +131,11 @@ export class DrizzleCaseService implements CaseService {
     referenceOrBefore?: (() => string) | (() => Promise<void>),
     beforeOrMalware?: (() => Promise<void>) | boolean,
     malwareScanRequired = false,
+    notifications?: NotificationService,
   ) {
     this.handle = handle;
     this.crypto = crypto;
+    this.notifications = notifications;
     const defaultResolution = new DrizzleCaseResolutionService(handle, crypto);
     const legacyReference =
       typeof resolutionsOrReference === 'function' ? resolutionsOrReference : undefined;
@@ -399,7 +401,6 @@ export class DrizzleCaseService implements CaseService {
           : 'submitted';
 
       const caseId = randomUUID();
-      const communicationId = randomUUID();
       let caseReference: string | undefined;
       for (let attempt = 0; attempt < CASE_REFERENCE_ATTEMPTS; attempt += 1) {
         const candidate = this.referenceGenerator();
@@ -556,21 +557,19 @@ export class DrizzleCaseService implements CaseService {
           incidentAnswer: command.body.incidentAnswer,
         },
       });
-      const [template] = await tx
-        .select({ id: campaignMessageTemplates.id })
-        .from(campaignMessageTemplates)
+      const [templateVersion] = await tx
+        .select({ id: templateVersions.id })
+        .from(templateVersions)
         .where(
           and(
-            eq(campaignMessageTemplates.campaignVersionId, locked.campaignVersionId),
-            eq(campaignMessageTemplates.locale, command.body.locale),
-            eq(campaignMessageTemplates.templateType, 'claim_confirmation'),
-            eq(campaignMessageTemplates.active, true),
+            eq(templateVersions.templateKey, 'claim_confirmation'),
+            eq(templateVersions.locale, command.body.locale),
           ),
         )
-        .orderBy(desc(campaignMessageTemplates.version))
+        .orderBy(desc(templateVersions.version))
         .limit(1);
-      if (!template) {
-        throw new Error('An active Claim confirmation template is required.');
+      if (!templateVersion) {
+        throw new Error('An active Claim confirmation template version is required.');
       }
       await this.beforeIdempotencyInsert();
       await tx.insert(idempotencyRecords).values({
@@ -582,23 +581,15 @@ export class DrizzleCaseService implements CaseService {
         caseId,
         expiresAt: new Date(submittedAt.getTime() + IDEMPOTENCY_TTL_MS),
       });
-      await tx.insert(communications).values({
-        id: communicationId,
+      await this.notifications?.queueNotification(tx, {
         caseId,
-        templateId: template.id,
-        messageKey: `claim-confirmation:${caseId}`,
-        channel: 'email',
+        templateVersionId: templateVersion.id,
         recipientKeyVersion: encrypted.recipientEmail.keyVersion,
         recipientEncrypted: encrypted.recipientEmail.value,
-        status: 'queued',
-      });
-      await tx.insert(outboxEvents).values({
-        aggregateType: 'recall_case',
-        aggregateId: caseId,
-        eventType: 'claim.confirmation.requested',
         deduplicationKey: `claim-confirmation:${caseReference}`,
-        payload: { communicationId, caseId },
+        variables: { caseReference, submittedAt: submittedAt.toISOString() },
       });
+
       return response;
     });
 

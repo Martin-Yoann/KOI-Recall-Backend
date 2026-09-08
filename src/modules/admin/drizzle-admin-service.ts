@@ -826,9 +826,12 @@ export class DrizzleAdminService implements AdminService {
     input: Omit<ApproveResolutionInput, 'caseId'>,
   ): Promise<CaseResolution> {
     if (!this.resolutions) throw new Error('Resolution service not configured.');
+    const caseId = await this.caseIdForReference(caseReference);
+    // The ResolutionService.approve path already fires the version-locked
+    // email (03A/03B) inside its own transaction — no duplicate send here.
     return this.resolutions.approve({
       ...input,
-      caseId: await this.caseIdForReference(caseReference),
+      caseId,
     });
   }
 

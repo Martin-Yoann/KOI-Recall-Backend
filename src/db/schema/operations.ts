@@ -61,6 +61,24 @@ export const caseEvents = pgTable(
   (table) => [index('case_events_case_occurred_idx').on(table.caseId, table.occurredAt)],
 );
 
+export const templateVersions = pgTable(
+  'template_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    templateKey: varchar('template_key', { length: 100 }).notNull(),
+    locale: varchar('locale', { length: 10 }).notNull(),
+    version: integer('version').notNull(),
+    subject: text('subject').notNull(),
+    htmlBody: text('html_body').notNull(),
+    textBody: text('text_body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('idx_template_lookup').on(table.templateKey, table.locale),
+    uniqueIndex('idx_template_version').on(table.templateKey, table.locale, table.version),
+  ]
+);
+
 export const communications = pgTable(
   'communications',
   {
@@ -71,6 +89,8 @@ export const communications = pgTable(
     templateId: uuid('template_id')
       .notNull()
       .references(() => campaignMessageTemplates.id, { onDelete: 'restrict' }),
+    templateVersionId: uuid('template_version_id')
+      .references(() => templateVersions.id, { onDelete: 'restrict' }),
     messageKey: varchar('message_key', { length: 160 }).notNull(),
     channel: varchar('channel', { length: 20 }).notNull().default('email'),
     recipientKeyVersion: varchar('recipient_key_version', { length: 40 }).notNull(),
