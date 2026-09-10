@@ -84,19 +84,44 @@ const QUEUE_STATUS: Record<AdminQueue, readonly CaseStatus[]> = {
 const TERMINAL_STATUSES: readonly CaseStatus[] = ['closed', 'rejected', 'duplicate', 'withdrawn'];
 
 /**
+ * Constructor dependencies for {@link DrizzleAdminService}. Grouped so the
+ * optional capabilities are named at every construction site instead of
+ * positional holes (`undefined, emailTrigger, ...`).
+ */
+export interface DrizzleAdminServiceDeps {
+  db: DatabaseExecutor;
+  crypto: SensitiveDataCryptoPort;
+  /** Resolution lifecycle operations; absent → those endpoints answer 501. */
+  resolutions?: CaseResolutionService;
+  /** Document access authorization; absent → that endpoint answers 501. */
+  blob?: PrivateBlobPort;
+  /** Consumer email triggers; absent → transitions enqueue no notification. */
+  emailTrigger?: EmailTriggerService;
+  /** Consumer web app base URL for email links; config owns the default. */
+  consumerWebBaseUrl: string;
+}
+
+/**
  * Single-role admin service (T8/O10): queues, export, and the
  * reportability-close gate. Read paths expose only non-PII summaries; the
  * export is the full archive for reporting obligations.
  */
 export class DrizzleAdminService implements AdminService {
-  constructor(
-    private readonly db: DatabaseExecutor,
-    private readonly crypto: SensitiveDataCryptoPort,
-    private readonly resolutions?: CaseResolutionService,
-    private readonly blob?: PrivateBlobPort,
-    private readonly emailTrigger?: EmailTriggerService,
-    private readonly consumerWebBaseUrl = 'http://localhost:3000',
-  ) {}
+  private readonly db: DatabaseExecutor;
+  private readonly crypto: SensitiveDataCryptoPort;
+  private readonly resolutions: CaseResolutionService | undefined;
+  private readonly blob: PrivateBlobPort | undefined;
+  private readonly emailTrigger: EmailTriggerService | undefined;
+  private readonly consumerWebBaseUrl: string;
+
+  constructor(deps: DrizzleAdminServiceDeps) {
+    this.db = deps.db;
+    this.crypto = deps.crypto;
+    this.resolutions = deps.resolutions;
+    this.blob = deps.blob;
+    this.emailTrigger = deps.emailTrigger;
+    this.consumerWebBaseUrl = deps.consumerWebBaseUrl;
+  }
 
   async listCases(filter: ListCasesFilter): Promise<CaseListPage> {
     const db = this.db;

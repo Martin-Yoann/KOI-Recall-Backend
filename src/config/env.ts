@@ -1,5 +1,12 @@
 import { z } from 'zod';
 
+/**
+ * The single default for the consumer web app base URL. Used by the schema
+ * below and by composition when no config is supplied (tests), so the
+ * literal never spreads to call sites.
+ */
+export const DEFAULT_CONSUMER_WEB_BASE_URL = 'http://localhost:3000';
+
 const environmentSchema = z.object({
   APP_ENV: z.enum(['local', 'preview', 'staging', 'production']).default('local'),
   CORS_ALLOWED_ORIGINS: z.string().default('http://localhost:3000'),
@@ -22,7 +29,7 @@ const environmentSchema = z.object({
   /** Stable production domain used in Problem Details URIs (T6.5/O6). */
   PROBLEM_BASE_URL: z.string().url().default('https://api.example.invalid'),
   /** Consumer web app base URL; used for consumer-facing email links. */
-  CONSUMER_WEB_BASE_URL: z.string().url().default('http://localhost:3000'),
+  CONSUMER_WEB_BASE_URL: z.string().url().default(DEFAULT_CONSUMER_WEB_BASE_URL),
 });
 
 type EnvironmentVariables = z.infer<typeof environmentSchema>;

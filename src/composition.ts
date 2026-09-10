@@ -26,7 +26,7 @@ import { DrizzleDocumentService } from './modules/documents/drizzle-document-ser
 import type { DocumentService } from './modules/documents/service.js';
 import { DrizzleProductCheckService } from './modules/product-checks/drizzle-product-check-service.js';
 import type { ProductCheckService } from './modules/product-checks/service.js';
-import type { AppConfig } from './config/env.js';
+import { DEFAULT_CONSUMER_WEB_BASE_URL, type AppConfig } from './config/env.js';
 import { DrizzleDraftCleanupWorker } from './jobs/draft-cleanup-worker.js';
 import { DrizzleOutboxWorker } from './jobs/drizzle-outbox-worker.js';
 import type { DraftCleanupResult } from './routes/internal-jobs.js';
@@ -146,7 +146,7 @@ export function createApplicationRegistry(
     queue: () => unavailable('Communication queue'),
   },
   malwareScanRequired = false,
-  consumerWebBaseUrl = 'http://localhost:3000',
+  consumerWebBaseUrl = DEFAULT_CONSUMER_WEB_BASE_URL,
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   const emailTrigger = new EmailTriggerService(communicationQueue);
@@ -176,14 +176,14 @@ export function createApplicationRegistry(
               communicationQueue,
             ),
             caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
-            admin: new DrizzleAdminService(
-              handle.db,
+            admin: new DrizzleAdminService({
+              db: handle.db,
               crypto,
-              new DrizzleCaseResolutionService(handle, crypto, emailTrigger),
+              resolutions: new DrizzleCaseResolutionService(handle, crypto, emailTrigger),
               blob,
               emailTrigger,
               consumerWebBaseUrl,
-            ),
+            }),
             staff: new DrizzleStaffService(handle.db, crypto),
             audit: new DrizzleAuditService(handle.db),
             refundExports: new RefundExportService(handle),
@@ -191,10 +191,10 @@ export function createApplicationRegistry(
               run: (work) =>
                 handle.transaction((tx) =>
                   work({
-                    admin: new DrizzleAdminService(
-                      tx,
+                    admin: new DrizzleAdminService({
+                      db: tx,
                       crypto,
-                      new DrizzleCaseResolutionService(
+                      resolutions: new DrizzleCaseResolutionService(
                         {
                           db: tx as never,
                           driver: handle.driver,
@@ -204,10 +204,9 @@ export function createApplicationRegistry(
                         crypto,
                         emailTrigger,
                       ),
-                      undefined,
                       emailTrigger,
                       consumerWebBaseUrl,
-                    ),
+                    }),
                     staff: new DrizzleStaffService(tx, crypto),
                     audit: new DrizzleAuditService(tx),
                   }),

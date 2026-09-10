@@ -105,14 +105,13 @@ describe.skipIf(!enabled)(
       caseId = (await loadAggregate(handle!, caseReference)).case.id;
 
       resolutions = new DrizzleCaseResolutionService(handle!, crypto, emailTrigger);
-      admin = new DrizzleAdminService(
-        handle!.db,
+      admin = new DrizzleAdminService({
+        db: handle!.db,
         crypto,
         resolutions,
-        undefined,
         emailTrigger,
-        WEB_BASE_URL,
-      );
+        consumerWebBaseUrl: WEB_BASE_URL,
+      });
     }, 60_000);
 
     afterEach(async () => {

@@ -13,6 +13,7 @@ const cryptoFake: SensitiveDataCryptoPort = {
 const CASE_ID = '11111111-1111-4111-8111-111111111111';
 const STAFF_ID = '22222222-2222-4222-8222-222222222222';
 const CASE_REFERENCE = 'KOI-7N4Q-A91M2X6P';
+const WEB_BASE_URL = 'https://web.example';
 
 /** A case row as the transition path reads it (open case, no incident). */
 function openCaseRow(status: string) {
@@ -30,7 +31,11 @@ describe('DrizzleAdminService RBAC operations', () => {
   it('appends a case event when a staff user transitions case status', async () => {
     const inserted: Record<string, unknown>[] = [];
     const db = createTransitionFakeDb(inserted);
-    const service = new DrizzleAdminService(db, cryptoFake);
+    const service = new DrizzleAdminService({
+      db,
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
 
     await service.transitionCaseStatus(CASE_REFERENCE, 'triage', STAFF_ID);
 
@@ -48,7 +53,11 @@ describe('DrizzleAdminService RBAC operations', () => {
   it('persists the transition note on the case event when provided', async () => {
     const inserted: Record<string, unknown>[] = [];
     const db = createTransitionFakeDb(inserted);
-    const service = new DrizzleAdminService(db, cryptoFake);
+    const service = new DrizzleAdminService({
+      db,
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
 
     await service.transitionCaseStatus(
       CASE_REFERENCE,
@@ -67,7 +76,11 @@ describe('DrizzleAdminService RBAC operations', () => {
   it('rejects a need_info transition without a note of at least 10 characters', async () => {
     const inserted: Record<string, unknown>[] = [];
     const db = createTransitionFakeDb(inserted);
-    const service = new DrizzleAdminService(db, cryptoFake);
+    const service = new DrizzleAdminService({
+      db,
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
 
     await expect(
       service.transitionCaseStatus(CASE_REFERENCE, 'need_info', STAFF_ID),
@@ -81,7 +94,11 @@ describe('DrizzleAdminService RBAC operations', () => {
   it('rejects a reason-bearing decision transition without a consumer-visible reason', async () => {
     const inserted: Record<string, unknown>[] = [];
     const db = createTransitionFakeDb(inserted);
-    const service = new DrizzleAdminService(db, cryptoFake);
+    const service = new DrizzleAdminService({
+      db,
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
 
     await expect(
       service.transitionCaseStatus(CASE_REFERENCE, 'rejected', STAFF_ID, 'too short'),
@@ -95,7 +112,11 @@ describe('DrizzleAdminService RBAC operations', () => {
   it('requires the consumer reason even for a forced (bypass-workflow) transition', async () => {
     const inserted: Record<string, unknown>[] = [];
     const db = createTransitionFakeDb(inserted);
-    const service = new DrizzleAdminService(db, cryptoFake);
+    const service = new DrizzleAdminService({
+      db,
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
 
     await expect(
       service.transitionCaseStatus(CASE_REFERENCE, 'rejected', STAFF_ID, undefined, true),
@@ -110,7 +131,11 @@ describe('DrizzleAdminService RBAC operations', () => {
       undefined,
       { requestedType: 'refund', approvedType: 'refund', status: 'approved' },
     ]);
-    const service = new DrizzleAdminService(db, cryptoFake);
+    const service = new DrizzleAdminService({
+      db,
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
 
     await expect(
       service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID, undefined, true),
@@ -264,14 +289,12 @@ function createEmailCapturingService(selectRows: unknown[]) {
       return Promise.resolve();
     },
   };
-  const service = new DrizzleAdminService(
-    createTransitionFakeDb(inserted, selectRows),
-    cryptoFake,
-    undefined,
-    undefined,
-    emailTrigger as never,
-    'https://web.example',
-  );
+  const service = new DrizzleAdminService({
+    db: createTransitionFakeDb(inserted, selectRows),
+    crypto: cryptoFake,
+    emailTrigger: emailTrigger as never,
+    consumerWebBaseUrl: WEB_BASE_URL,
+  });
   return { service, triggered };
 }
 
