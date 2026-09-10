@@ -138,6 +138,17 @@ export class CaseConsumerMissingError extends HttpProblemError {
   readonly title = 'Case Consumer Missing';
 }
 
+/**
+ * Thrown when a row a transaction already locked or validated goes missing
+ * mid-transaction — a locked update matching no row, or a referenced record
+ * absent at write time (data integrity gap). Maps to 500 as a typed problem.
+ */
+export class DataIntegrityError extends HttpProblemError {
+  readonly status = 500;
+  readonly type = problemType('data-integrity');
+  readonly title = 'Data Integrity';
+}
+
 export class NotImplementedServiceError extends Error {
   constructor(readonly capability: string) {
     super(

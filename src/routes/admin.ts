@@ -516,7 +516,7 @@ export function registerAdminRoutes(
       limit,
       ...(cursor ? { cursor } : {}),
     });
-    if (!page) throw new Error('Admin service is not configured.');
+    if (!page) throw new NotImplementedServiceError('Admin service');
     return context.json({ cases: page.cases, total: page.total, nextCursor: page.nextCursor }, 200);
   });
 
@@ -524,7 +524,7 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'case.export', { allowLegacy: true });
     if (guard instanceof Response) return guard;
     const cases = await registry.services.admin?.exportCases();
-    if (!cases) throw new Error('Admin service is not configured.');
+    if (!cases) throw new NotImplementedServiceError('Admin service');
     if (!context.get('legacyAdminKey')) {
       await requireAuditService(registry).record({
         actorUserId: guard.userId,
@@ -553,7 +553,7 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'case.queue.read');
     if (guard instanceof Response) return guard;
     const admin = registry.services.admin;
-    if (!admin) throw new Error('Admin service is not configured.');
+    if (!admin) throw new NotImplementedServiceError('Admin service');
     const search = context.req.query('search') ?? undefined;
     const severity = context.req.query('severity') ?? undefined;
     const reportabilityStatus = context.req.query('reportabilityStatus');
@@ -580,7 +580,7 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'case.queue.read');
     if (guard instanceof Response) return guard;
     const admin = registry.services.admin;
-    if (!admin) throw new Error('Admin service is not configured.');
+    if (!admin) throw new NotImplementedServiceError('Admin service');
     const incidentId = context.req.param('id');
     const detail = await admin.getIncidentDetail(incidentId);
     if (!detail) {
@@ -601,7 +601,7 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'case.queue.read');
     if (guard instanceof Response) return guard;
     const admin = registry.services.admin;
-    if (!admin) throw new Error('Admin service is not configured.');
+    if (!admin) throw new NotImplementedServiceError('Admin service');
     const campaigns = await admin.listCampaigns();
     return context.json({ campaigns }, 200);
   });
@@ -665,7 +665,7 @@ export function registerAdminRoutes(
       return validationError(context, 'documentId must be a UUID.');
     }
     const admin = registry.services.admin;
-    if (!admin?.getDocumentAccess) throw new Error('Admin service is not configured.');
+    if (!admin?.getDocumentAccess) throw new NotImplementedServiceError('Admin service');
     const access = await admin.getDocumentAccess(caseRef, documentId);
     if (!access) {
       return json(context, 404, {
@@ -800,7 +800,7 @@ export function registerAdminRoutes(
         'refund approvals require a positive integer refundAmountMinor and currency.',
       );
     if (!registry.services.admin?.approveResolution)
-      throw new Error('Resolution service is not configured.');
+      throw new NotImplementedServiceError('Resolution service');
     const result =
       type === 'refund' && currency
         ? await registry.services.admin.approveResolution(context.req.param('caseRef'), {
@@ -819,7 +819,7 @@ export function registerAdminRoutes(
             actorUserId: guard.userId,
             actorRole: guard.role,
           });
-    if (!result) throw new Error('Admin service is not configured.');
+    if (!result) throw new NotImplementedServiceError('Admin service');
     return context.json({ resolution: result }, 200);
   });
 
@@ -838,7 +838,7 @@ export function registerAdminRoutes(
         'note (10-2000 characters) and integer expectedVersion are required.',
       );
     if (!registry.services.admin?.completeResolution)
-      throw new Error('Resolution service is not configured.');
+      throw new NotImplementedServiceError('Resolution service');
     const externalReference = asString(body.externalReference);
     const result = externalReference
       ? await registry.services.admin.completeResolution(context.req.param('caseRef'), {
@@ -854,7 +854,7 @@ export function registerAdminRoutes(
           actorUserId: guard.userId,
           actorRole: guard.role,
         });
-    if (!result) throw new Error('Admin service is not configured.');
+    if (!result) throw new NotImplementedServiceError('Admin service');
     return context.json({ resolution: result }, 200);
   });
 
@@ -886,7 +886,7 @@ export function registerAdminRoutes(
       shippedAt = parsed;
     }
     if (!registry.services.admin?.recordShipment)
-      throw new Error('Resolution service is not configured.');
+      throw new NotImplementedServiceError('Resolution service');
     const result = await registry.services.admin.recordShipment(context.req.param('caseRef'), {
       trackingNumber,
       expectedVersion,
@@ -894,7 +894,7 @@ export function registerAdminRoutes(
       actorRole: guard.role,
       ...(shippedAt ? { shippedAt } : {}),
     });
-    if (!result) throw new Error('Admin service is not configured.');
+    if (!result) throw new NotImplementedServiceError('Admin service');
     return context.json({ resolution: result }, 200);
   });
 
@@ -913,7 +913,7 @@ export function registerAdminRoutes(
         'note (10-2000 characters) and integer expectedVersion are required.',
       );
     if (!registry.services.admin?.cancelResolution)
-      throw new Error('Resolution service is not configured.');
+      throw new NotImplementedServiceError('Resolution service');
     const result = await registry.services.admin.cancelResolution(context.req.param('caseRef'), {
       note,
       expectedVersion,
@@ -921,7 +921,7 @@ export function registerAdminRoutes(
       actorRole: guard.role,
       actorIsAdministrator: guard.role === 'ADMIN',
     });
-    if (!result) throw new Error('Admin service is not configured.');
+    if (!result) throw new NotImplementedServiceError('Admin service');
     return context.json({ resolution: result }, 200);
   });
 

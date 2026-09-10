@@ -34,7 +34,11 @@ import type {
   RecordShipmentInput,
   CaseResolutionService,
 } from '../resolutions/service.js';
-import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
+import {
+  ClaimValidationError,
+  NotImplementedServiceError,
+  ResourceNotFoundError,
+} from '../../shared/errors.js';
 import { maskAddress, maskEmail, maskName, maskOrderNumber, maskPhone } from './pii-masking.js';
 import type {
   AdminCaseDetail,
@@ -834,7 +838,7 @@ export class DrizzleAdminService implements AdminService {
     caseReference: string,
     input: Omit<ApproveResolutionInput, 'caseId'>,
   ): Promise<CaseResolution> {
-    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    if (!this.resolutions) throw new NotImplementedServiceError('Resolution service');
     const caseId = await this.caseIdForReference(caseReference);
     // ResolutionService.approve already enqueues the approval email (03A/03B)
     // inside its own transaction, deduped per case + resolution type — no
@@ -849,7 +853,7 @@ export class DrizzleAdminService implements AdminService {
     caseReference: string,
     input: Omit<CompleteResolutionInput, 'caseId'>,
   ): Promise<CaseResolution> {
-    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    if (!this.resolutions) throw new NotImplementedServiceError('Resolution service');
     return this.resolutions.recordExternalCompletion({
       ...input,
       caseId: await this.caseIdForReference(caseReference),
@@ -860,7 +864,7 @@ export class DrizzleAdminService implements AdminService {
     caseReference: string,
     input: Omit<RecordShipmentInput, 'caseId'>,
   ): Promise<CaseResolution> {
-    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    if (!this.resolutions) throw new NotImplementedServiceError('Resolution service');
     // ResolutionService.recordShipment enqueues the shipment email (06) inside
     // its own transaction, deduped per case + tracking number.
     return this.resolutions.recordShipment({
@@ -873,7 +877,7 @@ export class DrizzleAdminService implements AdminService {
     caseReference: string,
     input: Omit<CancelResolutionInput, 'caseId'>,
   ): Promise<CaseResolution> {
-    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    if (!this.resolutions) throw new NotImplementedServiceError('Resolution service');
     return this.resolutions.cancel({
       ...input,
       caseId: await this.caseIdForReference(caseReference),
@@ -884,7 +888,7 @@ export class DrizzleAdminService implements AdminService {
     caseReference: string,
     documentId: string,
   ): Promise<AdminDocumentAccess | null> {
-    if (!this.blob) throw new Error('Blob service is not configured.');
+    if (!this.blob) throw new NotImplementedServiceError('Blob service');
     const db = this.db;
     const [caseRow] = await db
       .select({ id: recallCases.id })

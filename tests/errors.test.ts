@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DataIntegrityError,
   DraftExpiredOrInvalidError,
   EvidenceRulesViolationError,
   HttpProblemError,
@@ -68,6 +69,7 @@ describe('typed business errors', () => {
     [PayloadTooLargeError, 413, 'Payload Too Large'],
     [UnsupportedMediaTypeError, 415, 'Unsupported Media Type'],
     [EvidenceRulesViolationError, 422, 'Unprocessable Entity'],
+    [DataIntegrityError, 500, 'Data Integrity'],
   ])('%s maps to the expected status and title', (ErrorClass, status, title) => {
     const error = new ErrorClass('detail');
     expect(error).toBeInstanceOf(HttpProblemError);

@@ -131,6 +131,8 @@ describe('admin routes (T8/O10)', () => {
     const response = await app.request('/admin/cases', {
       headers: { Authorization: 'Bearer admin-secret' },
     });
-    expect(response.status).toBe(500);
+    // CLAUDE.md convention: a missing service is a 501 NotImplementedServiceError,
+    // never a bare 500.
+    expect(response.status).toBe(501);
   });
 });

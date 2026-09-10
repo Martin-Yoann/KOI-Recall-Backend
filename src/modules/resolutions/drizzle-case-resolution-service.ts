@@ -12,6 +12,7 @@ import type { EmailTriggerService } from '../communications/email-trigger-servic
 import {
   ClaimConflictError,
   ClaimValidationError,
+  DataIntegrityError,
   ResourceNotFoundError,
 } from '../../shared/errors.js';
 import type { StaffRole } from '../staff/permissions.js';
@@ -120,7 +121,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         })
         .where(eq(caseResolutions.id, locked.id))
         .returning();
-      if (!updated) throw new Error('Resolution update returned no row.');
+      if (!updated) throw new DataIntegrityError('Resolution update returned no row.');
 
       await tx.insert(caseEvents).values({
         caseId: input.caseId,
@@ -201,7 +202,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         })
         .where(eq(caseResolutions.id, locked.id))
         .returning();
-      if (!updated) throw new Error('Resolution update returned no row.');
+      if (!updated) throw new DataIntegrityError('Resolution update returned no row.');
 
       await tx.insert(caseEvents).values({
         caseId: input.caseId,
@@ -281,7 +282,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         })
         .where(eq(caseResolutions.id, locked.id))
         .returning();
-      if (!updated) throw new Error('Resolution update returned no row.');
+      if (!updated) throw new DataIntegrityError('Resolution update returned no row.');
 
       await tx.insert(caseEvents).values({
         caseId: input.caseId,
@@ -348,7 +349,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         })
         .where(eq(caseResolutions.id, locked.id))
         .returning();
-      if (!updated) throw new Error('Resolution update returned no row.');
+      if (!updated) throw new DataIntegrityError('Resolution update returned no row.');
 
       await tx.insert(caseEvents).values({
         caseId: input.caseId,
@@ -432,7 +433,8 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
       .from(recallCases)
       .where(eq(recallCases.id, caseId))
       .limit(1);
-    if (!caseRow) throw new Error('Resolution audit could not resolve the case reference.');
+    if (!caseRow)
+      throw new DataIntegrityError('Resolution audit could not resolve the case reference.');
     await tx.insert(adminAuditEvents).values({
       actorUserId,
       actorRole,
