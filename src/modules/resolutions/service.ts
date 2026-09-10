@@ -26,6 +26,9 @@ export interface CaseResolution {
   externalReference: string | null;
   completedByStaffUserId: string | null;
   completedAt: string | null;
+  /** Carrier tracking number once the replacement shipment is recorded. */
+  trackingNumber: string | null;
+  shippedAt: string | null;
   version: number;
 }
 
@@ -75,6 +78,17 @@ export interface CancelResolutionInput {
   actorIsAdministrator: boolean;
 }
 
+export interface RecordShipmentInput {
+  caseId: string;
+  /** Carrier tracking number, 3–120 characters. */
+  trackingNumber: string;
+  /** Defaults to the recording time when omitted. */
+  shippedAt?: Date;
+  expectedVersion: number;
+  actorUserId: string;
+  actorRole: StaffRole;
+}
+
 export interface CaseResolutionService {
   /** Submission-time write; runs on the caller's transaction. */
   requestFromSubmission(tx: DatabaseExecutor, input: RequestResolutionInput): Promise<void>;
@@ -84,6 +98,13 @@ export interface CaseResolutionService {
 
   /** approved → externally_completed. No return path. */
   recordExternalCompletion(input: CompleteResolutionInput): Promise<CaseResolution>;
+
+  /**
+   * Records the replacement shipment fact (tracking number) on an approved
+   * replacement and enqueues the "replacement shipped" email. Shipment is
+   * never inferred from approval — only this explicit action records it.
+   */
+  recordShipment(input: RecordShipmentInput): Promise<CaseResolution>;
 
   /** requested → cancelled (any role) or approved → cancelled (administrator only). */
   cancel(input: CancelResolutionInput): Promise<CaseResolution>;

@@ -219,6 +219,18 @@ describe('CaseWorkflowPolicy — resolution actions', () => {
     expect(snap.allowedActions).toContain('resolution:cancel');
   });
 
+  it('approved replacement → ship is offered; approved refund is not', () => {
+    const replacement = evaluate(
+      state({ resolution: resolution({ status: 'approved', approvedType: 'replacement' }) }),
+    );
+    expect(replacement.allowedActions).toContain('resolution:ship');
+
+    const refund = evaluate(
+      state({ resolution: resolution({ status: 'approved', approvedType: 'refund' }) }),
+    );
+    expect(refund.allowedActions).not.toContain('resolution:ship');
+  });
+
   it('externally_completed → no resolution actions (no return)', () => {
     const snap = evaluate(state({ resolution: resolution({ status: 'externally_completed' }) }));
     expect(snap.allowedActions.filter((a) => a.startsWith('resolution:'))).toHaveLength(0);

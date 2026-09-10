@@ -819,6 +819,110 @@ describe('B-end RBAC (ADR-0004)', () => {
     expect(forwarded[1]).toEqual({ nextStatus: 'triage', note: 'Product anomaly suspected.' });
   });
 
+  it('requires a consumer-visible reason for rejected / duplicate / withdrawn', async () => {
+    const staff = makeStaffFake();
+    const admin = makeAdminFake();
+    const audit = makeAuditFake();
+    const forwarded: Array<{ nextStatus: string; note?: string }> = [];
+    admin.transitionCaseStatus = (_ref, nextStatus, _userId, note) => {
+      forwarded.push({ nextStatus, ...(note !== undefined ? { note } : {}) });
+      return Promise.resolve();
+    };
+    await staff.createStaffUser({
+      email: 'r4@x.com',
+      displayName: 'Reviewer4',
+      role: 'MANAGER',
+      password: 'password1234',
+    });
+    const token = (await staff.login('r4@x.com', 'password1234'))!.token;
+    const app = appWith({ admin, staff, audit });
+
+    for (const status of ['rejected', 'duplicate', 'withdrawn']) {
+      const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      });
+      expect(response.status).toBe(422);
+    }
+
+    const withReason = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status: 'rejected',
+        note: 'The product was outside the recalled lot range.',
+      }),
+    });
+    expect(withReason.status).toBe(204);
+    expect(forwarded).toEqual([
+      {
+        nextStatus: 'rejected',
+        note: 'The product was outside the recalled lot range.',
+      },
+    ]);
+  });
+
+  it('records a replacement shipment and rejects an invalid tracking number', async () => {
+    const staff = makeStaffFake();
+    const admin = makeAdminFake();
+    const audit = makeAuditFake();
+    const forwarded: Array<Record<string, unknown>> = [];
+    admin.recordShipment = (caseRef, input) => {
+      forwarded.push({ caseRef, ...input });
+      return Promise.resolve({
+        id: '11111111-1111-4111-8111-111111111112',
+        caseId: '11111111-1111-4111-8111-111111111113',
+        requestedType: 'replacement',
+        requestedRemedyOptionId: null,
+        approvedType: 'replacement',
+        status: 'approved',
+        refundAmountMinor: null,
+        currency: null,
+        approvedByStaffUserId: null,
+        approvedAt: null,
+        externalReference: null,
+        completedByStaffUserId: null,
+        completedAt: null,
+        trackingNumber: 'TRK-000-001',
+        shippedAt: '2026-09-10T09:00:00.000Z',
+        version: 4,
+      });
+    };
+    await staff.createStaffUser({
+      email: 'mgr-ship@x.com',
+      displayName: 'Manager Ship',
+      role: 'MANAGER',
+      password: 'password1234',
+    });
+    const token = (await staff.login('mgr-ship@x.com', 'password1234'))!.token;
+    const app = appWith({ admin, staff, audit });
+
+    const invalid = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/resolution/shipment', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackingNumber: 'ab', expectedVersion: 3 }),
+    });
+    expect(invalid.status).toBe(422);
+
+    const recorded = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/resolution/shipment', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trackingNumber: '  TRK-000-001  ', expectedVersion: 3 }),
+    });
+    expect(recorded.status).toBe(200);
+    expect(forwarded).toHaveLength(1);
+    expect(forwarded[0]).toMatchObject({
+      caseRef: 'KOI-7N4Q-A91M2X6P',
+      trackingNumber: 'TRK-000-001',
+      expectedVersion: 3,
+      actorRole: 'MANAGER',
+    });
+    expect(typeof forwarded[0]?.actorUserId).toBe('string');
+    const body = (await recorded.json()) as { resolution: { trackingNumber: string } };
+    expect(body.resolution.trackingNumber).toBe('TRK-000-001');
+  });
+
   it('mints an audited evidence access URL for a case document', async () => {
     const staff = makeStaffFake();
     const admin = makeAdminFake();

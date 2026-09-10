@@ -23,6 +23,7 @@ import type {
   CaseResolutionStatus,
   CaseResolutionType,
   CompleteResolutionInput,
+  RecordShipmentInput,
   RequestResolutionInput,
 } from './service.js';
 
@@ -46,6 +47,8 @@ function toCaseResolution(row: typeof caseResolutions.$inferSelect): CaseResolut
     externalReference: row.externalReference,
     completedByStaffUserId: row.completedByStaffUserId,
     completedAt: row.completedAt ? row.completedAt.toISOString() : null,
+    trackingNumber: row.trackingNumber,
+    shippedAt: row.shippedAt ? row.shippedAt.toISOString() : null,
     version: row.version,
   };
 }
@@ -220,6 +223,100 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
           ...(input.externalReference ? { externalReference: input.externalReference } : {}),
         },
       );
+
+      // 05 refund_completed — the money-side fact is only emailed once the
+      // external completion is recorded, and never for replacements.
+      if (updated.approvedType === 'refund') {
+        const [caseInfo] = await tx
+          .select({ publicReference: recallCases.publicReference, locale: recallCases.locale })
+          .from(recallCases)
+          .where(eq(recallCases.id, input.caseId));
+        if (!caseInfo) {
+          throw new ResourceNotFoundError(
+            `Case ${input.caseId} not found for resolution completion.`,
+          );
+        }
+        await this.emailTrigger?.trigger(tx, {
+          caseId: input.caseId,
+          templateKey: 'refund_completed',
+          locale: caseInfo.locale,
+          variables: {
+            caseReference: caseInfo.publicReference,
+            refundAmount: ((updated.refundAmountMinor ?? 0) / 100).toFixed(2),
+            refundCurrency: updated.currency ?? '',
+            referenceLine: input.externalReference ? `Reference: ${input.externalReference}` : '',
+          },
+          deduplicationKey: `res-complete:${input.caseId}`,
+          eventType: 'resolution.completion.requested',
+        });
+      }
+
+      return toCaseResolution(updated);
+    });
+  }
+
+  async recordShipment(input: RecordShipmentInput): Promise<CaseResolution> {
+    const trackingNumber = input.trackingNumber.trim();
+    if (trackingNumber.length < 3 || trackingNumber.length > 120) {
+      throw new ClaimValidationError('trackingNumber must be 3-120 characters.');
+    }
+    return this.handle.transaction(async (tx) => {
+      const locked = await this.lockForUpdate(tx, input.caseId);
+      this.assertVersion(locked.version, input.expectedVersion);
+      this.assertStatus(locked.status, 'approved', 'record a shipment');
+      if (locked.approvedType !== 'replacement') {
+        throw new ClaimValidationError(
+          'A shipment can only be recorded for an approved replacement resolution.',
+        );
+      }
+
+      const shippedAt = input.shippedAt ?? new Date();
+      const [updated] = await tx
+        .update(caseResolutions)
+        .set({
+          trackingNumber,
+          shippedAt,
+          version: input.expectedVersion + 1,
+          updatedAt: new Date(),
+        })
+        .where(eq(caseResolutions.id, locked.id))
+        .returning();
+      if (!updated) throw new Error('Resolution update returned no row.');
+
+      await tx.insert(caseEvents).values({
+        caseId: input.caseId,
+        eventType: 'replacement.shipped',
+        actorType: 'staff',
+        actorId: input.actorUserId,
+        data: { trackingNumber, shippedAt: shippedAt.toISOString() },
+      });
+      await this.recordAudit(
+        tx,
+        input.actorUserId,
+        input.actorRole,
+        'resolution.ship',
+        input.caseId,
+        locked.id,
+        { trackingNumber },
+      );
+
+      // 06 replacement_shipped — requires this authoritative shipment fact;
+      // approval alone never claims shipment.
+      const [caseInfo] = await tx
+        .select({ publicReference: recallCases.publicReference, locale: recallCases.locale })
+        .from(recallCases)
+        .where(eq(recallCases.id, input.caseId));
+      if (!caseInfo) {
+        throw new ResourceNotFoundError(`Case ${input.caseId} not found for shipment recording.`);
+      }
+      await this.emailTrigger?.trigger(tx, {
+        caseId: input.caseId,
+        templateKey: 'shipment_shipped',
+        locale: caseInfo.locale,
+        variables: { caseReference: caseInfo.publicReference, trackingNumber },
+        deduplicationKey: `res-ship:${input.caseId}:${trackingNumber}`,
+        eventType: 'replacement.shipment.requested',
+      });
 
       return toCaseResolution(updated);
     });

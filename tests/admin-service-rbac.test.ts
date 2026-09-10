@@ -10,44 +10,36 @@ const cryptoFake: SensitiveDataCryptoPort = {
   lookupHash: (value) => Promise.resolve(value),
 };
 
+const CASE_ID = '11111111-1111-4111-8111-111111111111';
+const STAFF_ID = '22222222-2222-4222-8222-222222222222';
+const CASE_REFERENCE = 'KOI-7N4Q-A91M2X6P';
+
+/** A case row as the transition path reads it (open case, no incident). */
+function openCaseRow(status: string) {
+  return {
+    id: CASE_ID,
+    publicReference: CASE_REFERENCE,
+    locale: 'en-US',
+    status,
+    subtype: 'standard',
+    incidentFlag: false,
+  };
+}
+
 describe('DrizzleAdminService RBAC operations', () => {
   it('appends a case event when a staff user transitions case status', async () => {
     const inserted: Record<string, unknown>[] = [];
-    const db = {
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: () =>
-              Promise.resolve([
-                { id: '11111111-1111-4111-8111-111111111111', status: 'submitted' },
-              ]),
-          }),
-        }),
-      }),
-      update: () => ({
-        set: () => ({ where: () => Promise.resolve() }),
-      }),
-      insert: () => ({
-        values: (values: Record<string, unknown>) => {
-          inserted.push(values);
-          return Promise.resolve();
-        },
-      }),
-    } as unknown as Database;
+    const db = createTransitionFakeDb(inserted);
     const service = new DrizzleAdminService(db, cryptoFake);
 
-    await service.transitionCaseStatus(
-      'KOI-7N4Q-A91M2X6P',
-      'triage',
-      '22222222-2222-4222-8222-222222222222',
-    );
+    await service.transitionCaseStatus(CASE_REFERENCE, 'triage', STAFF_ID);
 
     expect(inserted).toEqual([
       {
-        caseId: '11111111-1111-4111-8111-111111111111',
+        caseId: CASE_ID,
         eventType: 'case.status.transitioned',
         actorType: 'staff',
-        actorId: '22222222-2222-4222-8222-222222222222',
+        actorId: STAFF_ID,
         data: { previousStatus: 'submitted', nextStatus: 'triage' },
       },
     ]);
@@ -59,9 +51,9 @@ describe('DrizzleAdminService RBAC operations', () => {
     const service = new DrizzleAdminService(db, cryptoFake);
 
     await service.transitionCaseStatus(
-      'KOI-7N4Q-A91M2X6P',
+      CASE_REFERENCE,
       'triage',
-      '22222222-2222-4222-8222-222222222222',
+      STAFF_ID,
       'Product anomaly suspected — verify lot code.  ',
     );
 
@@ -78,32 +70,174 @@ describe('DrizzleAdminService RBAC operations', () => {
     const service = new DrizzleAdminService(db, cryptoFake);
 
     await expect(
-      service.transitionCaseStatus(
-        'KOI-7N4Q-A91M2X6P',
-        'need_info',
-        '22222222-2222-4222-8222-222222222222',
-      ),
+      service.transitionCaseStatus(CASE_REFERENCE, 'need_info', STAFF_ID),
     ).rejects.toThrow('at least 10 characters');
     await expect(
-      service.transitionCaseStatus(
-        'KOI-7N4Q-A91M2X6P',
-        'need_info',
-        '22222222-2222-4222-8222-222222222222',
-        'short',
-      ),
+      service.transitionCaseStatus(CASE_REFERENCE, 'need_info', STAFF_ID, 'short'),
     ).rejects.toThrow('at least 10 characters');
     expect(inserted).toEqual([]);
   });
+
+  it('rejects a reason-bearing decision transition without a consumer-visible reason', async () => {
+    const inserted: Record<string, unknown>[] = [];
+    const db = createTransitionFakeDb(inserted);
+    const service = new DrizzleAdminService(db, cryptoFake);
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'rejected', STAFF_ID, 'too short'),
+    ).rejects.toThrow('consumer-visible reason');
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'withdrawn', STAFF_ID),
+    ).rejects.toThrow('consumer-visible reason');
+    expect(inserted).toEqual([]);
+  });
+
+  it('enqueues the need_info email with the action link and an event-scoped dedup key', async () => {
+    const { service, triggered } = createEmailCapturingService([openCaseRow('under_review')]);
+
+    await service.transitionCaseStatus(
+      CASE_REFERENCE,
+      'need_info',
+      STAFF_ID,
+      'Please send a photo of the lot code.',
+    );
+
+    expect(triggered).toEqual([
+      {
+        caseId: CASE_ID,
+        templateKey: 'need_info',
+        locale: 'en-US',
+        variables: {
+          caseReference: CASE_REFERENCE,
+          requestedInformation: 'Please send a photo of the lot code.',
+          actionUrl: `https://web.example/dashboard/claims/${CASE_REFERENCE}`,
+        },
+        deduplicationKey: `case-action-required:${CASE_ID}:event-1`,
+        eventType: 'case.action_required.requested',
+      },
+    ]);
+  });
+
+  it('enqueues the not-approved email for a duplicate transition', async () => {
+    const { service, triggered } = createEmailCapturingService([openCaseRow('submitted')]);
+
+    await service.transitionCaseStatus(
+      CASE_REFERENCE,
+      'duplicate',
+      STAFF_ID,
+      'This claim duplicates an earlier submission.',
+    );
+
+    expect(triggered).toEqual([
+      {
+        caseId: CASE_ID,
+        templateKey: 'claim_rejected',
+        locale: 'en-US',
+        variables: {
+          caseReference: CASE_REFERENCE,
+          reason: 'This claim duplicates an earlier submission.',
+        },
+        deduplicationKey: `case-not-approved:${CASE_ID}:event-1`,
+        eventType: 'case.not_approved.requested',
+      },
+    ]);
+  });
+
+  it('enqueues the closure email when a case is withdrawn', async () => {
+    const { service, triggered } = createEmailCapturingService([openCaseRow('under_review')]);
+
+    await service.transitionCaseStatus(
+      CASE_REFERENCE,
+      'withdrawn',
+      STAFF_ID,
+      'Withdrawn at the consumer request.',
+    );
+
+    expect(triggered).toEqual([
+      {
+        caseId: CASE_ID,
+        templateKey: 'case_closed',
+        locale: 'en-US',
+        variables: {
+          caseReference: CASE_REFERENCE,
+          closureReason: 'Withdrawn at the consumer request.',
+        },
+        deduplicationKey: `case-closed:${CASE_ID}:event-1`,
+        eventType: 'case.closed.requested',
+      },
+    ]);
+  });
+
+  it('sends case_completed (not case_closed) when a remedied case closes', async () => {
+    const { service, triggered } = createEmailCapturingService([
+      openCaseRow('closure_review'),
+      undefined,
+      { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+    ]);
+
+    await service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID);
+
+    expect(triggered).toEqual([
+      {
+        caseId: CASE_ID,
+        templateKey: 'case_completed',
+        locale: 'en-US',
+        variables: { caseReference: CASE_REFERENCE, completedResolutionLabel: 'Refund' },
+        deduplicationKey: `case-completed:${CASE_ID}:event-1`,
+        eventType: 'case.completed.requested',
+      },
+    ]);
+  });
+
+  it('sends no email for a noise-control transition (under_review)', async () => {
+    const { service, triggered } = createEmailCapturingService([openCaseRow('triage')]);
+
+    await service.transitionCaseStatus(CASE_REFERENCE, 'under_review', STAFF_ID);
+
+    expect(triggered).toEqual([]);
+  });
 });
 
-/** A fake DB whose every select resolves like the seed case row used above. */
-function createTransitionFakeDb(inserted: Record<string, unknown>[]): Database {
+/** A service wired to a fake email trigger that captures every enqueue. */
+function createEmailCapturingService(selectRows: unknown[]) {
+  const inserted: Record<string, unknown>[] = [];
+  const triggered: unknown[] = [];
+  const emailTrigger = {
+    trigger: (_tx: unknown, params: unknown) => {
+      triggered.push(params);
+      return Promise.resolve();
+    },
+  };
+  const service = new DrizzleAdminService(
+    createTransitionFakeDb(inserted, selectRows),
+    cryptoFake,
+    undefined,
+    undefined,
+    emailTrigger as never,
+    'https://web.example',
+  );
+  return { service, triggered };
+}
+
+/**
+ * Fake DB serving one canned case row by default, or the given rows in select
+ * order (`undefined` skips that select's consumer). The transition path locks
+ * the case row and inserts the case event with `.returning`, so the fake
+ * models `.for('update')` and `.returning({ id })`.
+ */
+function createTransitionFakeDb(
+  inserted: Record<string, unknown>[],
+  selectRows: unknown[] = [],
+): Database {
+  const fallback = openCaseRow('submitted');
+  const nextRow = () => (selectRows.length > 0 ? selectRows.shift() : fallback);
+  const resolved = () => Promise.resolve([nextRow()]);
   return {
     select: () => ({
       from: () => ({
         where: () => ({
-          limit: () =>
-            Promise.resolve([{ id: '11111111-1111-4111-8111-111111111111', status: 'submitted' }]),
+          for: () => ({ limit: resolved }),
+          limit: resolved,
         }),
       }),
     }),
@@ -113,7 +247,9 @@ function createTransitionFakeDb(inserted: Record<string, unknown>[]): Database {
     insert: () => ({
       values: (values: Record<string, unknown>) => {
         inserted.push(values);
-        return Promise.resolve();
+        return {
+          returning: () => Promise.resolve([{ id: 'event-1' }]),
+        };
       },
     }),
   } as unknown as Database;

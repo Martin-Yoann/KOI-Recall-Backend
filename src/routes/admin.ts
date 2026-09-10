@@ -724,14 +724,19 @@ export function registerAdminRoutes(
     const trimmedNote = note?.trim();
     // The consumer must be told what to provide: a need_info transition
     // without a note would strand them in "action required" with no guidance.
+    // The same note is the consumer-visible reason in the not-approved and
+    // closure emails, so those transitions require one too.
+    const reasonStatuses = ['need_info', 'rejected', 'duplicate', 'withdrawn'];
     if (
       guard.role !== 'ADMIN' &&
-      nextStatus === 'need_info' &&
+      reasonStatuses.includes(nextStatus) &&
       (!trimmedNote || trimmedNote.length < 10)
     ) {
       return validationError(
         context,
-        'A note of at least 10 characters is required when requesting additional information.',
+        nextStatus === 'need_info'
+          ? 'A note of at least 10 characters is required when requesting additional information.'
+          : `A consumer-visible reason of at least 10 characters is required when moving a case to '${nextStatus}'.`,
       );
     }
     if (trimmedNote && trimmedNote.length > 2000) {
@@ -852,6 +857,46 @@ export function registerAdminRoutes(
           actorUserId: guard.userId,
           actorRole: guard.role,
         });
+    if (!result) throw new Error('Admin service is not configured.');
+    return context.json({ resolution: result }, 200);
+  });
+
+  app.post('/admin/cases/:caseRef/resolution/shipment', async (context) => {
+    const guard = await requirePermission(context, registry, 'case.status.transition');
+    if (guard instanceof Response) return guard;
+    const body = await bodyRecord(context);
+    const trackingNumber = asString(body.trackingNumber)?.trim();
+    const expectedVersion =
+      typeof body.expectedVersion === 'number'
+        ? body.expectedVersion
+        : Number(body.expectedVersion);
+    if (
+      !trackingNumber ||
+      trackingNumber.length < 3 ||
+      trackingNumber.length > 120 ||
+      !Number.isInteger(expectedVersion)
+    )
+      return validationError(
+        context,
+        'trackingNumber (3-120 characters) and integer expectedVersion are required.',
+      );
+    let shippedAt: Date | undefined;
+    const shippedAtRaw = asString(body.shippedAt);
+    if (shippedAtRaw !== undefined) {
+      const parsed = new Date(shippedAtRaw);
+      if (Number.isNaN(parsed.getTime()))
+        return validationError(context, 'shippedAt must be an ISO 8601 timestamp.');
+      shippedAt = parsed;
+    }
+    if (!registry.services.admin?.recordShipment)
+      throw new Error('Resolution service is not configured.');
+    const result = await registry.services.admin.recordShipment(context.req.param('caseRef'), {
+      trackingNumber,
+      expectedVersion,
+      actorUserId: guard.userId,
+      actorRole: guard.role,
+      ...(shippedAt ? { shippedAt } : {}),
+    });
     if (!result) throw new Error('Admin service is not configured.');
     return context.json({ resolution: result }, 200);
   });

@@ -239,7 +239,11 @@ function resolutionActions(state: WorkflowCaseState): string[] {
     case 'requested':
       return ['resolution:approve', 'resolution:cancel'];
     case 'approved':
-      return ['resolution:complete', 'resolution:cancel'];
+      // Only a replacement can (and must) be recorded as shipped before its
+      // external completion; refunds complete without a shipment fact.
+      return state.resolution?.approvedType === 'replacement'
+        ? ['resolution:ship', 'resolution:complete', 'resolution:cancel']
+        : ['resolution:complete', 'resolution:cancel'];
     default:
       return [];
   }

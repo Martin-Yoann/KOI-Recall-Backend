@@ -11,6 +11,7 @@ import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
 import {
   campaignEvidenceRequirements,
   campaignMessageTemplates,
+  templateVersions,
   campaignProductLots,
   campaignProducts,
   campaignRemedyOptions,
@@ -1307,40 +1308,37 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     });
   });
 
-  it('rolls back all Case-owned writes when no active confirmation template exists', async () => {
-    const [draft] = await handle!.db
-      .select({ campaignVersionId: claimDrafts.campaignVersionId })
-      .from(claimDrafts)
-      .where(eq(claimDrafts.id, fixture!.draftId));
-    if (!draft) throw new Error('Fixture Draft was not found.');
-    const disabled = await handle!.db
-      .update(campaignMessageTemplates)
-      .set({ active: false })
+  it('rolls back all Case-owned writes when no confirmation template version exists', async () => {
+    // The confirmation email resolves `template_versions` (the legacy
+    // campaign template is no longer read). Park the active version under a
+    // different key so the lookup misses without disturbing rows that already
+    // sent Communications pin to.
+    const parked = await handle!.db
+      .update(templateVersions)
+      .set({ templateKey: 'claim_confirmation_parked' })
       .where(
         and(
-          eq(campaignMessageTemplates.campaignVersionId, draft.campaignVersionId),
-          eq(campaignMessageTemplates.locale, 'en-US'),
-          eq(campaignMessageTemplates.templateType, 'claim_confirmation'),
-          eq(campaignMessageTemplates.active, true),
+          eq(templateVersions.templateKey, 'claim_confirmation'),
+          eq(templateVersions.locale, 'en-US'),
         ),
       )
-      .returning({ id: campaignMessageTemplates.id });
-    expect(disabled.length).toBeGreaterThan(0);
+      .returning({ id: templateVersions.id });
+    expect(parked.length).toBeGreaterThan(0);
 
     try {
       await expect(
         new DrizzleCaseService(handle!, crypto).submit(fixture!.command()),
-      ).rejects.toThrow('An active Claim confirmation template is required.');
+      ).rejects.toThrow('No template version for claim_confirmation');
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
     } finally {
       await handle!.db
-        .update(campaignMessageTemplates)
-        .set({ active: true })
+        .update(templateVersions)
+        .set({ templateKey: 'claim_confirmation' })
         .where(
           inArray(
-            campaignMessageTemplates.id,
-            disabled.map((template) => template.id),
+            templateVersions.id,
+            parked.map((template) => template.id),
           ),
         );
     }

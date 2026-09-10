@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { sql } from 'drizzle-orm';
 
 import { createDatabase } from '../db/client.js';
@@ -27,10 +29,16 @@ async function setupTemplates() {
     {
       templateKey: 'need_info',
       locale: 'en-US',
-      version: 1,
-      subject: 'Need more info for {{caseReference}}',
-      htmlBody: '<p>Please provide more info at {{actionUrl}}</p>',
-      textBody: 'Please provide more info at {{actionUrl}}',
+      version: 2,
+      subject: 'Action needed for recall claim {{caseReference}}',
+      htmlBody:
+        '<p>We need additional information to continue reviewing your recall claim {{caseReference}}.</p>' +
+        '<p>Requested information: {{requestedInformation}}</p>' +
+        '<p>Please respond using the secure claim link: <a href="{{actionUrl}}">{{actionUrl}}</a></p>',
+      textBody:
+        'We need additional information to continue reviewing your recall claim {{caseReference}}.\n' +
+        'Requested information: {{requestedInformation}}\n' +
+        'Please respond using the secure claim link: {{actionUrl}}',
     },
     {
       templateKey: 'refund_approved',
@@ -51,34 +59,71 @@ async function setupTemplates() {
     {
       templateKey: 'claim_rejected',
       locale: 'en-US',
-      version: 1,
-      subject: 'Claim {{caseReference}} update',
-      htmlBody: '<p>Reason: {{reason}}</p>',
-      textBody: 'Reason: {{reason}}',
+      version: 2,
+      subject: 'Update on recall claim {{caseReference}}',
+      htmlBody:
+        '<p>We completed our review of your recall claim {{caseReference}} and could not approve it.</p>' +
+        '<p>Reason: {{reason}}</p>' +
+        '<p>If you believe information was missed, contact support and include your case reference.</p>',
+      textBody:
+        'We completed our review of your recall claim {{caseReference}} and could not approve it.\n' +
+        'Reason: {{reason}}\n' +
+        'If you believe information was missed, contact support and include your case reference.',
     },
     {
       templateKey: 'refund_completed',
       locale: 'en-US',
-      version: 1,
-      subject: 'Refund completed for {{caseReference}}',
-      htmlBody: '<p>Bank reference: {{bankReference}}</p>',
-      textBody: 'Bank reference: {{bankReference}}',
+      version: 2,
+      subject: 'Refund completed for recall claim {{caseReference}}',
+      htmlBody:
+        '<p>Your approved refund for claim {{caseReference}} has been completed.</p>' +
+        '<p>Refund amount: {{refundAmount}} {{refundCurrency}}</p>' +
+        '<p>{{referenceLine}}</p>' +
+        '<p>The time it takes to appear may depend on your bank or payment provider. ' +
+        'Contact support if it is not visible soon.</p>',
+      textBody:
+        'Your approved refund for claim {{caseReference}} has been completed.\n' +
+        'Refund amount: {{refundAmount}} {{refundCurrency}}\n' +
+        '{{referenceLine}}\n' +
+        'The time it takes to appear may depend on your bank or payment provider.',
     },
     {
       templateKey: 'shipment_shipped',
       locale: 'en-US',
+      version: 2,
+      subject: 'Your replacement has shipped - claim {{caseReference}}',
+      htmlBody:
+        '<p>Your replacement for claim {{caseReference}} has shipped.</p>' +
+        '<p>Tracking number: {{trackingNumber}}</p>',
+      textBody:
+        'Your replacement for claim {{caseReference}} has shipped.\n' +
+        'Tracking number: {{trackingNumber}}',
+    },
+    {
+      templateKey: 'case_completed',
+      locale: 'en-US',
       version: 1,
-      subject: 'Shipment for {{caseReference}}',
-      htmlBody: '<p>Tracking: {{trackingNumber}}</p>',
-      textBody: 'Tracking: {{trackingNumber}}',
+      subject: 'Recall case {{caseReference}} is complete',
+      htmlBody:
+        '<p>Your recall case {{caseReference}} is complete.</p>' +
+        '<p>Completed resolution: {{completedResolutionLabel}}</p>',
+      textBody:
+        'Your recall case {{caseReference}} is complete.\n' +
+        'Completed resolution: {{completedResolutionLabel}}',
     },
     {
       templateKey: 'case_closed',
       locale: 'en-US',
-      version: 1,
-      subject: 'Case {{caseReference}} closed',
-      htmlBody: '<p>Reason: {{closureReason}}</p>',
-      textBody: 'Reason: {{closureReason}}',
+      version: 2,
+      subject: 'Recall case {{caseReference}} has been closed',
+      htmlBody:
+        '<p>Your recall case {{caseReference}} has been closed.</p>' +
+        '<p>Reason: {{closureReason}}</p>' +
+        '<p>If you did not request this closure, contact support and include your case reference.</p>',
+      textBody:
+        'Your recall case {{caseReference}} has been closed.\n' +
+        'Reason: {{closureReason}}\n' +
+        'If you did not request this closure, contact support and include your case reference.',
     },
   ];
 

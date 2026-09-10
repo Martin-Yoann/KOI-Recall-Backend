@@ -1,3 +1,5 @@
+import 'dotenv/config';
+
 import { and, desc, eq } from 'drizzle-orm';
 
 import { createDatabase } from '../db/client.js';
@@ -13,13 +15,29 @@ import { EmailRenderer } from '../platform/email/renderer.js';
  */
 const SAMPLE_VARIABLES: Record<string, Record<string, string>> = {
   claim_confirmation: { caseReference: 'TEST-123', submittedAt: new Date().toISOString() },
-  need_info: { caseReference: 'TEST-123', actionUrl: 'https://example.example/need-info' },
+  need_info: {
+    caseReference: 'TEST-123',
+    requestedInformation: 'A photo of the product label showing the lot number',
+    actionUrl: 'https://example.example/dashboard/claims/TEST-123',
+  },
   refund_approved: { caseReference: 'TEST-123', refundAmount: '19.99', refundCurrency: 'USD' },
   replacement_approved: { caseReference: 'TEST-123', replacementItem: 'Replacement Product' },
-  claim_rejected: { caseReference: 'TEST-123', reason: 'Sample rejection reason' },
-  refund_completed: { caseReference: 'TEST-123', bankReference: 'BANK-REF-001' },
+  claim_rejected: {
+    caseReference: 'TEST-123',
+    reason: 'The product was outside the recalled lot range.',
+  },
+  refund_completed: {
+    caseReference: 'TEST-123',
+    refundAmount: '19.99',
+    refundCurrency: 'USD',
+    referenceLine: 'Reference: BANK-REF-001',
+  },
   shipment_shipped: { caseReference: 'TEST-123', trackingNumber: 'TRK-000-001' },
-  case_closed: { caseReference: 'TEST-123', closureReason: 'Case resolved' },
+  case_completed: { caseReference: 'TEST-123', completedResolutionLabel: 'Refund' },
+  case_closed: {
+    caseReference: 'TEST-123',
+    closureReason: 'The case was withdrawn at the consumer request.',
+  },
 };
 
 async function verify() {

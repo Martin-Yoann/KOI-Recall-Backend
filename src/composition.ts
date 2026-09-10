@@ -146,6 +146,7 @@ export function createApplicationRegistry(
     queue: () => unavailable('Communication queue'),
   },
   malwareScanRequired = false,
+  consumerWebBaseUrl = 'http://localhost:3000',
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   const emailTrigger = new EmailTriggerService(communicationQueue);
@@ -180,6 +181,8 @@ export function createApplicationRegistry(
               crypto,
               new DrizzleCaseResolutionService(handle, crypto, emailTrigger),
               blob,
+              emailTrigger,
+              consumerWebBaseUrl,
             ),
             staff: new DrizzleStaffService(handle.db, crypto),
             audit: new DrizzleAuditService(handle.db),
@@ -201,6 +204,9 @@ export function createApplicationRegistry(
                         crypto,
                         emailTrigger,
                       ),
+                      undefined,
+                      emailTrigger,
+                      consumerWebBaseUrl,
                     ),
                     staff: new DrizzleStaffService(tx, crypto),
                     audit: new DrizzleAuditService(tx),
@@ -294,5 +300,6 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     createEmailAdapter(config),
     communicationQueue,
     config.MALWARE_SCAN_REQUIRED,
+    config.CONSUMER_WEB_BASE_URL,
   );
 }

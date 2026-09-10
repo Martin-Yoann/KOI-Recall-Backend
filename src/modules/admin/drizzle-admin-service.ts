@@ -19,12 +19,15 @@ import {
 } from '../../db/schema/index.js';
 import type { PrivateBlobPort } from '../../platform/blob/port.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
+import type { EmailTriggerService } from '../communications/email-trigger-service.js';
+import { resolveCaseStatusEmail } from '../communications/case-status-emails.js';
 import { piiTierFor } from '../staff/permissions.js';
 import type {
   CaseResolution,
   ApproveResolutionInput,
   CompleteResolutionInput,
   CancelResolutionInput,
+  RecordShipmentInput,
   CaseResolutionService,
 } from '../resolutions/service.js';
 import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
@@ -83,6 +86,8 @@ export class DrizzleAdminService implements AdminService {
     private readonly crypto: SensitiveDataCryptoPort,
     private readonly resolutions?: CaseResolutionService,
     private readonly blob?: PrivateBlobPort,
+    private readonly emailTrigger?: EmailTriggerService,
+    private readonly consumerWebBaseUrl = 'http://localhost:3000',
   ) {}
 
   async listCases(filter: ListCasesFilter): Promise<CaseListPage> {
@@ -847,6 +852,19 @@ export class DrizzleAdminService implements AdminService {
     });
   }
 
+  async recordShipment(
+    caseReference: string,
+    input: Omit<RecordShipmentInput, 'caseId'>,
+  ): Promise<CaseResolution> {
+    if (!this.resolutions) throw new Error('Resolution service not configured.');
+    // ResolutionService.recordShipment enqueues the shipment email (06) inside
+    // its own transaction, deduped per case + tracking number.
+    return this.resolutions.recordShipment({
+      ...input,
+      caseId: await this.caseIdForReference(caseReference),
+    });
+  }
+
   async cancelResolution(
     caseReference: string,
     input: Omit<CancelResolutionInput, 'caseId'>,
@@ -923,28 +941,39 @@ export class DrizzleAdminService implements AdminService {
     bypassWorkflow = false,
   ): Promise<void> {
     const db = this.db;
+    // Lock the case row: two concurrent transitions would otherwise both read
+    // the same pre-transition status, both record an event, and both enqueue
+    // the same consumer email.
     const [caseRow] = await db
       .select({
         id: recallCases.id,
+        publicReference: recallCases.publicReference,
+        locale: recallCases.locale,
         status: recallCases.status,
         subtype: recallCases.subtype,
         incidentFlag: recallCases.incidentFlag,
       })
       .from(recallCases)
       .where(eq(recallCases.publicReference, caseReference))
+      .for('update')
       .limit(1);
     if (!caseRow) throw new ResourceNotFoundError('Case was not found.');
 
     // The consumer must be told what to provide: a need_info transition
     // without a note would strand them in "action required" with no guidance.
+    // The same note is the consumer-visible reason in the not-approved and
+    // closure emails, so those transitions require one too.
     const trimmedNote = note?.trim();
+    const reasonStatuses = ['need_info', 'rejected', 'duplicate', 'withdrawn'];
     if (
       !bypassWorkflow &&
-      nextStatus === 'need_info' &&
+      reasonStatuses.includes(nextStatus) &&
       (!trimmedNote || trimmedNote.length < 10)
     ) {
       throw new ClaimValidationError(
-        'A note of at least 10 characters is required when requesting additional information.',
+        nextStatus === 'need_info'
+          ? 'A note of at least 10 characters is required when requesting additional information.'
+          : `A consumer-visible reason of at least 10 characters is required when moving a case to '${nextStatus}'.`,
       );
     }
     if (trimmedNote && trimmedNote.length > 2000) {
@@ -979,17 +1008,33 @@ export class DrizzleAdminService implements AdminService {
         .update(recallCases)
         .set({ status: nextStatus as never })
         .where(eq(recallCases.id, caseRow.id));
-      await db.insert(caseEvents).values({
+      const [event] = await db
+        .insert(caseEvents)
+        .values({
+          caseId: caseRow.id,
+          eventType: 'case.status.transitioned',
+          actorType: 'staff',
+          actorId: actorUserId,
+          data: {
+            previousStatus: caseRow.status,
+            nextStatus,
+            forced: true,
+            ...(trimmedNote ? { note: trimmedNote } : {}),
+          },
+        })
+        .returning({ id: caseEvents.id });
+      // A forced transition still tells the consumer when the target status
+      // owns an email, but never invents a reason: without a note the
+      // reason-bearing branches resolve to null and stay silent.
+      await this.dispatchStatusEmail({
+        nextStatus,
         caseId: caseRow.id,
-        eventType: 'case.status.transitioned',
-        actorType: 'staff',
-        actorId: actorUserId,
-        data: {
-          previousStatus: caseRow.status,
-          nextStatus,
-          forced: true,
-          ...(trimmedNote ? { note: trimmedNote } : {}),
-        },
+        caseReference: caseRow.publicReference,
+        locale: caseRow.locale,
+        eventId: event!.id,
+        ...(trimmedNote ? { note: trimmedNote } : {}),
+        resolutionStatus: resolutionRow?.status ?? null,
+        approvedType: resolutionRow?.approvedType ?? null,
       });
       return;
     }
@@ -1017,16 +1062,68 @@ export class DrizzleAdminService implements AdminService {
       .update(recallCases)
       .set({ status: nextStatus as never })
       .where(eq(recallCases.id, caseRow.id));
-    await db.insert(caseEvents).values({
+    const [event] = await db
+      .insert(caseEvents)
+      .values({
+        caseId: caseRow.id,
+        eventType: 'case.status.transitioned',
+        actorType: 'staff',
+        actorId: actorUserId,
+        data: {
+          previousStatus: caseRow.status,
+          nextStatus,
+          ...(trimmedNote ? { note: trimmedNote } : {}),
+        },
+      })
+      .returning({ id: caseEvents.id });
+    // 02 / 04 / 07 / 08 — the status transition owns the consumer email; the
+    // event id keeps each occurrence a distinct, idempotent message key.
+    await this.dispatchStatusEmail({
+      nextStatus,
       caseId: caseRow.id,
-      eventType: 'case.status.transitioned',
-      actorType: 'staff',
-      actorId: actorUserId,
-      data: {
-        previousStatus: caseRow.status,
-        nextStatus,
-        ...(trimmedNote ? { note: trimmedNote } : {}),
-      },
+      caseReference: caseRow.publicReference,
+      locale: caseRow.locale,
+      eventId: event!.id,
+      ...(trimmedNote ? { note: trimmedNote } : {}),
+      resolutionStatus: resolutionRow?.status ?? null,
+      approvedType: resolutionRow?.approvedType ?? null,
+    });
+  }
+
+  /**
+   * Enqueues the consumer email owned by a status transition, if any. Writes
+   * through `this.db` so the Communication + Outbox rows commit (or roll
+   * back) with the transition; a missing template version fails closed and
+   * aborts the transition, exactly like claim submission.
+   */
+  private async dispatchStatusEmail(params: {
+    nextStatus: string;
+    caseId: string;
+    caseReference: string;
+    locale: string;
+    eventId: string;
+    note?: string;
+    resolutionStatus: 'requested' | 'approved' | 'externally_completed' | 'cancelled' | null;
+    approvedType: 'replacement' | 'refund' | null;
+  }): Promise<void> {
+    if (!this.emailTrigger) return;
+    const email = resolveCaseStatusEmail(params.nextStatus, {
+      caseId: params.caseId,
+      caseReference: params.caseReference,
+      eventId: params.eventId,
+      ...(params.note ? { note: params.note } : {}),
+      resolutionStatus: params.resolutionStatus,
+      approvedType: params.approvedType,
+      consumerWebBaseUrl: this.consumerWebBaseUrl,
+    });
+    if (!email) return;
+    await this.emailTrigger.trigger(this.db, {
+      caseId: params.caseId,
+      templateKey: email.templateKey,
+      locale: params.locale,
+      variables: email.variables,
+      deduplicationKey: email.deduplicationKey,
+      eventType: email.eventType,
     });
   }
 }

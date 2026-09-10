@@ -4,6 +4,7 @@ import type {
   ApproveResolutionInput,
   CompleteResolutionInput,
   CancelResolutionInput,
+  RecordShipmentInput,
 } from '../resolutions/service.js';
 import type { WorkflowSnapshot } from '../workflow/policy.js';
 
@@ -382,6 +383,10 @@ export interface AdminService {
   completeResolution?(
     caseReference: string,
     input: Omit<CompleteResolutionInput, 'caseId'>,
+  ): Promise<CaseResolution>;
+  recordShipment?(
+    caseReference: string,
+    input: Omit<RecordShipmentInput, 'caseId'>,
   ): Promise<CaseResolution>;
   cancelResolution?(
     caseReference: string,

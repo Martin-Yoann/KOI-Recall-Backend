@@ -21,6 +21,8 @@ const environmentSchema = z.object({
   HASH_PEPPER: z.string().optional(),
   /** Stable production domain used in Problem Details URIs (T6.5/O6). */
   PROBLEM_BASE_URL: z.string().url().default('https://api.example.invalid'),
+  /** Consumer web app base URL; used for consumer-facing email links. */
+  CONSUMER_WEB_BASE_URL: z.string().url().default('http://localhost:3000'),
 });
 
 type EnvironmentVariables = z.infer<typeof environmentSchema>;
