@@ -92,6 +92,62 @@ describe('DrizzleAdminService RBAC operations', () => {
     expect(inserted).toEqual([]);
   });
 
+  it('requires the consumer reason even for a forced (bypass-workflow) transition', async () => {
+    const inserted: Record<string, unknown>[] = [];
+    const db = createTransitionFakeDb(inserted);
+    const service = new DrizzleAdminService(db, cryptoFake);
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'rejected', STAFF_ID, undefined, true),
+    ).rejects.toThrow('consumer-visible reason');
+    expect(inserted).toEqual([]);
+  });
+
+  it('requires a closure reason when closing without an externally completed remedy', async () => {
+    const inserted: Record<string, unknown>[] = [];
+    const db = createTransitionFakeDb(inserted, [
+      openCaseRow('approved'),
+      undefined,
+      { requestedType: 'refund', approvedType: 'refund', status: 'approved' },
+    ]);
+    const service = new DrizzleAdminService(db, cryptoFake);
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID, undefined, true),
+    ).rejects.toThrow("moving a case to 'closed'");
+    expect(inserted).toEqual([]);
+  });
+
+  it('enqueues case_closed with the reason for a forced closure without remedy', async () => {
+    const { service, triggered } = createEmailCapturingService([
+      openCaseRow('approved'),
+      undefined,
+      { requestedType: 'refund', approvedType: 'refund', status: 'approved' },
+    ]);
+
+    await service.transitionCaseStatus(
+      CASE_REFERENCE,
+      'closed',
+      STAFF_ID,
+      'Closed without remedy after the consumer went silent.',
+      true,
+    );
+
+    expect(triggered).toEqual([
+      {
+        caseId: CASE_ID,
+        templateKey: 'case_closed',
+        locale: 'en-US',
+        variables: {
+          caseReference: CASE_REFERENCE,
+          closureReason: 'Closed without remedy after the consumer went silent.',
+        },
+        deduplicationKey: `case-closed:${CASE_ID}:event-1`,
+        eventType: 'case.closed.requested',
+      },
+    ]);
+  });
+
   it('enqueues the need_info email with the action link and an event-scoped dedup key', async () => {
     const { service, triggered } = createEmailCapturingService([openCaseRow('under_review')]);
 

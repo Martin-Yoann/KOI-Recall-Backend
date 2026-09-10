@@ -104,3 +104,36 @@ export function resolveCaseStatusEmail(
       return null;
   }
 }
+
+/**
+ * Statuses whose consumer email always renders the operator note, whatever
+ * the case state.
+ */
+export const REASON_REQUIRED_STATUSES: readonly string[] = [
+  'need_info',
+  'rejected',
+  'duplicate',
+  'withdrawn',
+];
+
+/**
+ * Whether a transition to `nextStatus` owes the consumer a reason — the
+ * reason facet of the mapping above: every status whose email renders the
+ * note needs one. `closed` depends on the resolution row: a closure after
+ * an externally completed remedy sends case_completed, which speaks for
+ * itself; any other closure renders the note as its closureReason.
+ */
+export function transitionRequiresReason(
+  nextStatus: string,
+  resolutionStatus: ResolutionStatus | null,
+): boolean {
+  if (nextStatus === 'closed') return resolutionStatus !== 'externally_completed';
+  return REASON_REQUIRED_STATUSES.includes(nextStatus);
+}
+
+/** The consumer-facing validation message for a missing transition reason. */
+export function transitionReasonRequiredMessage(nextStatus: string): string {
+  return nextStatus === 'need_info'
+    ? 'A note of at least 10 characters is required when requesting additional information.'
+    : `A consumer-visible reason of at least 10 characters is required when moving a case to '${nextStatus}'.`;
+}

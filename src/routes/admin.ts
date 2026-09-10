@@ -2,6 +2,10 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 
 import type { AdminTransactionRunner, ApplicationRegistry } from '../composition.js';
+import {
+  REASON_REQUIRED_STATUSES,
+  transitionReasonRequiredMessage,
+} from '../modules/communications/case-status-emails.js';
 import type { AuditService } from '../modules/staff/audit-service.js';
 import type { Permission } from '../modules/staff/permissions.js';
 import { hasPermission, STAFF_ROLES } from '../modules/staff/permissions.js';
@@ -722,22 +726,15 @@ export function registerAdminRoutes(
     }
     const note = asString(body.note);
     const trimmedNote = note?.trim();
-    // The consumer must be told what to provide: a need_info transition
-    // without a note would strand them in "action required" with no guidance.
-    // The same note is the consumer-visible reason in the not-approved and
-    // closure emails, so those transitions require one too.
-    const reasonStatuses = ['need_info', 'rejected', 'duplicate', 'withdrawn'];
+    // Fast-fail for the reason statuses whose requirement never depends on
+    // case state, for every role: forcing bypasses the workflow matrix, not
+    // the consumer-notification obligation. The `closed` rule needs the
+    // resolution row and is enforced by the service.
     if (
-      guard.role !== 'ADMIN' &&
-      reasonStatuses.includes(nextStatus) &&
+      REASON_REQUIRED_STATUSES.includes(nextStatus) &&
       (!trimmedNote || trimmedNote.length < 10)
     ) {
-      return validationError(
-        context,
-        nextStatus === 'need_info'
-          ? 'A note of at least 10 characters is required when requesting additional information.'
-          : `A consumer-visible reason of at least 10 characters is required when moving a case to '${nextStatus}'.`,
-      );
+      return validationError(context, transitionReasonRequiredMessage(nextStatus));
     }
     if (trimmedNote && trimmedNote.length > 2000) {
       return validationError(context, 'The transition note must be at most 2000 characters.');

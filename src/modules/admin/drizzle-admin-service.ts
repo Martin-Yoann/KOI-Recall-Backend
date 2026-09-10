@@ -20,7 +20,11 @@ import {
 import type { PrivateBlobPort } from '../../platform/blob/port.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import type { EmailTriggerService } from '../communications/email-trigger-service.js';
-import { resolveCaseStatusEmail } from '../communications/case-status-emails.js';
+import {
+  resolveCaseStatusEmail,
+  transitionReasonRequiredMessage,
+  transitionRequiresReason,
+} from '../communications/case-status-emails.js';
 import { piiTierFor } from '../staff/permissions.js';
 import type {
   CaseResolution,
@@ -959,23 +963,7 @@ export class DrizzleAdminService implements AdminService {
       .limit(1);
     if (!caseRow) throw new ResourceNotFoundError('Case was not found.');
 
-    // The consumer must be told what to provide: a need_info transition
-    // without a note would strand them in "action required" with no guidance.
-    // The same note is the consumer-visible reason in the not-approved and
-    // closure emails, so those transitions require one too.
     const trimmedNote = note?.trim();
-    const reasonStatuses = ['need_info', 'rejected', 'duplicate', 'withdrawn'];
-    if (
-      !bypassWorkflow &&
-      reasonStatuses.includes(nextStatus) &&
-      (!trimmedNote || trimmedNote.length < 10)
-    ) {
-      throw new ClaimValidationError(
-        nextStatus === 'need_info'
-          ? 'A note of at least 10 characters is required when requesting additional information.'
-          : `A consumer-visible reason of at least 10 characters is required when moving a case to '${nextStatus}'.`,
-      );
-    }
     if (trimmedNote && trimmedNote.length > 2000) {
       throw new ClaimValidationError('The transition note must be at most 2000 characters.');
     }
@@ -1003,6 +991,19 @@ export class DrizzleAdminService implements AdminService {
       .where(eq(caseResolutions.caseId, caseRow.id))
       .limit(1);
 
+    // The note is the consumer-visible reason in the action-required,
+    // not-approved, and closure emails, so reason-bearing transitions
+    // require one no matter who drives them: bypassing the workflow matrix
+    // is an internal convenience that never waives the consumer notice. A
+    // closure after an externally completed remedy is the one exception —
+    // the case_completed email speaks for itself.
+    if (
+      transitionRequiresReason(nextStatus, resolutionRow?.status ?? null) &&
+      (!trimmedNote || trimmedNote.length < 10)
+    ) {
+      throw new ClaimValidationError(transitionReasonRequiredMessage(nextStatus));
+    }
+
     if (bypassWorkflow) {
       await db
         .update(recallCases)
@@ -1023,9 +1024,9 @@ export class DrizzleAdminService implements AdminService {
           },
         })
         .returning({ id: caseEvents.id });
-      // A forced transition still tells the consumer when the target status
-      // owns an email, but never invents a reason: without a note the
-      // reason-bearing branches resolve to null and stay silent.
+      // The reason gate above already guarantees a note for reason-bearing
+      // statuses; resolveCaseStatusEmail returning null remains the backstop
+      // that never sends a reason-less decision email.
       await this.dispatchStatusEmail({
         nextStatus,
         caseId: caseRow.id,

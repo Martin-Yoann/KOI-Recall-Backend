@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveCaseStatusEmail } from '../src/modules/communications/case-status-emails.js';
+import {
+  resolveCaseStatusEmail,
+  transitionRequiresReason,
+} from '../src/modules/communications/case-status-emails.js';
 
 const BASE_CONTEXT = {
   caseId: 'case-1',
@@ -128,6 +131,27 @@ describe('resolveCaseStatusEmail', () => {
           approvedType: 'replacement',
         }),
       ).toBeNull();
+    }
+  });
+});
+
+describe('transitionRequiresReason', () => {
+  it('requires a reason for every status whose email renders the note', () => {
+    for (const status of ['need_info', 'rejected', 'duplicate', 'withdrawn']) {
+      expect(transitionRequiresReason(status, null)).toBe(true);
+      expect(transitionRequiresReason(status, 'externally_completed')).toBe(true);
+    }
+  });
+
+  it('requires a reason to close only when no remedy was externally completed', () => {
+    expect(transitionRequiresReason('closed', null)).toBe(true);
+    expect(transitionRequiresReason('closed', 'approved')).toBe(true);
+    expect(transitionRequiresReason('closed', 'externally_completed')).toBe(false);
+  });
+
+  it('never requires a reason for noise-control statuses', () => {
+    for (const status of ['submitted', 'triage', 'under_review', 'approved', 'closure_review']) {
+      expect(transitionRequiresReason(status, null)).toBe(false);
     }
   });
 });

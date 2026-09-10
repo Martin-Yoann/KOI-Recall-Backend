@@ -12,6 +12,7 @@
 | [0002](0002-product-identification-policy.md)     | 统一商品识别策略 seam（ProductIdentificationPolicy）                         | Accepted | O2 / T3 / D2                          |
 | [0003](0003-identity-migration-strategy.md)       | 身份模型与条件式 Claim 的四阶段在线迁移策略                                  | Accepted | §6 / D1 / D3 / D4                     |
 | [0004](0004-internal-operations-identity-rbac.md) | 内部运营身份与权限模型（Staff 主体 + 固定角色 RBAC + 两级 PII + 跨表面审计） | Accepted | 优化规划 §1 / claim-submission-design |
+| [0005](0005-forced-transitions-consumer-notice.md) | 强制状态流转不豁免消费者告知义务（理由型终态 note 全角色必填）              | Accepted | ADR-0004 / remedy-workflow §8.2        |
 
 ADR-0001/0002/0003 的关系：**0001** 定义”数据是什么”，**0002** 定义”如何识别”，**0003** 定义”如何过渡过去”——三者共同支撑优化规划 Sprint 0–2 的消费者侧改造。
 

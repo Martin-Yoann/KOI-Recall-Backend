@@ -863,6 +863,65 @@ describe('B-end RBAC (ADR-0004)', () => {
     ]);
   });
 
+  it('binds admins to the same reason requirement on forced transitions', async () => {
+    const staff = makeStaffFake();
+    const admin = makeAdminFake();
+    const audit = makeAuditFake();
+    const forwarded: Array<{ nextStatus: string; note?: string; bypass?: boolean }> = [];
+    admin.transitionCaseStatus = (_ref, nextStatus, _userId, note, bypass) => {
+      forwarded.push({
+        nextStatus,
+        ...(note !== undefined ? { note } : {}),
+        ...(bypass ? { bypass: true } : {}),
+      });
+      return Promise.resolve();
+    };
+    await staff.createStaffUser({
+      email: 'a9@x.com',
+      displayName: 'Admin9',
+      role: 'ADMIN',
+      password: 'password1234',
+    });
+    const token = (await staff.login('a9@x.com', 'password1234'))!.token;
+    const app = appWith({ admin, staff, audit });
+
+    // Forcing bypasses the workflow matrix, never the consumer notice: an
+    // admin rejection without a reason is rejected too.
+    const withoutReason = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'rejected' }),
+    });
+    expect(withoutReason.status).toBe(422);
+
+    const withReason = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status: 'rejected',
+        note: 'The product was outside the recalled lot range.',
+      }),
+    });
+    expect(withReason.status).toBe(204);
+
+    // `closed` depends on the resolution row, so the route forwards it and
+    // the service owns that rule.
+    const closure = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'closed' }),
+    });
+    expect(closure.status).toBe(204);
+    expect(forwarded).toEqual([
+      {
+        nextStatus: 'rejected',
+        note: 'The product was outside the recalled lot range.',
+        bypass: true,
+      },
+      { nextStatus: 'closed', bypass: true },
+    ]);
+  });
+
   it('records a replacement shipment and rejects an invalid tracking number', async () => {
     const staff = makeStaffFake();
     const admin = makeAdminFake();
