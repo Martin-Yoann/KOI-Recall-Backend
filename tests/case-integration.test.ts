@@ -29,6 +29,7 @@ import {
 import { DrizzleCaseService } from '../src/modules/cases/drizzle-case-service.js';
 import { DrizzleClaimDraftService } from '../src/modules/claim-drafts/drizzle-claim-draft-service.js';
 import { DrizzleDocumentService } from '../src/modules/documents/drizzle-document-service.js';
+import { DrizzleCommunicationQueueService } from '../src/modules/communications/queue-service.js';
 import { NotImplementedPrivateBlobAdapter } from '../src/platform/blob/not-implemented.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 import {
@@ -54,6 +55,13 @@ const crypto = new NodeSensitiveDataCrypto(
   Buffer.alloc(32, 1).toString('base64'),
   Buffer.alloc(32, 2).toString('base64'),
 );
+
+/**
+ * Production parity: composition always wires a real DB-backed queue, and
+ * submission owns the claim-confirmation enqueue (the rollback-on-outbox-
+ * conflict test below depends on it). Stateless — one instance is shared.
+ */
+const communicationQueue = new DrizzleCommunicationQueueService();
 
 const CONCURRENT_GATE_TIMEOUT_MESSAGE = 'Concurrent test gate timed out waiting for participants.';
 const CONCURRENT_GATE_ABORT_MESSAGE = 'Concurrent test gate aborted because a participant failed.';
@@ -483,7 +491,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   });
 
   it('atomically persists a standard claim without plaintext sensitive data', async () => {
-    const service = new DrizzleCaseService(handle!, crypto);
+    const service = new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    );
     const normalizedEmail = 'taylor@example.com';
     const baseBody = fixture!.body({ incidentAnswer: 'no' });
     const sensitivePurchaseOrder = 'PRIVATE-PURCHASE-9001';
@@ -582,7 +598,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   });
 
   it('replays the original response for the same key and canonical request', async () => {
-    const service = new DrizzleCaseService(handle!, crypto);
+    const service = new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    );
     const idempotencyKey = randomUUID();
     const command = fixture!.command({ idempotencyKey });
 
@@ -613,7 +637,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   });
 
   it('atomically recycles an expired Idempotency-Key for a new Draft', async () => {
-    const service = new DrizzleCaseService(handle!, crypto);
+    const service = new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    );
     const idempotencyKey = randomUUID();
     const keyHash = await crypto.lookupHash(idempotencyKey);
     const first = await service.submit(fixture!.command({ idempotencyKey }));
@@ -654,7 +686,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   it('allows exactly one concurrent winner when recycling an expired Idempotency-Key', async () => {
     const idempotencyKey = randomUUID();
     const keyHash = await crypto.lookupHash(idempotencyKey);
-    await new DrizzleCaseService(handle!, crypto).submit(fixture!.command({ idempotencyKey }));
+    await new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    ).submit(fixture!.command({ idempotencyKey }));
     await handle!.db
       .update(idempotencyRecords)
       .set({ expiresAt: new Date(Date.now() - 1000) })
@@ -712,7 +752,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   });
 
   it('returns 409 when a key is reused with a different request', async () => {
-    const service = new DrizzleCaseService(handle!, crypto);
+    const service = new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    );
     const command = fixture!.command({ idempotencyKey: randomUUID() });
     await service.submit(command);
 
@@ -732,7 +780,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       productId: temporaryCampaign.productId,
     });
     const idempotencyKey = randomUUID();
-    const service = new DrizzleCaseService(handle!, crypto);
+    const service = new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    );
 
     try {
       const first = await service.submit(fixture!.command({ idempotencyKey }));
@@ -759,7 +815,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
   });
 
   it('returns a Claim conflict when a submitted Draft is retried with a new key', async () => {
-    const service = new DrizzleCaseService(handle!, crypto);
+    const service = new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    );
     await service.submit(fixture!.command({ idempotencyKey: randomUUID() }));
 
     await expect(
@@ -1123,7 +1187,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
   it('persists yes as an encrypted incident with pending review', async () => {
     const narrative = 'A fictional minor injury occurred during use.';
-    const result = await new DrizzleCaseService(handle!, crypto).submit({
+    const result = await new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    ).submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
       body: fixture!.body({
@@ -1162,7 +1234,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
   it('normalizes unsure without event type or date and routes to triage', async () => {
     const narrative = 'The consumer is unsure whether a safety incident occurred.';
-    const result = await new DrizzleCaseService(handle!, crypto).submit({
+    const result = await new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    ).submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
       body: fixture!.body({
@@ -1199,7 +1279,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const prepared = await setup(fixture!);
     try {
       await expect(
-        new DrizzleCaseService(handle!, crypto).submit(prepared.command),
+        new DrizzleCaseService(
+          handle!,
+          crypto,
+          undefined,
+          undefined,
+          undefined,
+          false,
+          communicationQueue,
+        ).submit(prepared.command),
       ).rejects.toBeInstanceOf(error);
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
@@ -1210,7 +1298,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
   it('persists a not-matched Product for triage instead of rejecting the Claim', async () => {
     const body = fixture!.body();
-    const result = await new DrizzleCaseService(handle!, crypto).submit(
+    const result = await new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    ).submit(
       fixture!.command({
         body: {
           ...body,
@@ -1243,7 +1339,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     });
 
     try {
-      const result = await new DrizzleCaseService(handle!, crypto).submit(
+      const result = await new DrizzleCaseService(
+        handle!,
+        crypto,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        communicationQueue,
+      ).submit(
         fixture!.command({
           body: {
             ...body,
@@ -1287,7 +1391,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
 
-    await new DrizzleCaseService(handle!, crypto).submit(
+    await new DrizzleCaseService(
+      handle!,
+      crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
+    ).submit(
       fixture!.command({
         body: fixture!.body({ documentIds: fixture!.documentIds.slice(0, 2) }),
       }),
@@ -1327,7 +1439,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
     try {
       await expect(
-        new DrizzleCaseService(handle!, crypto).submit(fixture!.command()),
+        new DrizzleCaseService(
+          handle!,
+          crypto,
+          undefined,
+          undefined,
+          undefined,
+          false,
+          communicationQueue,
+        ).submit(fixture!.command()),
       ).rejects.toThrow('No template version for claim_confirmation');
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
@@ -1373,7 +1493,15 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
 
     try {
       await expect(
-        new DrizzleCaseService(handle!, crypto, () => forcedReference).submit(command),
+        new DrizzleCaseService(
+          handle!,
+          crypto,
+          () => forcedReference,
+          undefined,
+          undefined,
+          false,
+          communicationQueue,
+        ).submit(command),
       ).rejects.toMatchObject({ cause: { code: '23505' } });
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');

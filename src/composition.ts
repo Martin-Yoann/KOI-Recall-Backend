@@ -142,9 +142,11 @@ export function createApplicationRegistry(
   blob: PrivateBlobPort = new NotImplementedPrivateBlobAdapter(),
   crypto: SensitiveDataCryptoPort = new NotImplementedCryptoAdapter(),
   email: TransactionalEmailPort = new NotImplementedEmailAdapter(),
-  communicationQueue: CommunicationQueueService = {
-    queue: () => unavailable('Communication queue'),
-  },
+  // The outbox queue is plain DB persistence with no external dependency, so
+  // claim submission stays available even where email (Resend) is not
+  // configured — the outbox worker drains it once email exists. Tests inject
+  // fakes through this parameter.
+  communicationQueue: CommunicationQueueService = new DrizzleCommunicationQueueService(),
   malwareScanRequired = false,
   consumerWebBaseUrl = DEFAULT_CONSUMER_WEB_BASE_URL,
 ): ApplicationRegistry {
