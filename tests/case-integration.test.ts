@@ -21,7 +21,6 @@ import {
   documentUploads,
   idempotencyRecords,
   incidents,
-  outboxEvents,
   recallCampaigns,
   recallCases,
   reportabilityReviews,
@@ -577,10 +576,14 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
       }),
     ).resolves.toBe(normalizedEmail);
     expect(aggregate.outbox[0]?.eventType).toBe('claim.confirmation.requested');
-    expect(aggregate.outbox[0]?.payload).toEqual({
+    expect(aggregate.outbox[0]?.payload).toMatchObject({
       communicationId: aggregate.communications[0]?.id,
-      caseId: aggregate.case.id,
+      variables: { caseReference: aggregate.case.publicReference },
     });
+    expect(Object.keys(aggregate.outbox[0]?.payload as object).sort()).toEqual([
+      'communicationId',
+      'variables',
+    ]);
     expect(aggregate.events.find((row) => row.eventType === 'claim.submitted')?.data).toEqual({
       locale: 'en-US',
       productCount: 1,
@@ -710,6 +713,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const service = new DrizzleCaseService(
       withTransactionBarrier(handle!, transactionGate),
       crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
     );
 
     try {
@@ -1021,6 +1029,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const service = new DrizzleCaseService(
       withTransactionBarrier(handle!, transactionGate),
       crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
     );
 
     const results = await Promise.allSettled([
@@ -1069,6 +1082,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     const service = new DrizzleCaseService(
       withTransactionBarrier(handle!, transactionGate),
       crypto,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      communicationQueue,
     );
 
     const [first, second] = await Promise.all([
@@ -1464,7 +1482,7 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
     }
   });
 
-  it('rolls back the aggregate when the Outbox unique constraint rejects its event', async () => {
+  it('rolls back the aggregate when the confirmation enqueue write fails', async () => {
     const idempotencyKey = randomUUID();
     const rollbackEmail = `rollback-${idempotencyKey}@example.com`;
     const command = fixture!.command({
@@ -1474,76 +1492,68 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', () => {
         incidentAnswer: 'yes',
         incidentDetails: {
           eventTypes: ['injury'],
-          narrative: 'An incident that must roll back after the Outbox failure.',
+          narrative: 'An incident that must roll back after the enqueue failure.',
           occurredDateUnknown: true,
           injurySeverity: 'minor',
           medicalTreatment: 'first_aid',
         },
       }),
     });
-    const forcedReference = uniqueCaseReference();
-    const deduplicationKey = `claim-confirmation:${forcedReference}`;
-    await handle!.db.insert(outboxEvents).values({
-      aggregateType: 'test',
-      aggregateId: randomUUID(),
-      eventType: 'test.conflict',
-      deduplicationKey,
-      payload: {},
-    });
+    // The outbox insert itself is idempotent (onConflictDoNothing on the
+    // deduplication key), so a colliding key can no longer fail the
+    // transaction; simulate the remaining failure mode — the enqueue write
+    // erroring mid-transaction — directly.
+    const failingQueue = {
+      queue: () => Promise.reject(new Error('outbox write failed')),
+    };
 
-    try {
-      await expect(
-        new DrizzleCaseService(
-          handle!,
-          crypto,
-          () => forcedReference,
-          undefined,
-          undefined,
-          false,
-          communicationQueue,
-        ).submit(command),
-      ).rejects.toMatchObject({ cause: { code: '23505' } });
-      await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
-      await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
-      const rollbackEmailLookupHash = await crypto.lookupHash(rollbackEmail);
-      const remainingCases = await handle!.db
-        .select({ id: recallCases.id })
-        .from(recallCases)
-        .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
-        .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
-      const remainingIncidentRows = await handle!.db
-        .select({ id: incidents.id })
-        .from(incidents)
-        .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
-        .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
-        .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
-      const remainingReviewRows = await handle!.db
-        .select({ id: reportabilityReviews.id })
-        .from(reportabilityReviews)
-        .innerJoin(incidents, eq(incidents.id, reportabilityReviews.incidentId))
-        .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
-        .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
-        .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
-      expect(remainingCases).toHaveLength(0);
-      expect(remainingIncidentRows).toHaveLength(0);
-      expect(remainingReviewRows).toHaveLength(0);
+    await expect(
+      new DrizzleCaseService(
+        handle!,
+        crypto,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        failingQueue,
+      ).submit(command),
+    ).rejects.toThrow('outbox write failed');
+    await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
+    await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
+    const rollbackEmailLookupHash = await crypto.lookupHash(rollbackEmail);
+    const remainingCases = await handle!.db
+      .select({ id: recallCases.id })
+      .from(recallCases)
+      .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+      .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
+    const remainingIncidentRows = await handle!.db
+      .select({ id: incidents.id })
+      .from(incidents)
+      .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
+      .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+      .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
+    const remainingReviewRows = await handle!.db
+      .select({ id: reportabilityReviews.id })
+      .from(reportabilityReviews)
+      .innerJoin(incidents, eq(incidents.id, reportabilityReviews.incidentId))
+      .innerJoin(recallCases, eq(recallCases.id, incidents.caseId))
+      .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+      .where(eq(caseConsumers.emailLookupHash, rollbackEmailLookupHash));
+    expect(remainingCases).toHaveLength(0);
+    expect(remainingIncidentRows).toHaveLength(0);
+    expect(remainingReviewRows).toHaveLength(0);
 
-      const documents = await handle!.db
-        .select({
-          draftId: documentUploads.draftId,
-          caseId: documentUploads.caseId,
-          uploadStatus: documentUploads.uploadStatus,
-        })
-        .from(documentUploads)
-        .where(inArray(documentUploads.id, fixture!.documentIds));
-      expect(documents).toHaveLength(2);
-      expect(documents.every((document) => document.draftId === fixture!.draftId)).toBe(true);
-      expect(documents.every((document) => document.caseId === null)).toBe(true);
-      expect(documents.every((document) => document.uploadStatus === 'verified')).toBe(true);
-    } finally {
-      await handle!.db
-        .delete(outboxEvents)
-        .where(eq(outboxEvents.deduplicationKey, deduplicationKey));
-    }
+    const documents = await handle!.db
+      .select({
+        draftId: documentUploads.draftId,
+        caseId: documentUploads.caseId,
+        uploadStatus: documentUploads.uploadStatus,
+      })
+      .from(documentUploads)
+      .where(inArray(documentUploads.id, fixture!.documentIds));
+    expect(documents).toHaveLength(2);
+    expect(documents.every((document) => document.draftId === fixture!.draftId)).toBe(true);
+    expect(documents.every((document) => document.caseId === null)).toBe(true);
+    expect(documents.every((document) => document.uploadStatus === 'verified')).toBe(true);
   });
 });

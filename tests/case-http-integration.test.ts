@@ -128,10 +128,14 @@ describe.skipIf(!enabled)('Claim HTTP integration', () => {
       lastErrorCode: null,
       processedAt: null,
     });
-    expect(firstAggregate.outbox[0]?.payload).toEqual({
+    expect(firstAggregate.outbox[0]?.payload).toMatchObject({
       communicationId: firstAggregate.communications[0]?.id,
-      caseId: firstAggregate.case.id,
+      variables: { caseReference: firstAggregate.case.publicReference },
     });
+    expect(Object.keys(firstAggregate.outbox[0]?.payload as object).sort()).toEqual([
+      'communicationId',
+      'variables',
+    ]);
     expect(firstAggregate.idempotency).toHaveLength(1);
     expect(firstAggregate.idempotency[0]).toMatchObject({
       endpoint: `/v1/recall-campaigns/${SEED_SLUG}/claims`,
