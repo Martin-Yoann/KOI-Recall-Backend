@@ -185,7 +185,8 @@ const CAMPAIGN_APPROVAL_ROLES = ['business', 'legal_compliance', 'cpsc_if_applic
  * Exported so the validation branches are unit-testable without an HTTP round
  * trip, the same way `validateRequiredApprovals` is.
  */
-export function parseCampaignApprovals(raw: unknown): CampaignApproval[] | null {  if (!Array.isArray(raw) || raw.length === 0) return null;
+export function parseCampaignApprovals(raw: unknown): CampaignApproval[] | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
 
   const approvals: CampaignApproval[] = [];
   const seenRoles = new Set<string>();
@@ -211,7 +212,10 @@ export function parseCampaignApprovals(raw: unknown): CampaignApproval[] | null 
     ) {
       return null;
     }
-    if (approvedAt !== undefined && (typeof approvedAt !== 'string' || Number.isNaN(Date.parse(approvedAt)))) {
+    if (
+      approvedAt !== undefined &&
+      (typeof approvedAt !== 'string' || Number.isNaN(Date.parse(approvedAt)))
+    ) {
       return null;
     }
 

@@ -74,9 +74,12 @@ function makeAuditFake(): AuditService & { recorded: AuditEventInput[] } {
 }
 
 function makeCampaignFake(
-  behaviour: (input: PublishVersionInput) => Promise<{ versionNumber: number; publishedAt: string }> = async (
-    input,
-  ) => ({ versionNumber: input.versionNumber, publishedAt: '2026-09-17T00:00:00.000Z' }),
+  behaviour: (
+    input: PublishVersionInput,
+  ) => Promise<{ versionNumber: number; publishedAt: string }> = async (input) => ({
+    versionNumber: input.versionNumber,
+    publishedAt: '2026-09-17T00:00:00.000Z',
+  }),
 ): CampaignService & { calls: PublishVersionInput[] } {
   const calls: PublishVersionInput[] = [];
   return {
@@ -209,7 +212,9 @@ describe('campaign publish route', () => {
 
   it('surfaces a failed publish gate as 422 rather than 500', async () => {
     const campaigns = makeCampaignFake(async () => {
-      throw new CampaignValidationError('Approval by legal_compliance is required before publishing.');
+      throw new CampaignValidationError(
+        'Approval by legal_compliance is required before publishing.',
+      );
     });
     const response = await appWith({ campaigns }).request(
       '/admin/campaigns/music-lollipop-demo-2026/publish',

@@ -84,7 +84,9 @@ async function main(): Promise<void> {
     // report a pile of misleading failures.
     console.log('');
     console.log('STOPPING: the secret was rejected, so the deployments disagree.');
-    console.log('Set REVALIDATE_SECRET (web) and WEB_REVALIDATE_SECRET (backend) to the same value.');
+    console.log(
+      'Set REVALIDATE_SECRET (web) and WEB_REVALIDATE_SECRET (backend) to the same value.',
+    );
     console.log(failures === 0 ? '' : `${failures} CHECK(S) FAILED`);
     process.exitCode = 1;
     return;

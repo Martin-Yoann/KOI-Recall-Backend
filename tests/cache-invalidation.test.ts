@@ -11,9 +11,7 @@ const SLUG = 'music-lollipop-demo-2026';
 
 /** A fetch double typed like the real one, so `mock.calls` stays inspectable. */
 function fakeFetch(respond: () => Response) {
-  return vi.fn((_input: string | URL | Request, _init?: RequestInit) =>
-    Promise.resolve(respond()),
-  );
+  return vi.fn((_input: string | URL | Request, _init?: RequestInit) => Promise.resolve(respond()));
 }
 
 describe('WebRevalidateCacheInvalidator', () => {

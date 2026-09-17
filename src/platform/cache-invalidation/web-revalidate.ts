@@ -1,7 +1,4 @@
-import type {
-  CacheInvalidationResult,
-  CampaignCacheInvalidator,
-} from './port.js';
+import type { CacheInvalidationResult, CampaignCacheInvalidator } from './port.js';
 
 /**
  * Calls the consumer web app's `POST /api/revalidate` so a newly published

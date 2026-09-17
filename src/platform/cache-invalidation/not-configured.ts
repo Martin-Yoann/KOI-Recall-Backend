@@ -1,7 +1,4 @@
-import type {
-  CacheInvalidationResult,
-  CampaignCacheInvalidator,
-} from './port.js';
+import type { CacheInvalidationResult, CampaignCacheInvalidator } from './port.js';
 
 /**
  * Used when no web revalidate endpoint is configured. Invalidation is a
