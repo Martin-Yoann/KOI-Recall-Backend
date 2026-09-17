@@ -25,7 +25,9 @@
     "db:seed": "tsx src/db/seed.ts",
     "db:seed:refund-exports": "tsx scripts/seed-refund-exports.ts",
     "db:benchmark": "tsx scripts/capacity-benchmark.ts",
-    "staff:bootstrap": "tsx scripts/bootstrap-staff.ts"
+    "email:test": "tsx src/scripts/send-test-email.ts",
+    "staff:bootstrap": "tsx scripts/bootstrap-staff.ts",
+    "revalidate:check": "tsx src/scripts/check-revalidate.ts"
   },
   "dependencies": {
     "@hono/zod-openapi": "1.5.1",
