@@ -329,21 +329,40 @@ export function createCacheInvalidator(config: AppConfig): CampaignCacheInvalida
 }
 
 /**
- * Selects the rate limiter. With Upstash configured the quotas are enforced
- * across every instance; without it the in-memory limiter only bounds a single
- * instance, which is worth saying out loud at startup because the difference is
- * invisible from the outside.
+ * Resolves the Redis REST credentials from either naming scheme, preferring the
+ * Upstash-native pair. Split out so the preference is directly testable rather
+ * than inferred from which adapter gets constructed.
+ *
+ * A lone URL or lone token is not usable — the REST API needs both — so an
+ * incomplete pair resolves to null and the caller falls back.
+ */
+export function resolveRateLimitCredentials(
+  config: AppConfig,
+): { url: string; token: string } | null {
+  const url = config.UPSTASH_REDIS_REST_URL ?? config.KV_REST_API_URL;
+  const token = config.UPSTASH_REDIS_REST_TOKEN ?? config.KV_REST_API_TOKEN;
+  if (!url || !token) return null;
+  return { url, token };
+}
+
+/**
+ * Selects the rate limiter. With a Redis store configured the quotas are
+ * enforced across every instance; without one the in-memory limiter only bounds
+ * a single instance, which is worth saying out loud at startup because the
+ * difference is invisible from the outside.
+ *
+ * Both credential namings are accepted: a direct Upstash setup uses
+ * `UPSTASH_REDIS_REST_*`, while Vercel's marketplace integration provisions the
+ * legacy Vercel-KV names even though the endpoint it hands back is an Upstash
+ * REST URL.
  */
 export function createRateLimiter(config: AppConfig): RateLimiter {
-  if (!config.UPSTASH_REDIS_REST_URL || !config.UPSTASH_REDIS_REST_TOKEN) {
+  const credentials = resolveRateLimitCredentials(config);
+  if (!credentials) {
     consoleSafeLogger.info(
-      'Rate limiting is per-instance: UPSTASH_REDIS_REST_URL/TOKEN are not configured.',
+      'Rate limiting is per-instance: no Redis REST credentials are configured.',
     );
     return new InMemoryRateLimiter();
   }
-  return UpstashRateLimiter.fromCredentials(
-    config.UPSTASH_REDIS_REST_URL,
-    config.UPSTASH_REDIS_REST_TOKEN,
-    consoleSafeLogger,
-  );
+  return UpstashRateLimiter.fromCredentials(credentials.url, credentials.token, consoleSafeLogger);
 }

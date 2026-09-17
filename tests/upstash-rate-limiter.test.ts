@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/require-await -- test doubles resolve synchronously */
 import { describe, expect, it, vi } from 'vitest';
 
-import { createRateLimiter } from '../src/composition.js';
+import { createRateLimiter, resolveRateLimitCredentials } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
 import { InMemoryRateLimiter, RATE_LIMIT_QUOTAS } from '../src/middleware/rate-limit.js';
 import type { SafeLogger, SafeLogFields } from '../src/platform/observability/logger.js';
@@ -162,15 +162,65 @@ describe('createRateLimiter', () => {
     expect(limiter).toBeInstanceOf(UpstashRateLimiter);
   });
 
+  it('accepts the legacy Vercel-KV names the marketplace integration provisions', () => {
+    // Vercel's Upstash integration injects KV_REST_API_* even though the endpoint
+    // is an Upstash REST URL, so this pairing has to work.
+    const limiter = createRateLimiter(
+      loadConfig({
+        KV_REST_API_URL: 'https://example.upstash.io',
+        KV_REST_API_TOKEN: 'token',
+      }),
+    );
+
+    expect(limiter).toBeInstanceOf(UpstashRateLimiter);
+  });
+
+  it('prefers the Upstash-native names when both pairings are present', () => {
+    const resolved = resolveRateLimitCredentials(
+      loadConfig({
+        UPSTASH_REDIS_REST_URL: 'https://native.upstash.io',
+        UPSTASH_REDIS_REST_TOKEN: 'native-token',
+        KV_REST_API_URL: 'https://kv.upstash.io',
+        KV_REST_API_TOKEN: 'kv-token',
+      }),
+    );
+
+    expect(resolved).toEqual({ url: 'https://native.upstash.io', token: 'native-token' });
+  });
+
+  it('resolves the legacy pair when only that one is present', () => {
+    const resolved = resolveRateLimitCredentials(
+      loadConfig({ KV_REST_API_URL: 'https://kv.upstash.io', KV_REST_API_TOKEN: 'kv-token' }),
+    );
+
+    expect(resolved).toEqual({ url: 'https://kv.upstash.io', token: 'kv-token' });
+  });
+
+  it('resolves to null when the pair is incomplete, mixing names is allowed', () => {
+    expect(resolveRateLimitCredentials(loadConfig({}))).toBeNull();
+    expect(
+      resolveRateLimitCredentials(loadConfig({ UPSTASH_REDIS_REST_URL: 'https://a.upstash.io' })),
+    ).toBeNull();
+    // A token without a URL is equally unusable.
+    expect(resolveRateLimitCredentials(loadConfig({ KV_REST_API_TOKEN: 't' }))).toBeNull();
+    // But the two schemes may be mixed — they describe the same service.
+    expect(
+      resolveRateLimitCredentials(
+        loadConfig({ UPSTASH_REDIS_REST_URL: 'https://a.upstash.io', KV_REST_API_TOKEN: 't' }),
+      ),
+    ).toEqual({ url: 'https://a.upstash.io', token: 't' });
+  });
+
   it('falls back to the in-memory limiter without credentials', () => {
     expect(createRateLimiter(loadConfig({}))).toBeInstanceOf(InMemoryRateLimiter);
   });
 
-  it('falls back when only the URL is set — a URL alone cannot authenticate', () => {
-    const limiter = createRateLimiter(
-      loadConfig({ UPSTASH_REDIS_REST_URL: 'https://example.upstash.io' }),
-    );
-
-    expect(limiter).toBeInstanceOf(InMemoryRateLimiter);
+  it('falls back when only a URL is set — a URL alone cannot authenticate', () => {
+    expect(
+      createRateLimiter(loadConfig({ UPSTASH_REDIS_REST_URL: 'https://example.upstash.io' })),
+    ).toBeInstanceOf(InMemoryRateLimiter);
+    expect(
+      createRateLimiter(loadConfig({ KV_REST_API_URL: 'https://example.upstash.io' })),
+    ).toBeInstanceOf(InMemoryRateLimiter);
   });
 });
