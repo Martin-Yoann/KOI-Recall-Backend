@@ -46,6 +46,9 @@ import { ResendEmailAdapter } from './platform/email/resend.js';
 import { NotConfiguredCacheInvalidator } from './platform/cache-invalidation/not-configured.js';
 import type { CampaignCacheInvalidator } from './platform/cache-invalidation/port.js';
 import { WebRevalidateCacheInvalidator } from './platform/cache-invalidation/web-revalidate.js';
+import { UpstashRateLimiter } from './platform/rate-limit/upstash-rate-limiter.js';
+import { consoleSafeLogger } from './platform/observability/logger.js';
+import { InMemoryRateLimiter, type RateLimiter } from './middleware/rate-limit.js';
 import type { TransactionalEmailPort } from './platform/email/port.js';
 import { NotImplementedServiceError } from './shared/errors.js';
 
@@ -322,8 +325,25 @@ export function createCacheInvalidator(config: AppConfig): CampaignCacheInvalida
   if (!config.WEB_REVALIDATE_URL || !config.WEB_REVALIDATE_SECRET) {
     return new NotConfiguredCacheInvalidator();
   }
-  return new WebRevalidateCacheInvalidator(
-    config.WEB_REVALIDATE_URL,
-    config.WEB_REVALIDATE_SECRET,
+  return new WebRevalidateCacheInvalidator(config.WEB_REVALIDATE_URL, config.WEB_REVALIDATE_SECRET);
+}
+
+/**
+ * Selects the rate limiter. With Upstash configured the quotas are enforced
+ * across every instance; without it the in-memory limiter only bounds a single
+ * instance, which is worth saying out loud at startup because the difference is
+ * invisible from the outside.
+ */
+export function createRateLimiter(config: AppConfig): RateLimiter {
+  if (!config.UPSTASH_REDIS_REST_URL || !config.UPSTASH_REDIS_REST_TOKEN) {
+    consoleSafeLogger.info(
+      'Rate limiting is per-instance: UPSTASH_REDIS_REST_URL/TOKEN are not configured.',
+    );
+    return new InMemoryRateLimiter();
+  }
+  return UpstashRateLimiter.fromCredentials(
+    config.UPSTASH_REDIS_REST_URL,
+    config.UPSTASH_REDIS_REST_TOKEN,
+    consoleSafeLogger,
   );
 }

@@ -32,6 +32,8 @@
   "dependencies": {
     "@hono/zod-openapi": "1.5.1",
     "@neondatabase/serverless": "^1.1.0",
+    "@upstash/ratelimit": "^2.1.0",
+    "@upstash/redis": "^1.38.4",
     "@vercel/blob": "^2.6.1",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",

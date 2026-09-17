@@ -4,7 +4,11 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { cors } from 'hono/cors';
 import { secureHeaders } from 'hono/secure-headers';
 
-import { createDefaultRegistry, type ApplicationRegistry } from './composition.js';
+import {
+  createDefaultRegistry,
+  createRateLimiter,
+  type ApplicationRegistry,
+} from './composition.js';
 import { loadConfig, type AppConfig } from './config/env.js';
 import { buildOpenApiConfig } from './contracts/toc.js';
 import {
@@ -12,11 +16,7 @@ import {
   DEFAULT_JSON_BODY_LIMIT,
   DEFAULT_WEBHOOK_BODY_LIMIT,
 } from './middleware/body-limit.js';
-import {
-  InMemoryRateLimiter,
-  rateLimitMiddleware,
-  type RateLimiter,
-} from './middleware/rate-limit.js';
+import { rateLimitMiddleware, type RateLimiter } from './middleware/rate-limit.js';
 import { requestContext, type AppEnv } from './middleware/request-context.js';
 import { consoleSafeLogger } from './platform/observability/logger.js';
 import { registerAdminRoutes } from './routes/admin.js';
@@ -101,9 +101,10 @@ export function createApp(dependencies: AppDependencies = {}) {
       maxAge: 600,
     }),
   );
-  const rateLimiter = dependencies.rateLimiter ?? new InMemoryRateLimiter();
-  // T6.1 (O6): default to a real fixed-window limiter keyed on the hashed
-  // client source + route category; tests may inject a custom limiter.
+  // T6.1 (O6): a limiter keyed on the hashed client source + route category.
+  // Selected from config so a shared store is used wherever it is configured;
+  // tests may still inject their own limiter.
+  const rateLimiter = dependencies.rateLimiter ?? createRateLimiter(config);
   app.use('/v1/*', rateLimitMiddleware(rateLimiter));
   app.use(
     '/admin/sessions',
