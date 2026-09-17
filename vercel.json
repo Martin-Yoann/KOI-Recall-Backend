@@ -3,5 +3,11 @@
   "regions": ["iad1"],
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
   "buildCommand": "pnpm build",
-  "builds": [{ "src": "api/index.ts", "use": "@vercel/node" }]
+  "builds": [{ "src": "api/index.ts", "use": "@vercel/node" }],
+  "crons": [
+    {
+      "path": "/internal/jobs/outbox",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }

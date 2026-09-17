@@ -1,0 +1,6 @@
+# Never upload local secrets with a CLI deployment. The checked-in template
+# (.env.example) stays, since it only holds placeholders.
+.env
+.env.*
+!.env.example
+.vercel
