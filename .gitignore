@@ -11,3 +11,7 @@ src/generated/
 .worktrees/
 .vercel
 .env*
+# Dropped in by the Vercel marketplace integration ("Installing agent skills");
+# vendor documentation, not part of this project's source.
+.agents/
+skills-lock.json
