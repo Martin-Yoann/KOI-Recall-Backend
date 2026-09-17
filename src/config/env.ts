@@ -30,6 +30,14 @@ const environmentSchema = z.object({
   PROBLEM_BASE_URL: z.string().url().default('https://api.example.invalid'),
   /** Consumer web app base URL; used for consumer-facing email links. */
   CONSUMER_WEB_BASE_URL: z.string().url().default(DEFAULT_CONSUMER_WEB_BASE_URL),
+  /**
+   * Full URL of the consumer web app's on-demand cache invalidation route, e.g.
+   * https://koiimprtinc.com/api/revalidate. Optional: without it, published
+   * campaigns simply expire on the web app's own revalidate window.
+   */
+  WEB_REVALIDATE_URL: z.string().url().optional(),
+  /** Shared secret for WEB_REVALIDATE_URL; must match the web app's REVALIDATE_SECRET. */
+  WEB_REVALIDATE_SECRET: z.string().optional(),
 });
 
 type EnvironmentVariables = z.infer<typeof environmentSchema>;

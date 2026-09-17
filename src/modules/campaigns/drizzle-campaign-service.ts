@@ -15,6 +15,9 @@ import {
 } from '../../db/schema/index.js';
 import type { CampaignView } from '../../contracts/toc.js';
 import { CampaignValidationError } from '../../shared/errors.js';
+import { NotConfiguredCacheInvalidator } from '../../platform/cache-invalidation/not-configured.js';
+import type { CampaignCacheInvalidator } from '../../platform/cache-invalidation/port.js';
+import { consoleSafeLogger, type SafeLogger } from '../../platform/observability/logger.js';
 import type {
   CampaignApproval,
   CampaignService,
@@ -47,7 +50,12 @@ export function buildPublishedVersionQuery(
  * production and node-postgres locally with no branching.
  */
 export class DrizzleCampaignService implements CampaignService {
-  constructor(private readonly handle: Pick<DatabaseHandle, 'db' | 'transaction'>) {}
+  constructor(
+    private readonly handle: Pick<DatabaseHandle, 'db' | 'transaction'>,
+    /** Expires the web app's cached copy of a campaign after it is published. */
+    private readonly cacheInvalidator: CampaignCacheInvalidator = new NotConfiguredCacheInvalidator(),
+    private readonly logger: SafeLogger = consoleSafeLogger,
+  ) {}
 
   async getPublishedCampaign(query: PublishedCampaignQuery): Promise<CampaignView | null> {
     const db = this.handle.db;
@@ -222,7 +230,7 @@ export class DrizzleCampaignService implements CampaignService {
     versionNumber: number;
     publishedAt: string;
   }> {
-    return this.handle.transaction(async (db) => {
+    const published = await this.handle.transaction(async (db) => {
       const [campaign] = await db
         .select({ id: recallCampaigns.id })
         .from(recallCampaigns)
@@ -271,6 +279,31 @@ export class DrizzleCampaignService implements CampaignService {
 
       return { versionNumber: input.versionNumber, publishedAt: publishedAt.toISOString() };
     });
+
+    // Deliberately after the commit, never inside it: a rolled-back transaction
+    // must not leave the web cache expired, and a failed invalidation must not
+    // fail a publish that has already succeeded.
+    await this.notifyCacheInvalidation(input.campaignSlug);
+
+    return published;
+  }
+
+  /**
+   * Best-effort cache invalidation for the campaign that was just published.
+   * Failure is logged rather than thrown: the public read still expires on its
+   * own revalidate window, which is why the two mechanisms are a pair and not a
+   * single guarantee.
+   */
+  private async notifyCacheInvalidation(slug: string): Promise<void> {
+    const result = await this.cacheInvalidator.invalidateCampaign(slug);
+    if (result.invalidated) {
+      this.logger.info('Invalidated the published campaign cache.', { campaignId: slug });
+      return;
+    }
+    this.logger.error(
+      'Could not invalidate the published campaign cache; falling back to the revalidate window.',
+      { campaignId: slug, errorMessage: result.detail ?? 'unspecified' },
+    );
   }
 
   /**

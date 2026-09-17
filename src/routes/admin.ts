@@ -7,6 +7,7 @@ import {
   transitionReasonRequiredMessage,
 } from '../modules/communications/case-status-emails.js';
 import type { AuditService } from '../modules/staff/audit-service.js';
+import type { CampaignApproval } from '../modules/campaigns/service.js';
 import type { Permission } from '../modules/staff/permissions.js';
 import { hasPermission, STAFF_ROLES } from '../modules/staff/permissions.js';
 import type { StaffRole } from '../modules/staff/permissions.js';
@@ -166,6 +167,65 @@ function validationError(context: Context<AppEnv>, detail: string) {
     detail,
     requestId: context.get('requestId'),
   });
+}
+
+const CAMPAIGN_APPROVAL_ROLES = ['business', 'legal_compliance', 'cpsc_if_applicable'] as const;
+
+/**
+ * Validates the sign-off list for a publish. Returns null on anything malformed
+ * so the route can reject it before the publish gate runs.
+ *
+ * Repeated roles are rejected deliberately: the gate's role check is set-based,
+ * so a duplicated `business` entry would pass there while reading like two
+ * independent sign-offs in the stored record.
+ *
+ * Note this validates shape, not authenticity — `approvedBy` is a name the
+ * caller supplies. See the caveat on the publish route.
+ *
+ * Exported so the validation branches are unit-testable without an HTTP round
+ * trip, the same way `validateRequiredApprovals` is.
+ */
+export function parseCampaignApprovals(raw: unknown): CampaignApproval[] | null {  if (!Array.isArray(raw) || raw.length === 0) return null;
+
+  const approvals: CampaignApproval[] = [];
+  const seenRoles = new Set<string>();
+
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) return null;
+    const record = entry as Record<string, unknown>;
+    const role = record.role;
+    const approvedBy = record.approvedBy;
+    const approvedAt = record.approvedAt;
+
+    if (
+      typeof role !== 'string' ||
+      !CAMPAIGN_APPROVAL_ROLES.includes(role as (typeof CAMPAIGN_APPROVAL_ROLES)[number]) ||
+      seenRoles.has(role)
+    ) {
+      return null;
+    }
+    if (
+      typeof approvedBy !== 'string' ||
+      approvedBy.trim().length === 0 ||
+      approvedBy.length > 200
+    ) {
+      return null;
+    }
+    if (approvedAt !== undefined && (typeof approvedAt !== 'string' || Number.isNaN(Date.parse(approvedAt)))) {
+      return null;
+    }
+
+    seenRoles.add(role);
+    approvals.push({
+      role: role as CampaignApproval['role'],
+      approvedBy: approvedBy.trim(),
+      // When omitted, the sign-off is recorded as observed at publish time
+      // rather than inventing an earlier time the caller never asserted.
+      approvedAt: approvedAt ?? new Date().toISOString(),
+    });
+  }
+
+  return approvals;
 }
 
 export function registerAdminRoutes(
@@ -604,6 +664,80 @@ export function registerAdminRoutes(
     if (!admin) throw new NotImplementedServiceError('Admin service');
     const campaigns = await admin.listCampaigns();
     return context.json({ campaigns }, 200);
+  });
+
+  // ---- Campaign publishing ----
+
+  /**
+   * Publishes a draft campaign version, making it the recall notice consumers
+   * see. After the version commits, the campaign service asks the web app to
+   * expire its cached copy (best-effort — the revalidate window is the
+   * backstop), so a corrected notice appears immediately.
+   *
+   * Caveat worth knowing before relying on this for compliance: the sign-off
+   * list is validated for shape only. `approvedBy` is a name the caller
+   * supplies, and the same person may appear against both mandatory roles. The
+   * publish gate enforces that business and legal_compliance sign-offs are
+   * *present*, not that they came from different people. Enforcing separation
+   * of duties needs approver identities bound to staff accounts.
+   */
+  app.post('/admin/campaigns/:slug/publish', async (context) => {
+    const guard = await requirePermission(context, registry, 'campaign.publish');
+    if (guard instanceof Response) return guard;
+
+    const slug = context.req.param('slug');
+    // Bounded to the column width; a slug that does not exist is surfaced by the
+    // service as an unprocessable-entity problem rather than a 404, so callers
+    // cannot use this route to probe which campaigns exist.
+    if (slug.length === 0 || slug.length > 100) {
+      return validationError(context, 'A campaign slug of 1-100 characters is required.');
+    }
+
+    const body = await bodyRecord(context);
+    const versionNumber = Number(body.versionNumber);
+    if (!Number.isInteger(versionNumber) || versionNumber < 1) {
+      return validationError(context, 'A positive integer versionNumber is required.');
+    }
+
+    const approvals = parseCampaignApprovals(body.approvals);
+    if (!approvals) {
+      return validationError(
+        context,
+        'approvals must be a non-empty array of { role: business | legal_compliance | cpsc_if_applicable, approvedBy, approvedAt? } with no repeated roles.',
+      );
+    }
+
+    const result = await registry.services.campaigns.publishVersion({
+      campaignSlug: slug,
+      versionNumber,
+      // Taken from the session, never from the body: the recorded actor must not
+      // be settable by the caller.
+      publishedBy: guard.userId,
+      approvals,
+    });
+
+    const audit = requireAuditService(registry);
+    await audit.record({
+      actorUserId: guard.userId,
+      actorRole: guard.role,
+      action: 'campaign.publish',
+      resourceType: 'campaign',
+      resourceId: slug,
+      outcome: 'success',
+      ipAddressHash: await requestIpHash(context, registry.platform.crypto),
+      userAgentHash: await requestUserAgentHash(context, registry.platform.crypto),
+    });
+
+    return context.json(
+      {
+        campaign: {
+          slug,
+          versionNumber: result.versionNumber,
+          publishedAt: result.publishedAt,
+        },
+      },
+      200,
+    );
   });
 
   // ---- Case detail (masked/raw two-tier PII) ----

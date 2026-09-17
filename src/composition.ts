@@ -43,6 +43,9 @@ import {
 import type { SensitiveDataCryptoPort } from './platform/crypto/port.js';
 import { NotImplementedEmailAdapter } from './platform/email/not-implemented.js';
 import { ResendEmailAdapter } from './platform/email/resend.js';
+import { NotConfiguredCacheInvalidator } from './platform/cache-invalidation/not-configured.js';
+import type { CampaignCacheInvalidator } from './platform/cache-invalidation/port.js';
+import { WebRevalidateCacheInvalidator } from './platform/cache-invalidation/web-revalidate.js';
 import type { TransactionalEmailPort } from './platform/email/port.js';
 import { NotImplementedServiceError } from './shared/errors.js';
 
@@ -149,13 +152,17 @@ export function createApplicationRegistry(
   communicationQueue: CommunicationQueueService = new DrizzleCommunicationQueueService(),
   malwareScanRequired = false,
   consumerWebBaseUrl = DEFAULT_CONSUMER_WEB_BASE_URL,
+  // Publishing a campaign expires the web app's cached copy of it. Absent
+  // configuration leaves this as a no-op rather than an error, because the
+  // public read still expires on its own revalidate window.
+  cacheInvalidator: CampaignCacheInvalidator = new NotConfiguredCacheInvalidator(),
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   const emailTrigger = new EmailTriggerService(communicationQueue);
   return {
     services: {
       ...placeholder.services,
-      campaigns: new DrizzleCampaignService(handle),
+      campaigns: new DrizzleCampaignService(handle, cacheInvalidator),
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
       documents: new DrizzleDocumentService(
@@ -275,7 +282,7 @@ function createBlobAdapter(config: AppConfig): PrivateBlobPort {
   );
 }
 
-function createEmailAdapter(config: AppConfig): TransactionalEmailPort {
+export function createEmailAdapter(config: AppConfig): TransactionalEmailPort {
   if (!config.RESEND_API_KEY || !config.RESEND_FROM_EMAIL) return new NotImplementedEmailAdapter();
   return new ResendEmailAdapter(config.RESEND_API_KEY, config.RESEND_FROM_EMAIL);
 }
@@ -302,5 +309,21 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     communicationQueue,
     config.MALWARE_SCAN_REQUIRED,
     config.CONSUMER_WEB_BASE_URL,
+    createCacheInvalidator(config),
+  );
+}
+
+/**
+ * Builds the published-campaign cache invalidator. Both the endpoint and its
+ * shared secret are required: a URL with no secret would be rejected by the web
+ * app anyway, so that combination is treated as unconfigured.
+ */
+export function createCacheInvalidator(config: AppConfig): CampaignCacheInvalidator {
+  if (!config.WEB_REVALIDATE_URL || !config.WEB_REVALIDATE_SECRET) {
+    return new NotConfiguredCacheInvalidator();
+  }
+  return new WebRevalidateCacheInvalidator(
+    config.WEB_REVALIDATE_URL,
+    config.WEB_REVALIDATE_SECRET,
   );
 }
