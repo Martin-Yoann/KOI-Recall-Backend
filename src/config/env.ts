@@ -30,6 +30,27 @@ const environmentSchema = z.object({
   PROBLEM_BASE_URL: z.string().url().default('https://api.example.invalid'),
   /** Consumer web app base URL; used for consumer-facing email links. */
   CONSUMER_WEB_BASE_URL: z.string().url().default(DEFAULT_CONSUMER_WEB_BASE_URL),
+  /**
+   * Full URL of the consumer web app's on-demand cache invalidation route, e.g.
+   * https://koiimprtinc.com/api/revalidate. Optional: without it, published
+   * campaigns simply expire on the web app's own revalidate window.
+   */
+  WEB_REVALIDATE_URL: z.string().url().optional(),
+  /** Shared secret for WEB_REVALIDATE_URL; must match the web app's REVALIDATE_SECRET. */
+  WEB_REVALIDATE_SECRET: z.string().optional(),
+  /**
+   * Upstash Redis REST credentials for cross-instance rate limiting.
+   *
+   * Two naming schemes are accepted because both are real: a direct Upstash
+   * setup uses `UPSTASH_REDIS_REST_*`, while Vercel's marketplace integration
+   * provisions the legacy Vercel-KV names (`KV_REST_API_*`) even though the
+   * endpoint it hands back is an Upstash REST URL. Either pair works; without
+   * one the app falls back to the per-instance in-memory limiter.
+   */
+  UPSTASH_REDIS_REST_URL: z.string().url().optional(),
+  UPSTASH_REDIS_REST_TOKEN: z.string().optional(),
+  KV_REST_API_URL: z.string().url().optional(),
+  KV_REST_API_TOKEN: z.string().optional(),
 });
 
 type EnvironmentVariables = z.infer<typeof environmentSchema>;

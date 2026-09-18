@@ -15,6 +15,7 @@ export type Permission =
   | 'case.export'
   | 'case.assign'
   | 'case.status.transition'
+  | 'campaign.publish'
   | 'review.close'
   | 'audit.read'
   | 'staff.read'
@@ -28,6 +29,9 @@ const MANAGER: ReadonlySet<Permission> = new Set([
   'case.export',
   'case.assign',
   'case.status.transition',
+  // Publishing a recall notice is business data, not staff administration, so
+  // it sits with the business permissions rather than with staff.manage.
+  'campaign.publish',
   'review.close',
   'audit.read',
   'staff.read',
@@ -47,6 +51,7 @@ export const ALL_PERMISSIONS: readonly Permission[] = [
   'case.export',
   'case.assign',
   'case.status.transition',
+  'campaign.publish',
   'review.close',
   'audit.read',
   'staff.read',

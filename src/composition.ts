@@ -43,6 +43,12 @@ import {
 import type { SensitiveDataCryptoPort } from './platform/crypto/port.js';
 import { NotImplementedEmailAdapter } from './platform/email/not-implemented.js';
 import { ResendEmailAdapter } from './platform/email/resend.js';
+import { NotConfiguredCacheInvalidator } from './platform/cache-invalidation/not-configured.js';
+import type { CampaignCacheInvalidator } from './platform/cache-invalidation/port.js';
+import { WebRevalidateCacheInvalidator } from './platform/cache-invalidation/web-revalidate.js';
+import { UpstashRateLimiter } from './platform/rate-limit/upstash-rate-limiter.js';
+import { consoleSafeLogger } from './platform/observability/logger.js';
+import { InMemoryRateLimiter, type RateLimiter } from './middleware/rate-limit.js';
 import type { TransactionalEmailPort } from './platform/email/port.js';
 import { NotImplementedServiceError } from './shared/errors.js';
 
@@ -149,13 +155,17 @@ export function createApplicationRegistry(
   communicationQueue: CommunicationQueueService = new DrizzleCommunicationQueueService(),
   malwareScanRequired = false,
   consumerWebBaseUrl = DEFAULT_CONSUMER_WEB_BASE_URL,
+  // Publishing a campaign expires the web app's cached copy of it. Absent
+  // configuration leaves this as a no-op rather than an error, because the
+  // public read still expires on its own revalidate window.
+  cacheInvalidator: CampaignCacheInvalidator = new NotConfiguredCacheInvalidator(),
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   const emailTrigger = new EmailTriggerService(communicationQueue);
   return {
     services: {
       ...placeholder.services,
-      campaigns: new DrizzleCampaignService(handle),
+      campaigns: new DrizzleCampaignService(handle, cacheInvalidator),
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
       documents: new DrizzleDocumentService(
@@ -275,7 +285,7 @@ function createBlobAdapter(config: AppConfig): PrivateBlobPort {
   );
 }
 
-function createEmailAdapter(config: AppConfig): TransactionalEmailPort {
+export function createEmailAdapter(config: AppConfig): TransactionalEmailPort {
   if (!config.RESEND_API_KEY || !config.RESEND_FROM_EMAIL) return new NotImplementedEmailAdapter();
   return new ResendEmailAdapter(config.RESEND_API_KEY, config.RESEND_FROM_EMAIL);
 }
@@ -302,5 +312,57 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     communicationQueue,
     config.MALWARE_SCAN_REQUIRED,
     config.CONSUMER_WEB_BASE_URL,
+    createCacheInvalidator(config),
   );
+}
+
+/**
+ * Builds the published-campaign cache invalidator. Both the endpoint and its
+ * shared secret are required: a URL with no secret would be rejected by the web
+ * app anyway, so that combination is treated as unconfigured.
+ */
+export function createCacheInvalidator(config: AppConfig): CampaignCacheInvalidator {
+  if (!config.WEB_REVALIDATE_URL || !config.WEB_REVALIDATE_SECRET) {
+    return new NotConfiguredCacheInvalidator();
+  }
+  return new WebRevalidateCacheInvalidator(config.WEB_REVALIDATE_URL, config.WEB_REVALIDATE_SECRET);
+}
+
+/**
+ * Resolves the Redis REST credentials from either naming scheme, preferring the
+ * Upstash-native pair. Split out so the preference is directly testable rather
+ * than inferred from which adapter gets constructed.
+ *
+ * A lone URL or lone token is not usable — the REST API needs both — so an
+ * incomplete pair resolves to null and the caller falls back.
+ */
+export function resolveRateLimitCredentials(
+  config: AppConfig,
+): { url: string; token: string } | null {
+  const url = config.UPSTASH_REDIS_REST_URL ?? config.KV_REST_API_URL;
+  const token = config.UPSTASH_REDIS_REST_TOKEN ?? config.KV_REST_API_TOKEN;
+  if (!url || !token) return null;
+  return { url, token };
+}
+
+/**
+ * Selects the rate limiter. With a Redis store configured the quotas are
+ * enforced across every instance; without one the in-memory limiter only bounds
+ * a single instance, which is worth saying out loud at startup because the
+ * difference is invisible from the outside.
+ *
+ * Both credential namings are accepted: a direct Upstash setup uses
+ * `UPSTASH_REDIS_REST_*`, while Vercel's marketplace integration provisions the
+ * legacy Vercel-KV names even though the endpoint it hands back is an Upstash
+ * REST URL.
+ */
+export function createRateLimiter(config: AppConfig): RateLimiter {
+  const credentials = resolveRateLimitCredentials(config);
+  if (!credentials) {
+    consoleSafeLogger.info(
+      'Rate limiting is per-instance: no Redis REST credentials are configured.',
+    );
+    return new InMemoryRateLimiter();
+  }
+  return UpstashRateLimiter.fromCredentials(credentials.url, credentials.token, consoleSafeLogger);
 }
