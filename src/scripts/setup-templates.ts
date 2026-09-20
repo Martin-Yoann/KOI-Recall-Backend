@@ -108,7 +108,7 @@ function shell(parts: {
     // Footer
     `<tr><td style="background:${INK};padding:18px 28px;">`,
     `<p style="margin:0 0 8px;font-family:${FONT};font-size:11px;line-height:1.6;color:${INK_MUTED};">You are receiving this because you submitted a recall claim. This is a service message about your case, not marketing.</p>`,
-    `<p style="margin:0;font-family:${FONT};font-size:11px;line-height:1.6;color:${INK_MUTED};">KOI Recall &nbsp;·&nbsp; <a href="${BASE_URL}/privacy" style="color:${INK_MUTED};text-decoration:underline;">Privacy notice</a></p>`,
+    `<p style="margin:0;font-family:${FONT};font-size:11px;line-height:1.6;color:${INK_MUTED};">KOI Importer Inc &nbsp;·&nbsp; <a href="${BASE_URL}/privacy" style="color:${INK_MUTED};text-decoration:underline;">Privacy notice</a></p>`,
     '</td></tr>',
 
     '</table></td></tr></table></body></html>',
@@ -171,6 +171,7 @@ function text(parts: { title: string; lines: string[]; ctaUrl?: string }): strin
     `Track your claim: ${BASE_URL}/lookup`,
     '',
     'You are receiving this because you submitted a recall claim.',
+    'KOI Importer Inc',
     `Privacy notice: ${BASE_URL}/privacy`,
   ]
     .filter((line) => line !== undefined)
@@ -186,7 +187,7 @@ async function setupTemplates() {
     {
       templateKey: 'claim_confirmation',
       locale: 'en-US',
-      version: 2,
+      version: 3,
       subject: 'We received your recall claim {{caseReference}}',
       htmlBody: shell({
         preheader: 'Your claim is in the queue and needs no action right now.',
@@ -226,7 +227,7 @@ async function setupTemplates() {
     {
       templateKey: 'need_info',
       locale: 'en-US',
-      version: 3,
+      version: 4,
       subject: 'Action needed for recall claim {{caseReference}}',
       htmlBody: shell({
         preheader: 'We need one more thing before we can continue your claim.',
@@ -268,7 +269,7 @@ async function setupTemplates() {
     {
       templateKey: 'refund_approved',
       locale: 'en-US',
-      version: 2,
+      version: 3,
       subject: 'Refund approved for {{caseReference}}',
       htmlBody: shell({
         preheader: 'Your refund has been approved and is being processed.',
@@ -306,7 +307,7 @@ async function setupTemplates() {
     {
       templateKey: 'replacement_approved',
       locale: 'en-US',
-      version: 2,
+      version: 3,
       subject: 'Replacement approved for {{caseReference}}',
       htmlBody: shell({
         preheader: 'Your replacement has been approved and is being prepared.',
@@ -344,7 +345,7 @@ async function setupTemplates() {
     {
       templateKey: 'claim_rejected',
       locale: 'en-US',
-      version: 3,
+      version: 4,
       subject: 'Decision on your recall claim {{caseReference}}',
       htmlBody: shell({
         preheader: 'We have completed the review of your claim.',
@@ -382,7 +383,7 @@ async function setupTemplates() {
     {
       templateKey: 'refund_completed',
       locale: 'en-US',
-      version: 3,
+      version: 4,
       subject: 'Refund sent for recall claim {{caseReference}}',
       htmlBody: shell({
         preheader: 'Your refund has been sent.',
@@ -418,7 +419,7 @@ async function setupTemplates() {
     {
       templateKey: 'shipment_shipped',
       locale: 'en-US',
-      version: 3,
+      version: 4,
       subject: 'Your replacement is on its way — {{caseReference}}',
       htmlBody: shell({
         preheader: 'Your replacement has shipped.',
@@ -451,7 +452,7 @@ async function setupTemplates() {
     {
       templateKey: 'case_completed',
       locale: 'en-US',
-      version: 2,
+      version: 3,
       subject: 'Recall case {{caseReference}} is complete',
       htmlBody: shell({
         preheader: 'Your recall case is closed as complete.',
@@ -484,7 +485,7 @@ async function setupTemplates() {
     {
       templateKey: 'case_closed',
       locale: 'en-US',
-      version: 3,
+      version: 4,
       subject: 'Recall case {{caseReference}} has been closed',
       htmlBody: shell({
         preheader: 'Your recall case has been closed.',
