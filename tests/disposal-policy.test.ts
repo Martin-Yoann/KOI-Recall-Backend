@@ -176,6 +176,41 @@ describe('disposal policy', () => {
     ).not.toContain('disposal.resubmit_evidence');
   });
 
+  /**
+   * Which declaration a consumer is offered comes from the policy, not from the
+   * client reading `authorizationStatus`. The two branches are mutually exclusive:
+   * a task either has something to declare against or it does not.
+   */
+  describe('declaration branches', () => {
+    it('offers the completion branch only against a live authorization', () => {
+      const withAuth = evaluateDisposal({ ...satisfiable, authorizationStatus: 'active' });
+      expect(withAuth.allowedActions).toContain('disposal.declare_completion');
+      expect(withAuth.allowedActions).not.toContain('disposal.declare_exception');
+
+      const without = evaluateDisposal({ ...satisfiable, authorizationStatus: null });
+      expect(without.allowedActions).not.toContain('disposal.declare_completion');
+      expect(without.allowedActions).toContain('disposal.declare_exception');
+    });
+
+    // A withdrawn instruction suspends live permissions. The consumer still needs a
+    // way to say what actually happened, which is why this branch stays open.
+    it('offers the exception branch while a permission is suspended', () => {
+      const suspended = evaluateDisposal({ ...satisfiable, authorizationStatus: 'suspended' });
+      expect(suspended.allowedActions).toContain('disposal.declare_exception');
+      expect(suspended.allowedActions).not.toContain('disposal.declare_completion');
+    });
+
+    it('offers neither once the task is closed', () => {
+      const closed = evaluateDisposal({
+        ...satisfiable,
+        taskStatus: 'completed',
+        authorizationStatus: 'active',
+      });
+      expect(closed.allowedActions).not.toContain('disposal.declare_completion');
+      expect(closed.allowedActions).not.toContain('disposal.declare_exception');
+    });
+  });
+
   // The service must fail closed with a reason, so a missed gate surfaces as an
   // actionable message rather than a bare 500.
   describe('assertCanIssueAuthorization', () => {

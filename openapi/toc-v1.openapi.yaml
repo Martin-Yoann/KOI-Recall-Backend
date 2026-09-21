@@ -614,6 +614,11 @@ components:
           items:
             type: string
           type: array
+        declarationTextVersion:
+          maxLength: 80
+          minLength: 1
+          nullable: true
+          type: string
         eligibilityStatus:
           $ref: "#/components/schemas/DisposalEligibilityStatus"
         evidenceReviewStatus:
@@ -650,6 +655,7 @@ components:
         - version
         - products
         - instruction
+        - declarationTextVersion
         - expiresAt
       type: object
     DraftDocument:

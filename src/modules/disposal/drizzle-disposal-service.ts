@@ -588,21 +588,32 @@ export class DrizzleDisposalService implements DisposalService {
       const record = await this.loadTaskRecord(tx, input.taskId, hashTaskToken(input.taskToken));
       if (!record) throw new ResourceNotFoundError('Disposal task was not found.');
 
-      const hasAuthorization = Boolean(input.authorizationId);
       const hasException = Boolean(input.exceptionType);
-      if (hasAuthorization === hasException) {
+
+      // A declaration cites exactly one basis, and the *authorization* branch is
+      // resolved by the server. The client is not asked to name an authorization:
+      // the task holds at most one active one, the server can find it, and a page
+      // left open across a re-issue would otherwise cite a stale id.
+      const citedAuthorization = input.authorizationId ?? record.authorizationId ?? undefined;
+      const hasAuthorization = Boolean(citedAuthorization);
+      if (hasException && hasAuthorization) {
         throw new ClaimValidationError(
           'A declaration must cite either an authorization or an exception, and not both.',
         );
       }
+      if (!hasException && !hasAuthorization) {
+        throw new ClaimValidationError(
+          'This task has no active authorization to declare against. Use the exception path if you disposed of the product some other way.',
+        );
+      }
 
-      if (input.authorizationId) {
+      if (hasAuthorization) {
         if (
-          input.authorizationId !== record.authorizationId ||
+          citedAuthorization !== record.authorizationId ||
           record.authorizationStatus !== 'active'
         ) {
           throw new ClaimValidationError(
-            'The cited authorization is not active for this task, so the disposal cannot be declared.',
+            'The authorization for this task is no longer active, so the disposal cannot be declared.',
           );
         }
       } else if (!input.exceptionNote) {
@@ -611,7 +622,7 @@ export class DrizzleDisposalService implements DisposalService {
 
       await tx.insert(disposalDeclarations).values({
         taskId: input.taskId,
-        authorizationId: input.authorizationId ?? null,
+        authorizationId: hasAuthorization ? (citedAuthorization ?? null) : null,
         exceptionType: input.exceptionType ?? null,
         exceptionNote: input.exceptionNote ?? null,
         declarationTextVersion: input.declarationTextVersion,

@@ -428,7 +428,10 @@ describe.skipIf(!enabled)(
     });
 
     // D19/D20: no fake completion, and a truthful exception is recordable.
-    it('refuses a declaration with neither an authorization nor an exception', async () => {
+    // The rule this pins is *refusal when no basis exists*, not a required shape of
+    // input: the authorization branch is resolved server-side, so a declaration that
+    // cites nothing is refused for the substantive reason (no live authorization).
+    it('refuses a declaration when this task has no basis to declare against', async () => {
       const opened = await openTask({ authorizes: true, approved: true });
       await expect(
         service.recordDeclaration({
@@ -436,7 +439,7 @@ describe.skipIf(!enabled)(
           taskToken: opened.created!.token,
           declarationTextVersion: 'integration-v1',
         }),
-      ).rejects.toThrow(/either an authorization or an exception/i);
+      ).rejects.toThrow(/no active authorization/i);
       await cleanup(opened, { taskId: opened.created!.taskId });
     });
 
@@ -511,6 +514,108 @@ describe.skipIf(!enabled)(
         .where(eq(disposalEvidenceBatches.id, batch.batchId));
       expect(row?.retentionUntil?.getTime()).toBe(deadline.getTime());
       await cleanup(opened, { taskId, documentIds: [documentId] });
+    });
+
+    // ---- admin reads -------------------------------------------------------
+    // These two paths carry the admin surface, and were previously covered only
+    // indirectly through the consumer path. The withholding rule is the one that
+    // matters: an admin read must not expose instruction content that the visitor
+    // path would hold back, or the gate could be read around.
+
+    it('admin read returns a task without needing the visitor credential', async () => {
+      const opened = await openTask({ authorizes: true, approved: true });
+      const taskId = opened.created!.taskId;
+
+      const detail = await service.getTaskForAdmin(taskId);
+      expect(detail?.task.id).toBe(taskId);
+      expect(detail?.products).toHaveLength(1);
+      expect(detail?.instruction).not.toBeNull();
+      expect(detail?.snapshot.allowedActions.length).toBeGreaterThan(0);
+
+      await expect(service.getTaskForAdmin(randomUUID())).resolves.toBeNull();
+      await cleanup(opened, { taskId });
+    });
+
+    it('admin read withholds instructions the approval does not authorize', async () => {
+      const opened = await openTask({ authorizes: false, approved: true });
+      // No task should exist at all here, but if one did the content must stay hidden.
+      if (opened.created) {
+        const detail = await service.getTaskForAdmin(opened.created.taskId);
+        expect(detail?.instruction).toBeNull();
+        expect(detail?.task.approvalAuthorizesDisposal).toBe(false);
+        await cleanup(opened, { taskId: opened.created.taskId });
+      } else {
+        expect(opened.created).toBeNull();
+        await cleanup(opened);
+      }
+    });
+
+    // The client is not asked to name an authorization: the server resolves the
+    // one the task holds, so a page left open across a re-issue cannot cite a
+    // stale id, and a task with no live authorization cannot be declared against.
+    it('resolves the authorization itself, and refuses when there is none', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'accepted',
+        rationale: 'Evidence is sufficient for this product.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+
+      // Nothing is authorized yet, so there is no basis to declare against.
+      await expect(
+        service.recordDeclaration({
+          taskId: opened.taskId,
+          taskToken: opened.created!.token,
+          declarationTextVersion: 'integration-v1',
+        }),
+      ).rejects.toThrow(/no active authorization/i);
+
+      await service.issueAuthorization({ taskId: opened.taskId, actorStaffUserId: staffUserId });
+
+      // Declared without naming the authorization: the service resolves it.
+      await service.recordDeclaration({
+        taskId: opened.taskId,
+        taskToken: opened.created!.token,
+        declarationTextVersion: 'integration-v1',
+      });
+      const [task] = await handle!.db
+        .select({ status: disposalTasks.status })
+        .from(disposalTasks)
+        .where(eq(disposalTasks.id, opened.taskId));
+      expect(task?.status).toBe('completed');
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
+
+    it('queue rows carry policy reasons, product count and hold state', async () => {
+      const opened = await openTask({ authorizes: true, approved: true });
+      const taskId = opened.created!.taskId;
+
+      const rows = await service.listQueue({});
+      const row = rows.find((candidate) => candidate.taskId === taskId);
+      expect(row).toBeDefined();
+      expect(row!.productCount).toBe(1);
+      expect(row!.holdActive).toBe(false);
+      expect(row!.evidenceReviewStatus).toBeNull();
+      expect(row!.authorizationStatus).toBeNull();
+      // Awaiting the human eligibility decision, and nothing has been sent yet.
+      expect(row!.blockingReasons).toContain('ELIGIBILITY_NOT_CONFIRMED');
+      expect(row!.blockingReasons).toContain('EVIDENCE_NOT_SUBMITTED');
+
+      // A hold must show up on the queue row, because it is why nothing proceeds.
+      await service.placeHold({
+        taskId,
+        reason: 'compliance_investigation',
+        note: 'Holding this task while a related report is looked at.',
+        actorStaffUserId: staffUserId,
+      });
+      const afterHold = (await service.listQueue({})).find((c) => c.taskId === taskId);
+      expect(afterHold!.holdActive).toBe(true);
+      expect(afterHold!.blockingReasons).toContain('DISPOSAL_ON_HOLD');
+
+      await cleanup(opened, { taskId });
     });
   },
 );

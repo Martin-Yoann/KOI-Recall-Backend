@@ -18,6 +18,7 @@ const taskView = {
   version: 1,
   products: [],
   instruction: null,
+  declarationTextVersion: null,
   expiresAt: '2026-09-21T00:00:00.000Z',
 };
 
@@ -39,6 +40,7 @@ describe('DisposalTaskView contract', () => {
       'allowedActions',
       'authorizationStatus',
       'blockingReasons',
+      'declarationTextVersion',
       'eligibilityStatus',
       'evidenceReviewStatus',
       'expiresAt',

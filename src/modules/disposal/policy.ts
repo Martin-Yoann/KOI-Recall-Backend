@@ -211,6 +211,20 @@ export function evaluateDisposal(state: DisposalPolicyState): DisposalPolicySnap
       allowedActions.push('disposal.resubmit_evidence');
     }
   }
+  // Declaring is what closes a task, and which branch is open depends on whether
+  // anything was ever permitted. The client reads these ids rather than inferring
+  // from `authorizationStatus`: the same reason every other action here is
+  // server-issued.
+  if (taskOpen && state.authorizationStatus === 'active') {
+    allowedActions.push('disposal.declare_completion');
+  }
+  if (taskOpen && state.authorizationStatus !== 'active') {
+    // The forward-looking path is not open, so the only honest declaration left is
+    // one about what already happened. Offering it is what keeps a consumer who
+    // disposed of the unit before we asked from having no way to say so.
+    allowedActions.push('disposal.declare_exception');
+  }
+
   if (taskOpen) {
     allowedActions.push('disposal.hold.place');
   }

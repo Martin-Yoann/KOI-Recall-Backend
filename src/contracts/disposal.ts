@@ -90,6 +90,12 @@ export const disposalTaskViewSchema = z
     version: z.number().int().positive(),
     products: z.array(disposalTaskProductViewSchema),
     instruction: disposalInstructionViewSchema.nullable(),
+    /**
+     * The version of the consumer statement this task is pinned to. Exposed here
+     * rather than only inside `instruction`, because the exception path can be
+     * open while no approved instruction is publishable.
+     */
+    declarationTextVersion: z.string().min(1).max(80).nullable(),
     expiresAt: isoDateTime,
   })
   .openapi('DisposalTaskView');

@@ -107,6 +107,7 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
           confirmedAffected: product.confirmedAffected,
         })),
         instruction: detail.instruction,
+        declarationTextVersion: record.declarationTextVersion,
         expiresAt: detail.expiresAt,
       },
       200,
