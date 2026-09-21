@@ -423,6 +423,16 @@ components:
         - null
       nullable: true
       type: string
+    DisposalDocumentListResponse:
+      properties:
+        documents:
+          items:
+            $ref: "#/components/schemas/DisposalEvidenceDocument"
+          maxItems: 32
+          type: array
+      required:
+        - documents
+      type: object
     DisposalEligibilityStatus:
       enum:
         - pending_confirmation
@@ -440,6 +450,46 @@ components:
       required:
         - batchId
         - reviewStatus
+      type: object
+    DisposalEvidenceDocument:
+      properties:
+        documentId:
+          format: uuid
+          type: string
+        fileName:
+          maxLength: 255
+          minLength: 1
+          type: string
+        lastStatusChangedAt:
+          format: date-time
+          type: string
+        status:
+          enum:
+            - uploading
+            - verifying
+            - verified
+            - scan_pending
+            - rejected
+            - expired
+          type: string
+        statusReason:
+          enum:
+            - mime_mismatch
+            - malware_detected
+            - null
+          nullable: true
+          type: string
+        uploadedAt:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+        - documentId
+        - fileName
+        - status
+        - statusReason
+        - uploadedAt
+        - lastStatusChangedAt
       type: object
     DisposalInstructionStep:
       properties:
@@ -1664,6 +1714,74 @@ paths:
       summary: Record the consumer declaration for a disposal task
       tags:
         - Disposal
+  /v1/disposal-tasks/{taskId}/documents:
+    get:
+      description: "Uses the same six-state upload vocabulary as the claim form, so an upload means the same thing on both surfaces. Technical status only: acceptance is a separate, human decision."
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Disposal-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisposalDocumentListResponse"
+          description: The task's evidence documents.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The disposal token is missing, wrong, or expired.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: List a task's evidence photos with their technical status
+      tags:
+        - Disposal
   /v1/disposal-tasks/{taskId}/evidence:
     post:
       description: "Only technically verified documents of the disposal-evidence category, owned by this task, are accepted. Submitting evidence is not permission to dispose: a person still has to review it."
@@ -1749,6 +1867,86 @@ paths:
                 $ref: "#/components/schemas/ProblemDetails"
           description: A required dependency is unavailable.
       summary: Submit a batch of disposal evidence photos for review
+      tags:
+        - Disposal
+  /v1/disposal-tasks/{taskId}/upload-tokens:
+    post:
+      description: "Gated on the same policy as submitting evidence, so photos cannot start arriving before eligibility is confirmed, an authorizing instruction version exists, or while a hold is in force. The upload itself is technical only: a verified photo is not an accepted one."
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Disposal-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadTokenRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadTokenResponse"
+          description: The upload target was authorised.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The disposal token is missing, wrong, or expired.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The request is refused by the disposal gates.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Authorise one disposal evidence upload for a task
       tags:
         - Disposal
   /v1/recall-campaigns/{slug}:

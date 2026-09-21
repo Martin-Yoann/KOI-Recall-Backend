@@ -4,6 +4,7 @@ import type { ApplicationRegistry } from '../composition.js';
 import {
   claimDraftResponseSchema,
   createClaimDraftRoute,
+  createDisposalUploadTokenRoute,
   createUploadTokenRoute,
   deleteDraftDocumentRoute,
   draftDocumentListResponseSchema,
@@ -11,7 +12,7 @@ import {
   uploadTokenResponseSchema,
 } from '../contracts/toc.js';
 import type { AppEnv } from '../middleware/request-context.js';
-import { isConnectionError } from '../shared/errors.js';
+import { isConnectionError, NotImplementedServiceError } from '../shared/errors.js';
 import { dependencyUnavailable, notFound } from './shared.js';
 
 /**
@@ -31,6 +32,35 @@ export function registerDocumentRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (!draft) return notFound(context, 'Campaign');
 
     const response = claimDraftResponseSchema.parse(draft);
+    return context.json(response, 201);
+  });
+
+  /**
+   * Task-scoped evidence upload. The disposal token authorises it, and the
+   * document is owned by the task's draft — the same consumer, the same claim.
+   * The draft-scoped route below cannot serve this case because it requires an
+   * active draft, and submitting the claim is what made this one inactive.
+   */
+  app.openapi(createDisposalUploadTokenRoute, async (context) => {
+    const { taskId } = context.req.valid('param');
+    const taskToken = context.req.header('X-Disposal-Token');
+    if (!taskToken) return notFound(context, 'Disposal task');
+
+    const disposal = registry.services.disposal;
+    if (!disposal) throw new NotImplementedServiceError('Disposal');
+    // Throws when the task is unknown, the credential is wrong, or the policy
+    // does not currently allow evidence.
+    const { draftId } = await disposal.assertCanUploadEvidence(taskId, taskToken);
+
+    const body = context.req.valid('json');
+    const authorization = await registry.services.documents.authorizeUpload({
+      draftId,
+      category: 'disposal_evidence',
+      fileName: body.fileName,
+      mimeType: body.mimeType,
+      sizeBytes: body.sizeBytes,
+    });
+    const response = uploadTokenResponseSchema.parse(authorization);
     return context.json(response, 201);
   });
 

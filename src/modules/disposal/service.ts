@@ -212,6 +212,19 @@ export interface InstructionVersionSummary {
   approvalCount: number;
 }
 
+export interface EvidenceDocumentSummary {
+  documentId: string;
+  fileName: string;
+  status: DocumentStatusValue;
+  statusReason: 'mime_mismatch' | 'malware_detected' | null;
+  uploadedAt: string | null;
+  lastStatusChangedAt: string;
+}
+
+/** The six-state upload vocabulary shared with the claim form. */
+export type DocumentStatusValue =
+  'uploading' | 'verifying' | 'verified' | 'scan_pending' | 'rejected' | 'expired';
+
 export interface DisposalService {
   /**
    * Opens a task at claim submission, or returns null when disposal does not
@@ -253,6 +266,27 @@ export interface DisposalService {
     campaignProductId: string;
     quantity: number;
   }): Promise<void>;
+
+  /**
+   * Authorises one evidence photo upload for a task.
+   *
+   * The task credential is the proof of access. The draft-scoped upload route
+   * cannot serve this case: it requires an *active* draft, and submitting the
+   * claim is exactly what made the draft inactive. Uploading is gated on the same
+   * policy as submitting, so evidence cannot start arriving before eligibility is
+   * confirmed or while a hold is in force.
+   *
+   * The created document is owned by the task's draft, which is the same consumer
+   * and the same claim; `document_uploads` needs no new owner column for this.
+   */
+  assertCanUploadEvidence(taskId: string, taskToken: string): Promise<{ draftId: string }>;
+
+  /**
+   * The task's evidence photos with their server-derived technical status.
+   * Deliberately the same six-state vocabulary as the claim form, so a consumer
+   * sees one consistent story about an upload across both surfaces.
+   */
+  listEvidenceDocuments(taskId: string, taskToken: string): Promise<EvidenceDocumentSummary[]>;
 
   submitEvidenceBatch(
     input: SubmitEvidenceBatchInput,

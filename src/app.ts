@@ -87,6 +87,10 @@ export function createApp(dependencies: AppDependencies = {}) {
         'Authorization',
         'Idempotency-Key',
         'X-Draft-Token',
+        // Every consumer credential a browser must send. A custom header that is
+        // missing here is not rejected by the API — it never reaches it, because
+        // the preflight fails first and the client can only report a network error.
+        'X-Disposal-Token',
         'X-Request-Id',
       ],
       exposeHeaders: [

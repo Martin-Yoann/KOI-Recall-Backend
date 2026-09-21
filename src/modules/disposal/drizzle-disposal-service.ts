@@ -18,6 +18,11 @@ import {
 } from '../../db/schema/index.js';
 import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
 import {
+  deriveDocumentStatus,
+  LISTED_UPLOAD_STATUSES,
+  type ListedUploadStatus,
+} from '../documents/document-status.js';
+import {
   assertCanIssueAuthorization,
   authorizesConsumerDisposal,
   evaluateDisposal,
@@ -30,6 +35,7 @@ import {
   type CreateInstructionVersionInput,
   type DisposalQueueRowView,
   type DisposalService,
+  type EvidenceDocumentSummary,
   type InstructionVersionSummary,
   type RecordInstructionApprovalInput,
   type DisposalTaskDetail,
@@ -240,6 +246,84 @@ export class DrizzleDisposalService implements DisposalService {
       instruction,
       expiresAt,
     };
+  }
+
+  /**
+   * Authorises one evidence upload for a task, or refuses with the policy reason.
+   *
+   * Reading the task through the token is the authorisation: staff never hold this
+   * credential, and an unknown task and a wrong token are the same `null` here as
+   * they are on the read path.
+   */
+  async assertCanUploadEvidence(taskId: string, taskToken: string): Promise<{ draftId: string }> {
+    const record = await this.loadTaskRecord(this.handle.db, taskId, hashTaskToken(taskToken));
+    if (!record) throw new ResourceNotFoundError('Disposal task was not found.');
+    if (!record.draftId) {
+      // Every task opens against a draft, so a task without one is a data fault
+      // rather than a normal state.
+      throw new ClaimValidationError('This disposal task is not bound to a claim draft.');
+    }
+
+    const snapshot = evaluateDisposal(record.policyState);
+    if (!snapshot.maySubmitEvidence) {
+      throw new ClaimValidationError(
+        `Evidence cannot be uploaded for this task right now: ${snapshot.blockingReasons.join(', ') || 'the task is closed'}.`,
+      );
+    }
+    return { draftId: record.draftId };
+  }
+
+  /**
+   * The task's evidence photos with their derived technical status.
+   *
+   * Derivation is delegated to the shared helper rather than recomputed here, so the
+   * upload shown on this page means the same thing as an upload shown on the claim
+   * form.
+   */
+  async listEvidenceDocuments(
+    taskId: string,
+    taskToken: string,
+  ): Promise<EvidenceDocumentSummary[]> {
+    const record = await this.loadTaskRecord(this.handle.db, taskId, hashTaskToken(taskToken));
+    if (!record) throw new ResourceNotFoundError('Disposal task was not found.');
+    if (!record.draftId) return [];
+
+    const rows = await this.handle.db
+      .select({
+        id: documentUploads.id,
+        originalFileName: documentUploads.originalFileName,
+        uploadStatus: documentUploads.uploadStatus,
+        scanStatus: documentUploads.scanStatus,
+        uploadedAt: documentUploads.uploadedAt,
+        updatedAt: documentUploads.updatedAt,
+        expiresAt: documentUploads.expiresAt,
+      })
+      .from(documentUploads)
+      .where(
+        and(
+          eq(documentUploads.draftId, record.draftId),
+          eq(documentUploads.category, 'disposal_evidence'),
+          inArray(documentUploads.uploadStatus, [...LISTED_UPLOAD_STATUSES]),
+        ),
+      )
+      .orderBy(asc(documentUploads.createdAt));
+
+    const now = new Date();
+    return rows.map((row) => {
+      const derived = deriveDocumentStatus(
+        row.uploadStatus as ListedUploadStatus,
+        row.scanStatus,
+        row.expiresAt.getTime() <= now.getTime(),
+      );
+      return {
+        documentId: row.id,
+        fileName: row.originalFileName,
+        status: derived.status,
+        statusReason: derived.statusReason,
+        uploadedAt: row.uploadedAt ? row.uploadedAt.toISOString() : null,
+        lastStatusChangedAt: row.updatedAt.toISOString(),
+      };
+    });
   }
 
   async confirmEligibility(input: ConfirmEligibilityInput): Promise<void> {

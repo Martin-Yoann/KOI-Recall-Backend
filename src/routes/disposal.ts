@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import type { ApplicationRegistry } from '../composition.js';
 import {
   getDisposalTaskRoute,
+  listDisposalDocumentsRoute,
   recordDisposalDeclarationRoute,
   submitDisposalEvidenceRoute,
 } from '../contracts/toc.js';
@@ -151,6 +152,15 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       ...(body.exceptionNote ? { exceptionNote: body.exceptionNote } : {}),
     });
     return context.body(null, 204);
+  });
+
+  app.openapi(listDisposalDocumentsRoute, async (context) => {
+    const { taskId } = context.req.valid('param');
+    const token = disposalToken(context);
+    if (!token) return notFound(context, 'Disposal task');
+
+    const documents = await requireDisposalService(registry).listEvidenceDocuments(taskId, token);
+    return context.json({ documents }, 200);
   });
 
   // ---- admin: queue and review --------------------------------------------

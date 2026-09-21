@@ -199,6 +199,22 @@ export const releaseDisposalHoldRequestSchema = z
   })
   .openapi('ReleaseDisposalHoldRequest');
 
+export const disposalEvidenceDocumentSchema = z
+  .object({
+    documentId: uuid,
+    fileName: z.string().min(1).max(255),
+    /** The shared six-state upload vocabulary. Never says "accepted". */
+    status: z.enum(['uploading', 'verifying', 'verified', 'scan_pending', 'rejected', 'expired']),
+    statusReason: z.enum(['mime_mismatch', 'malware_detected']).nullable(),
+    uploadedAt: isoDateTime.nullable(),
+    lastStatusChangedAt: isoDateTime,
+  })
+  .openapi('DisposalEvidenceDocument');
+
+export const disposalDocumentListResponseSchema = z
+  .object({ documents: z.array(disposalEvidenceDocumentSchema).max(32) })
+  .openapi('DisposalDocumentListResponse');
+
 export const disposalInstructionSummarySchema = z
   .object({
     id: uuid,

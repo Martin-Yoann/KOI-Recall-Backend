@@ -113,3 +113,4 @@ jobs:
           tests/disposal-guards.integration.test.ts
           tests/disposal-service.integration.test.ts
           tests/disposal-submit.integration.test.ts
+          tests/disposal-upload.integration.test.ts

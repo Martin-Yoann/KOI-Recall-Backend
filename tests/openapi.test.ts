@@ -18,6 +18,10 @@ describe('OpenAPI contract', () => {
       '/v1/recall-campaigns/{slug}',
       '/v1/recall-campaigns/{slug}/product-checks',
       '/v1/recall-campaigns/{slug}/claim-drafts',
+      // The disposal upload target is registered with the other upload routes,
+      // because it needs the document service; the rest of the disposal surface
+      // is registered after the case-status lookup.
+      '/v1/disposal-tasks/{taskId}/upload-tokens',
       '/v1/claim-drafts/{draftId}/upload-tokens',
       '/v1/claim-drafts/{draftId}/documents/{documentId}',
       '/v1/claim-drafts/{draftId}/documents',
@@ -27,6 +31,7 @@ describe('OpenAPI contract', () => {
       '/v1/disposal-tasks/{taskId}',
       '/v1/disposal-tasks/{taskId}/evidence',
       '/v1/disposal-tasks/{taskId}/declaration',
+      '/v1/disposal-tasks/{taskId}/documents',
     ]);
     expect(
       paths.every((path) => !path.startsWith('/internal') && !path.startsWith('/webhooks')),

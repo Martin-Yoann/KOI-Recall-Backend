@@ -1,7 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
 
 import { commonProblemResponses, problemDetailsSchema, uuid } from './common.js';
+import { uploadTokenRequestSchema, uploadTokenResponseSchema } from './documents.js';
 import {
+  disposalDocumentListResponseSchema,
   disposalEvidenceBatchResponseSchema,
   disposalTaskViewSchema,
   recordDisposalDeclarationRequestSchema,
@@ -83,6 +85,55 @@ export const submitDisposalEvidenceRoute = createRoute({
     },
     401: unauthorizedResponse,
     422: unprocessableResponse,
+    ...commonProblemResponses,
+  },
+});
+
+/**
+ * Mints an upload target for one disposal evidence photo.
+ *
+ * A separate route from the draft-scoped upload token on purpose: that one
+ * requires an *active* draft, and submitting the claim is what made this draft
+ * inactive. The task credential is the proof of access here, and the created
+ * document belongs to the same consumer and the same claim.
+ */
+export const createDisposalUploadTokenRoute = createRoute({
+  method: 'post',
+  path: '/v1/disposal-tasks/{taskId}/upload-tokens',
+  tags: ['Disposal'],
+  summary: 'Authorise one disposal evidence upload for a task',
+  description:
+    'Gated on the same policy as submitting evidence, so photos cannot start arriving before eligibility is confirmed, an authorizing instruction version exists, or while a hold is in force. The upload itself is technical only: a verified photo is not an accepted one.',
+  request: {
+    params: taskPathSchema,
+    headers: disposalTokenHeaderSchema,
+    body: { required: true, content: { 'application/json': { schema: uploadTokenRequestSchema } } },
+  },
+  responses: {
+    201: {
+      description: 'The upload target was authorised.',
+      content: { 'application/json': { schema: uploadTokenResponseSchema } },
+    },
+    401: unauthorizedResponse,
+    422: unprocessableResponse,
+    ...commonProblemResponses,
+  },
+});
+
+export const listDisposalDocumentsRoute = createRoute({
+  method: 'get',
+  path: '/v1/disposal-tasks/{taskId}/documents',
+  tags: ['Disposal'],
+  summary: "List a task's evidence photos with their technical status",
+  description:
+    'Uses the same six-state upload vocabulary as the claim form, so an upload means the same thing on both surfaces. Technical status only: acceptance is a separate, human decision.',
+  request: { params: taskPathSchema, headers: disposalTokenHeaderSchema },
+  responses: {
+    200: {
+      description: "The task's evidence documents.",
+      content: { 'application/json': { schema: disposalDocumentListResponseSchema } },
+    },
+    401: unauthorizedResponse,
     ...commonProblemResponses,
   },
 });
