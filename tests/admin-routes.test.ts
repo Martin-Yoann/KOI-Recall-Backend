@@ -6,6 +6,7 @@ import { loadConfig } from '../src/config/env.js';
 import type { AdminService } from '../src/modules/admin/service.js';
 import type { AuditEventInput, AuditService } from '../src/modules/staff/audit-service.js';
 import type { StaffService } from '../src/modules/staff/service.js';
+import { makeDisposalFake } from './helpers/disposal-fake.js';
 
 /**
  * Records audit calls so tests can assert the trail, not just the status code.
@@ -41,7 +42,9 @@ function appWith(admin: AdminService, audit: AuditService = makeAuditSpy().servi
       // runner is a shape production cannot produce — the harness mirrors the
       // real one. Previously it did not, which is why the legacy close path
       // looked like it needed no transaction.
-      adminTransactions: { run: (work) => work({ admin, staff: staffStub, audit }) },
+      adminTransactions: {
+        run: (work) => work({ admin, staff: staffStub, audit, disposal: makeDisposalFake() }),
+      },
     },
     platform: base.platform,
   };

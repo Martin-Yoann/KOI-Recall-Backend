@@ -1,10 +1,11 @@
 import { z } from '@hono/zod-openapi';
 
+import { EVIDENCE_CATEGORIES } from '../shared/evidence-categories.js';
 import { uuid, isoDateTime } from './common.js';
 
 export const evidenceRequirementSchema = z
   .object({
-    category: z.enum(['product_photo', 'proof_of_purchase', 'incident_evidence']),
+    category: z.enum(EVIDENCE_CATEGORIES),
     required: z.boolean(),
     minimumFiles: z.number().int().min(0),
     maximumFiles: z.number().int().min(1),

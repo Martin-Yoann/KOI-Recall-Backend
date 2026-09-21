@@ -288,6 +288,22 @@ components:
         caseReference:
           pattern: ^KOI-[A-Z0-9]{4}-[A-Z0-9]{8}$
           type: string
+        disposal:
+          properties:
+            resumePath:
+              minLength: 1
+              type: string
+            taskId:
+              format: uuid
+              type: string
+            token:
+              minLength: 32
+              type: string
+          required:
+            - taskId
+            - token
+            - resumePath
+          type: object
         emailStatus:
           enum:
             - queued
@@ -390,6 +406,202 @@ components:
         - state
         - postalCode
       type: object
+    DisposalAuthorizationStatus:
+      enum:
+        - active
+        - suspended
+        - revoked
+        - null
+      nullable: true
+      type: string
+    DisposalBatchReviewStatus:
+      enum:
+        - pending
+        - accepted
+        - needs_resubmission
+        - superseded
+        - null
+      nullable: true
+      type: string
+    DisposalEligibilityStatus:
+      enum:
+        - pending_confirmation
+        - confirmed_eligible
+        - not_applicable
+        - ineligible
+      type: string
+    DisposalEvidenceBatchResponse:
+      properties:
+        batchId:
+          format: uuid
+          type: string
+        reviewStatus:
+          $ref: "#/components/schemas/DisposalBatchReviewStatus"
+      required:
+        - batchId
+        - reviewStatus
+      type: object
+    DisposalInstructionStep:
+      properties:
+        order:
+          exclusiveMinimum: true
+          minimum: 0
+          type: integer
+        text:
+          maxLength: 2000
+          minLength: 1
+          type: string
+      required:
+        - order
+        - text
+      type: object
+    DisposalInstructionView:
+      nullable: true
+      properties:
+        declarationTextVersion:
+          maxLength: 80
+          minLength: 1
+          type: string
+        locale:
+          maxLength: 16
+          minLength: 2
+          type: string
+        recognitionRequirements:
+          items:
+            minLength: 1
+            type: string
+          type: array
+        referenceImages:
+          items:
+            $ref: "#/components/schemas/DisposalReferenceImage"
+          type: array
+        safetyWarnings:
+          items:
+            minLength: 1
+            type: string
+          minItems: 1
+          type: array
+        steps:
+          items:
+            $ref: "#/components/schemas/DisposalInstructionStep"
+          minItems: 1
+          type: array
+        title:
+          maxLength: 240
+          minLength: 1
+          type: string
+        versionId:
+          format: uuid
+          type: string
+        versionNumber:
+          exclusiveMinimum: true
+          minimum: 0
+          type: integer
+        videoUrl:
+          maxLength: 1024
+          nullable: true
+          type: string
+      required:
+        - versionId
+        - versionNumber
+        - locale
+        - title
+        - steps
+        - referenceImages
+        - videoUrl
+        - safetyWarnings
+        - recognitionRequirements
+        - declarationTextVersion
+      type: object
+    DisposalReferenceImage:
+      properties:
+        altText:
+          maxLength: 500
+          minLength: 1
+          type: string
+        caption:
+          maxLength: 500
+          type: string
+        url:
+          maxLength: 1024
+          type: string
+      required:
+        - url
+        - altText
+      type: object
+    DisposalTaskProductView:
+      properties:
+        campaignProductId:
+          format: uuid
+          type: string
+        confirmedAffected:
+          type: boolean
+        quantity:
+          exclusiveMinimum: true
+          minimum: 0
+          type: integer
+      required:
+        - campaignProductId
+        - quantity
+        - confirmedAffected
+      type: object
+    DisposalTaskStatus:
+      enum:
+        - open
+        - completed
+        - cancelled
+        - expired
+      type: string
+    DisposalTaskView:
+      properties:
+        allowedActions:
+          items:
+            type: string
+          type: array
+        authorizationStatus:
+          $ref: "#/components/schemas/DisposalAuthorizationStatus"
+        blockingReasons:
+          items:
+            type: string
+          type: array
+        eligibilityStatus:
+          $ref: "#/components/schemas/DisposalEligibilityStatus"
+        evidenceReviewStatus:
+          $ref: "#/components/schemas/DisposalBatchReviewStatus"
+        expiresAt:
+          format: date-time
+          type: string
+        holdActive:
+          type: boolean
+        instruction:
+          $ref: "#/components/schemas/DisposalInstructionView"
+        products:
+          items:
+            $ref: "#/components/schemas/DisposalTaskProductView"
+          type: array
+        status:
+          $ref: "#/components/schemas/DisposalTaskStatus"
+        taskId:
+          format: uuid
+          type: string
+        version:
+          exclusiveMinimum: true
+          minimum: 0
+          type: integer
+      required:
+        - taskId
+        - status
+        - eligibilityStatus
+        - allowedActions
+        - blockingReasons
+        - evidenceReviewStatus
+        - authorizationStatus
+        - holdActive
+        - version
+        - products
+        - instruction
+        - expiresAt
+      type: object
     DraftDocument:
       properties:
         category:
@@ -397,6 +609,7 @@ components:
             - product_photo
             - proof_of_purchase
             - incident_evidence
+            - disposal_evidence
           type: string
         documentId:
           format: uuid
@@ -464,6 +677,7 @@ components:
             - product_photo
             - proof_of_purchase
             - incident_evidence
+            - disposal_evidence
           type: string
         instructions:
           type: string
@@ -858,6 +1072,52 @@ components:
           maxLength: 160
           type: string
       type: object
+    RecordDisposalDeclarationRequest:
+      properties:
+        authorizationId:
+          format: uuid
+          type: string
+        declarationTextVersion:
+          maxLength: 80
+          minLength: 1
+          type: string
+        exceptionNote:
+          maxLength: 2000
+          minLength: 1
+          type: string
+        exceptionType:
+          enum:
+            - already_disposed_before_authorization
+            - evidence_unavailable
+            - other
+          type: string
+      required:
+        - declarationTextVersion
+      type: object
+    SubmitDisposalEvidenceRequest:
+      properties:
+        documents:
+          items:
+            properties:
+              campaignProductId:
+                format: uuid
+                type: string
+              documentId:
+                format: uuid
+                type: string
+              quantityCovered:
+                exclusiveMinimum: true
+                minimum: 0
+                type: integer
+            required:
+              - documentId
+            type: object
+          maxItems: 20
+          minItems: 1
+          type: array
+      required:
+        - documents
+      type: object
     UploadTokenRequest:
       properties:
         category:
@@ -865,6 +1125,7 @@ components:
             - product_photo
             - proof_of_purchase
             - incident_evidence
+            - disposal_evidence
           type: string
         fileName:
           maxLength: 255
@@ -1259,6 +1520,237 @@ paths:
       summary: "[Deprecated] Legacy claim lookup returning the whitelisted public status view"
       tags:
         - Case status
+  /v1/disposal-tasks/{taskId}:
+    get:
+      description: Returns the task with the server-computed allowed actions and blocking reasons. Instruction content is withheld while it is unapproved, withdrawn, or not backed by an authorizing approval, so no improvised destruction method can be shown in its place.
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Disposal-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisposalTaskView"
+          description: The disposal task as this visitor may see it.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The disposal token is missing, wrong, or expired.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Read a disposal task as its visitor
+      tags:
+        - Disposal
+  /v1/disposal-tasks/{taskId}/declaration:
+    post:
+      description: A declaration cites either an active authorization or an exception. The exception path exists so a consumer who already disposed of the unit can report the truth rather than have a permission back-dated for them.
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Disposal-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RecordDisposalDeclarationRequest"
+        required: true
+      responses:
+        "204":
+          description: The declaration was recorded.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The disposal token is missing, wrong, or expired.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The request is refused by the disposal gates.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Record the consumer declaration for a disposal task
+      tags:
+        - Disposal
+  /v1/disposal-tasks/{taskId}/evidence:
+    post:
+      description: "Only technically verified documents of the disposal-evidence category, owned by this task, are accepted. Submitting evidence is not permission to dispose: a person still has to review it."
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Disposal-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+        - in: header
+          name: Idempotency-Key
+          required: true
+          schema:
+            maxLength: 128
+            minLength: 16
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitDisposalEvidenceRequest"
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisposalEvidenceBatchResponse"
+          description: The evidence batch was recorded and is awaiting review.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The disposal token is missing, wrong, or expired.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The request is refused by the disposal gates.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Submit a batch of disposal evidence photos for review
+      tags:
+        - Disposal
   /v1/recall-campaigns/{slug}:
     get:
       parameters:

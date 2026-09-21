@@ -11,6 +11,7 @@ import {
 import type { documentUploadStatusEnum } from '../../db/schema/index.js';
 import type { PrivateBlobPort, UploadCompletion } from '../../platform/blob/port.js';
 import {
+  ClaimValidationError,
   DraftExpiredOrInvalidError,
   EvidenceRulesViolationError,
   isUniqueViolation,
@@ -19,6 +20,7 @@ import {
   UnsupportedMediaTypeError,
 } from '../../shared/errors.js';
 import { hashDraftToken } from '../claim-drafts/tokens.js';
+import { notUnderEvidenceRetention } from '../disposal/retention.js';
 import {
   deriveDocumentStatus,
   type ListedUploadStatus,
@@ -229,10 +231,18 @@ export class DrizzleDocumentService implements DocumentService {
             eq(documentUploads.draftId, draftId),
             isNull(documentUploads.caseId),
             inArray(documentUploads.uploadStatus, DELETABLE_UPLOAD_STATUSES),
+            // Evidence a reviewer has not looked at yet cannot be discarded by
+            // the person who uploaded it. The reaper honours the same rule; this
+            // closes the other path that leads to physical deletion.
+            notUnderEvidenceRetention(tx, documentUploads.id),
           ),
         )
         .returning({ id: documentUploads.id });
-      if (!updated) throw new ResourceNotFoundError('Document was not found for this draft.');
+      if (!updated) {
+        throw new ClaimValidationError(
+          'This photo is part of a disposal evidence review and cannot be removed while the review is open.',
+        );
+      }
     });
   }
 

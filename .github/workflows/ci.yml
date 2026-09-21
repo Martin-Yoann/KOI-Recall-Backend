@@ -110,3 +110,6 @@ jobs:
           tests/email-triggers.integration.test.ts
           tests/outbox-worker.integration.test.ts
           tests/draft-cleanup-worker.integration.test.ts
+          tests/disposal-guards.integration.test.ts
+          tests/disposal-service.integration.test.ts
+          tests/disposal-submit.integration.test.ts

@@ -31,6 +31,13 @@ const environmentSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((value) => value === 'true'),
+  /**
+   * How long disposal evidence is retained after review. Unset (the default)
+   * means no configured expiry: evidence an operator still has to look at is never
+   * on the ordinary 48-hour upload clock. The business names this period; until
+   * then, erring toward keeping evidence is the safe direction.
+   */
+  DISPOSAL_EVIDENCE_RETENTION_DAYS: z.coerce.number().int().positive().optional(),
   CRON_SECRET: z.string().optional(),
   /** Single-role Admin API key (T8/O10). When absent, admin routes are 501. */
   ADMIN_API_KEY: z.string().optional(),

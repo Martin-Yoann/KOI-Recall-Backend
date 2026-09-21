@@ -191,6 +191,20 @@ export const claimSubmissionResponseSchema = z
     submittedAt: isoDateTime,
     emailStatus: z.literal('queued'),
     nextStep: z.string(),
+    /**
+     * Present only when a disposal task was opened, which requires an approved
+     * instruction version backed by an authorizing approval on the pinned
+     * Campaign Version. Absent is the normal case and means the consumer sees no
+     * disposal step at all. The token is the visitor's only way back to a
+     * review that a person may not finish for hours.
+     */
+    disposal: z
+      .object({
+        taskId: uuid,
+        token: z.string().min(32),
+        resumePath: z.string().min(1),
+      })
+      .optional(),
   })
   .openapi('ClaimSubmissionResponse');
 

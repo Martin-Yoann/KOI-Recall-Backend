@@ -15,6 +15,12 @@
  * operations role that also moves the case through its workflow — separating
  * the two keeps a single operator from both deciding a case and signing off the
  * safety review behind it.
+ *
+ * The three `disposal.*` permissions follow the same split. They decide whether
+ * a consumer may be told to destroy a recalled product, which rests on
+ * regulatory material and on photo evidence, so they belong to safety oversight
+ * rather than to operations. MANAGER holds none of them: a new permission must
+ * be granted explicitly, never inherited by the role that happens to work cases.
  */
 
 export type StaffRole = 'ADMIN' | 'MANAGER' | 'COMPLIANCE';
@@ -28,6 +34,9 @@ export type Permission =
   | 'case.status.transition'
   | 'campaign.publish'
   | 'review.close'
+  | 'disposal.review'
+  | 'disposal.hold.manage'
+  | 'disposal.instructions.publish'
   | 'audit.read'
   | 'staff.read'
   | 'staff.manage';
@@ -51,14 +60,21 @@ const MANAGER: ReadonlySet<Permission> = new Set<Permission>([
 ]);
 
 /**
- * Safety oversight: decides whether an incident is reportable. Needs to read the
- * case and its injury detail (that is the evidence for the decision) and to see
- * the audit trail, but must not move cases through the workflow itself.
+ * Safety oversight: decides whether an incident is reportable, and whether a
+ * consumer may be told to dispose of the product. Needs to read the case and its
+ * injury detail (that is the evidence for both decisions) and to see the audit
+ * trail, but must not move cases through the workflow itself.
  */
 const COMPLIANCE: ReadonlySet<Permission> = new Set<Permission>([
   ...CASE_READ,
   'case.detail.read_pii_raw',
   'review.close',
+  // Accepting photo evidence and releasing an evidence-retention hold.
+  'disposal.review',
+  'disposal.hold.manage',
+  // Publishing the instructions a consumer will follow. An outward-facing
+  // content act, gated on a recorded approval.
+  'disposal.instructions.publish',
   'audit.read',
   'staff.read',
 ]);
@@ -85,6 +101,9 @@ export const ALL_PERMISSIONS: readonly Permission[] = [
   'case.status.transition',
   'campaign.publish',
   'review.close',
+  'disposal.review',
+  'disposal.hold.manage',
+  'disposal.instructions.publish',
   'audit.read',
   'staff.read',
   'staff.manage',

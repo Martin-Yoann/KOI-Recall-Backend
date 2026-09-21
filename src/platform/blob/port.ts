@@ -1,5 +1,6 @@
-/** The evidence categories a draft document may belong to. */
-export type EvidenceCategory = 'product_photo' | 'proof_of_purchase' | 'incident_evidence';
+import type { EvidenceCategory } from '../../shared/evidence-categories.js';
+
+export type { EvidenceCategory };
 
 export interface UploadAuthorizationRequest {
   draftId: string;

@@ -20,13 +20,43 @@ describe('staff permissions matrix', () => {
     }
   });
 
-  it('grants MANAGER the business permissions, but not staff or review sign-off', () => {
+  /**
+   * Permissions that deliberately do not belong to the operations role. Adding a
+   * permission to `ALL_PERMISSIONS` without deciding who holds it fails here,
+   * which is the point: nobody should inherit a new capability by accident,
+   * least of all one that can tell a consumer to destroy a product.
+   */
+  const NOT_GRANTED_TO_MANAGER: readonly string[] = [
+    'staff.manage',
+    'review.close',
+    'disposal.review',
+    'disposal.hold.manage',
+    'disposal.instructions.publish',
+  ];
+
+  it('grants MANAGER the business permissions, but never a safety sign-off', () => {
     for (const permission of ALL_PERMISSIONS) {
-      const expected = permission !== 'staff.manage' && permission !== 'review.close';
+      const expected = !NOT_GRANTED_TO_MANAGER.includes(permission);
       expect(hasPermission('MANAGER', permission)).toBe(expected);
     }
     expect(hasPermission('MANAGER', 'staff.read')).toBe(true);
     expect(hasPermission('MANAGER', 'staff.manage')).toBe(false);
+  });
+
+  /**
+   * `ALL_PERMISSIONS` is declared by hand, so a permission added only to a role
+   * set would silently escape the loops above. This closes that gap for every
+   * role, not just MANAGER.
+   */
+  it('lists every permission it grants to any role', () => {
+    const declared = new Set<string>(ALL_PERMISSIONS);
+    for (const role of STAFF_ROLES) {
+      for (const permission of ROLE_PERMISSIONS[role]) {
+        expect(declared.has(permission)).toBe(true);
+      }
+    }
+    const granted = new Set(STAFF_ROLES.flatMap((role) => [...ROLE_PERMISSIONS[role]]));
+    expect([...granted].sort()).toEqual([...declared].sort());
   });
 
   it('keeps reportability sign-off off the operations role (separation of duties)', () => {
@@ -48,6 +78,28 @@ describe('staff permissions matrix', () => {
     expect(hasPermission('COMPLIANCE', 'case.export')).toBe(false);
     expect(hasPermission('COMPLIANCE', 'campaign.publish')).toBe(false);
     expect(hasPermission('COMPLIANCE', 'staff.manage')).toBe(false);
+  });
+
+  it('keeps consumer-disposal decisions on the safety role', () => {
+    for (const permission of [
+      'disposal.review',
+      'disposal.hold.manage',
+      'disposal.instructions.publish',
+    ] as const) {
+      expect(hasPermission('COMPLIANCE', permission)).toBe(true);
+      expect(hasPermission('ADMIN', permission)).toBe(true);
+      expect(hasPermission('MANAGER', permission)).toBe(false);
+    }
+  });
+
+  /**
+   * A hold exists to stop a disposal that is already approved. If the role that
+   * places it also cannot release it, the task is stuck; if operations can
+   * release it, the hold is advisory. Both matter, so both are asserted.
+   */
+  it('lets the holder of disposal.review also release a hold', () => {
+    expect(hasPermission('COMPLIANCE', 'disposal.hold.manage')).toBe(true);
+    expect(hasPermission('COMPLIANCE', 'disposal.review')).toBe(true);
   });
 
   it('exposes a stable role-to-permission map', () => {

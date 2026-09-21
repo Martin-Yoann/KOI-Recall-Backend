@@ -3,6 +3,8 @@ import { DrizzleCampaignService } from './modules/campaigns/drizzle-campaign-ser
 import type { CampaignService } from './modules/campaigns/service.js';
 import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
+import { DrizzleDisposalService } from './modules/disposal/drizzle-disposal-service.js';
+import type { DisposalService } from './modules/disposal/service.js';
 import { DrizzleCaseStatusLookupService } from './modules/cases/drizzle-case-status-lookup-service.js';
 import type { CaseStatusLookupService } from './modules/cases/case-status-lookup-service.js';
 import { DrizzleAdminService } from './modules/admin/drizzle-admin-service.js';
@@ -65,6 +67,8 @@ export interface ApplicationServices {
   staff?: StaffService;
   audit?: AuditService;
   refundExports?: RefundExportService;
+  /** Consumer product disposal: eligibility, evidence review, authorization. */
+  disposal?: DisposalService;
   adminTransactions?: AdminTransactionRunner;
 }
 
@@ -72,6 +76,7 @@ export interface AdminTransactionServices {
   admin: AdminService;
   staff: StaffService;
   audit: AuditService;
+  disposal: DisposalService;
 }
 
 export interface AdminTransactionRunner {
@@ -95,6 +100,18 @@ export interface ApplicationRegistry {
 
 function unavailable<T>(capability: string): Promise<T> {
   return Promise.reject(new NotImplementedServiceError(capability));
+}
+
+/**
+ * Builds the disposal service for either executor path. Retention days come from
+ * configuration; null means no configured expiry, which is the conservative
+ * default until the business names a retention period.
+ */
+export function createDisposalService(
+  handle: DatabaseHandle,
+  evidenceRetentionDays: number | null,
+): DisposalService {
+  return new DrizzleDisposalService({ handle, evidenceRetentionDays });
 }
 
 export function createPlaceholderRegistry(): ApplicationRegistry {
@@ -162,8 +179,12 @@ export function createApplicationRegistry(
   // Stage 3 of the structured-incident rollout; off by default so a deployed
   // backend never starts rejecting payloads an older web app still sends.
   incidentStrictValidation = false,
+  /** Disposal evidence retention in days; null keeps evidence until released. */
+  evidenceRetentionDays: number | null = null,
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
+  // Built once so the case service and the registry share the same instance.
+  const disposalService = createDisposalService(handle, evidenceRetentionDays);
   const emailTrigger = new EmailTriggerService(communicationQueue);
   return {
     services: {
@@ -190,6 +211,7 @@ export function createApplicationRegistry(
               malwareScanRequired,
               communicationQueue,
               incidentStrictValidation,
+              disposalService,
             ),
             caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
             admin: new DrizzleAdminService({
@@ -203,6 +225,7 @@ export function createApplicationRegistry(
             staff: new DrizzleStaffService(handle.db, crypto),
             audit: new DrizzleAuditService(handle.db),
             refundExports: new RefundExportService(handle),
+            disposal: disposalService,
             adminTransactions: {
               run: (work) =>
                 handle.transaction((tx) =>
@@ -225,6 +248,15 @@ export function createApplicationRegistry(
                     }),
                     staff: new DrizzleStaffService(tx, crypto),
                     audit: new DrizzleAuditService(tx),
+                    disposal: createDisposalService(
+                      {
+                        db: tx as never,
+                        driver: handle.driver,
+                        transaction: async (work) => work(tx),
+                        close: async () => {},
+                      },
+                      evidenceRetentionDays,
+                    ),
                   }),
                 ),
             },
@@ -318,6 +350,7 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     config.CONSUMER_WEB_BASE_URL,
     createCacheInvalidator(config),
     config.INCIDENT_STRICT_VALIDATION,
+    config.DISPOSAL_EVIDENCE_RETENTION_DAYS ?? null,
   );
 }
 

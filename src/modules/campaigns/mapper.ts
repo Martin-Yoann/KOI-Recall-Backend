@@ -1,4 +1,5 @@
 import type { CampaignView } from '../../contracts/toc.js';
+import type { EvidenceCategory } from '../../shared/evidence-categories.js';
 import { parseProductAttributes } from '../product-identification/attributes.js';
 
 /**
@@ -62,7 +63,7 @@ export interface CampaignRemedyRow {
 }
 
 export interface CampaignEvidenceRow {
-  category: 'product_photo' | 'proof_of_purchase' | 'incident_evidence';
+  category: EvidenceCategory;
   required: boolean;
   minimumFiles: number;
   maximumFiles: number;

@@ -24,6 +24,7 @@ import { registerCampaignRoutes } from './routes/campaigns.js';
 import { registerCaseStatusLookupRoutes } from './routes/case-status-lookups.js';
 import { registerClaimRoutes } from './routes/claims.js';
 import { registerConsumerAuthRoutes } from './routes/consumer-auth.js';
+import { registerDisposalRoutes } from './routes/disposal.js';
 import { registerDocumentRoutes } from './routes/documents.js';
 import { notImplementedJobHandler, registerInternalJobRoutes } from './routes/internal-jobs.js';
 import { registerProductCheckRoutes } from './routes/product-checks.js';
@@ -156,6 +157,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   registerClaimRoutes(app, registry);
   registerConsumerAuthRoutes(app);
   registerCaseStatusLookupRoutes(app, registry);
+  registerDisposalRoutes(app, registry);
   registerInternalJobRoutes(app, config.CRON_SECRET, {
     drainOutbox: registry.jobs?.drainOutbox ?? notImplementedJobHandler('Outbox processing'),
     cleanupDrafts: registry.jobs?.cleanupDrafts ?? notImplementedJobHandler('Draft cleanup'),

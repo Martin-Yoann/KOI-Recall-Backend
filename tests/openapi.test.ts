@@ -11,7 +11,7 @@ function document() {
 }
 
 describe('OpenAPI contract', () => {
-  it('contains exactly the public Phase 1 paths (plus the deprecated legacy lookup)', () => {
+  it('contains exactly the published consumer paths (plus the deprecated legacy lookup)', () => {
     const paths = Object.keys(document().paths ?? {});
 
     expect(paths).toEqual([
@@ -24,6 +24,9 @@ describe('OpenAPI contract', () => {
       '/v1/recall-campaigns/{slug}/claims',
       '/v1/consumer-auth/lookup/{claimNumber}',
       '/v1/case-status-lookups',
+      '/v1/disposal-tasks/{taskId}',
+      '/v1/disposal-tasks/{taskId}/evidence',
+      '/v1/disposal-tasks/{taskId}/declaration',
     ]);
     expect(
       paths.every((path) => !path.startsWith('/internal') && !path.startsWith('/webhooks')),

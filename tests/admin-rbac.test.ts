@@ -1,6 +1,9 @@
 /* eslint-disable @typescript-eslint/require-await -- test fakes return resolved values synchronously */
 import { describe, expect, it } from 'vitest';
 
+import type { DisposalService } from '../src/modules/disposal/service.js';
+import { makeDisposalFake } from './helpers/disposal-fake.js';
+
 import { createApp } from '../src/app.js';
 import { createPlaceholderRegistry, type ApplicationRegistry } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
@@ -225,8 +228,9 @@ function makeAdminTransactions(admin: AdminService, staff: StaffService, audit: 
         admin: AdminService;
         staff: StaffService;
         audit: AuditService;
+        disposal: DisposalService;
       }) => Promise<T>,
-    ) => work({ admin, staff, audit }),
+    ) => work({ admin, staff, audit, disposal: makeDisposalFake() }),
   };
 }
 

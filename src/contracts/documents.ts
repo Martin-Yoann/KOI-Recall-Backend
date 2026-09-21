@@ -1,5 +1,6 @@
 import { z } from '@hono/zod-openapi';
 
+import { EVIDENCE_CATEGORIES } from '../shared/evidence-categories.js';
 import { isoDateTime, uuid } from './common.js';
 
 export const claimDraftResponseSchema = z
@@ -27,7 +28,7 @@ export const draftTokenHeaderSchema = z.object({
 
 export const uploadTokenRequestSchema = z
   .object({
-    category: z.enum(['product_photo', 'proof_of_purchase', 'incident_evidence']),
+    category: z.enum(EVIDENCE_CATEGORIES),
     fileName: z.string().min(1).max(255),
     mimeType: z.string().min(3).max(120),
     sizeBytes: z.number().int().positive(),
@@ -68,7 +69,7 @@ export type DraftDocumentStatusReason = z.infer<typeof draftDocumentStatusReason
 export const draftDocumentSchema = z
   .object({
     documentId: uuid,
-    category: z.enum(['product_photo', 'proof_of_purchase', 'incident_evidence']),
+    category: z.enum(EVIDENCE_CATEGORIES),
     fileName: z.string().min(1).max(255),
     status: draftDocumentStatusSchema,
     statusReason: draftDocumentStatusReasonSchema.nullable(),

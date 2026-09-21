@@ -18,6 +18,8 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 
+import { EVIDENCE_CATEGORIES } from '../../shared/evidence-categories.js';
+
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -40,11 +42,7 @@ export const lotEligibilityStatusEnum = pgEnum('lot_eligibility_status', [
   'not_affected',
   'manual_review',
 ]);
-export const evidenceCategoryEnum = pgEnum('evidence_category', [
-  'product_photo',
-  'proof_of_purchase',
-  'incident_evidence',
-]);
+export const evidenceCategoryEnum = pgEnum('evidence_category', EVIDENCE_CATEGORIES);
 
 export const campaignVersions = pgTable(
   'campaign_versions',

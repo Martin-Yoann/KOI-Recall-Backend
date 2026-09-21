@@ -9,7 +9,14 @@ import { afterAll, describe, expect, it } from 'vitest';
 
 import type { DatabaseHandle } from '../src/db/client.js';
 import { createDatabase } from '../src/db/client.js';
-import { claimDrafts, documentUploads } from '../src/db/schema/index.js';
+import {
+  claimDrafts,
+  disposalEvidenceBatchDocuments,
+  disposalEvidenceBatches,
+  disposalInstructionVersions,
+  disposalTasks,
+  documentUploads,
+} from '../src/db/schema/index.js';
 import { DrizzleDraftCleanupWorker } from '../src/jobs/draft-cleanup-worker.js';
 import type {
   BlobAccessUrl,
@@ -135,5 +142,152 @@ describe.skipIf(!enabled)('DrizzleDraftCleanupWorker (database integration)', ()
 
     await db.delete(documentUploads).where(eq(documentUploads.id, inserted!.id));
     await db.delete(claimDrafts).where(eq(claimDrafts.id, draftId));
+  });
+
+  /**
+   * The regression this whole guard exists for: photo evidence awaiting a human
+   * review is technically `verified` and carries the ordinary 48-hour upload
+   * expiry, so without the retention rule the reaper silently destroys the
+   * evidence an operator still has to look at.
+   */
+  describe('disposal evidence retention', () => {
+    async function createRetainedEvidence(retentionUntil: Date | null) {
+      const db = handle!.db;
+      const draftId = await createDocumentOwner();
+      const [document] = await db
+        .insert(documentUploads)
+        .values({
+          draftId,
+          caseId: null,
+          category: 'disposal_evidence',
+          categorySlot: null,
+          storagePathname: `tests/retention/${Date.now()}/${randomUUID()}.jpg`,
+          originalFileName: 'disposal.jpg',
+          declaredMimeType: 'image/jpeg',
+          detectedMimeType: 'image/jpeg',
+          sizeBytes: 512,
+          uploadStatus: 'verified',
+          scanStatus: 'clean',
+          // Long past: without retention this is a ripe candidate.
+          expiresAt: new Date(Date.now() - 3_600_000),
+        })
+        .returning({ id: documentUploads.id });
+
+      const [version] = await db
+        .insert(disposalInstructionVersions)
+        .values({
+          campaignVersionId: '85eafab1-a5bd-4d57-a697-38bce973deab',
+          versionNumber: 900_001 + Math.floor(Math.random() * 90_000),
+          locale: 'en-US',
+          title: 'Retention test instructions (temporary)',
+          steps: [{ order: 1, text: 'Temporary.' }],
+          referenceImages: [],
+          safetyWarnings: ['Temporary.'],
+          recognitionRequirements: ['Temporary.'],
+          declarationTextVersion: 'retention-test-v1',
+        })
+        .returning({ id: disposalInstructionVersions.id });
+
+      const [task] = await db
+        .insert(disposalTasks)
+        .values({
+          instructionVersionId: version!.id,
+          draftId,
+          tokenHash: randomUUID().replace(/-/g, ''),
+          tokenExpiresAt: new Date(Date.now() + 86_400_000),
+        })
+        .returning({ id: disposalTasks.id });
+
+      const [batch] = await db
+        .insert(disposalEvidenceBatches)
+        .values({
+          taskId: task!.id,
+          batchNumber: 1,
+          retentionUntil,
+          idempotencyKeyHash: randomUUID().replace(/-/g, ''),
+        })
+        .returning({ id: disposalEvidenceBatches.id });
+
+      await db.insert(disposalEvidenceBatchDocuments).values({
+        batchId: batch!.id,
+        documentId: document!.id,
+        campaignProductId: null,
+        quantityCovered: 1,
+      });
+
+      return {
+        draftId,
+        documentId: document!.id,
+        taskId: task!.id,
+        versionId: version!.id,
+        batchId: batch!.id,
+      };
+    }
+
+    async function cleanup(fixture: Awaited<ReturnType<typeof createRetainedEvidence>>) {
+      const db = handle!.db;
+      await db
+        .delete(disposalEvidenceBatchDocuments)
+        .where(eq(disposalEvidenceBatchDocuments.batchId, fixture.batchId));
+      await db
+        .delete(disposalEvidenceBatches)
+        .where(eq(disposalEvidenceBatches.id, fixture.batchId));
+      await db.delete(disposalTasks).where(eq(disposalTasks.id, fixture.taskId));
+      await db
+        .delete(disposalInstructionVersions)
+        .where(eq(disposalInstructionVersions.id, fixture.versionId));
+      await db.delete(documentUploads).where(eq(documentUploads.id, fixture.documentId));
+      await db.delete(claimDrafts).where(eq(claimDrafts.id, fixture.draftId));
+    }
+
+    it('never reaps expired evidence that is awaiting review', async () => {
+      const db = handle!.db;
+      const fixture = await createRetainedEvidence(null);
+      const blob = new RecordingBlob();
+
+      await new DrizzleDraftCleanupWorker(db, blob).runBatch();
+
+      const [row] = await db
+        .select()
+        .from(documentUploads)
+        .where(eq(documentUploads.id, fixture.documentId));
+      expect(blob.deleted).not.toContain('tests/retention');
+      expect(row?.uploadStatus).toBe('verified');
+      await cleanup(fixture);
+      // Six fixture round trips plus the worker run; the 5s default assumes a
+      // local database, and this suite also runs against a remote one.
+    }, 30_000);
+
+    it('keeps evidence inside a future retention window', async () => {
+      const db = handle!.db;
+      const fixture = await createRetainedEvidence(new Date(Date.now() + 86_400_000));
+      const blob = new RecordingBlob();
+
+      await new DrizzleDraftCleanupWorker(db, blob).runBatch();
+
+      const [row] = await db
+        .select()
+        .from(documentUploads)
+        .where(eq(documentUploads.id, fixture.documentId));
+      expect(row?.uploadStatus).toBe('verified');
+      await cleanup(fixture);
+    }, 30_000);
+
+    // Retention is a deadline, not a permanent exemption: once the window has
+    // elapsed the ordinary cleanup policy applies again.
+    it('reaps evidence whose retention window has elapsed', async () => {
+      const db = handle!.db;
+      const fixture = await createRetainedEvidence(new Date(Date.now() - 1000));
+      const blob = new RecordingBlob();
+
+      await new DrizzleDraftCleanupWorker(db, blob).runBatch();
+
+      const [row] = await db
+        .select()
+        .from(documentUploads)
+        .where(eq(documentUploads.id, fixture.documentId));
+      expect(row?.uploadStatus).toBe('deleted');
+      await cleanup(fixture);
+    }, 30_000);
   });
 });

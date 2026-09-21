@@ -5,9 +5,13 @@ import {
   documentUploads,
   type documentUploads as documentUploadsTable,
 } from '../db/schema/index.js';
+import { notUnderEvidenceRetention } from '../modules/disposal/retention.js';
 import type { PrivateBlobPort } from '../platform/blob/port.js';
 
 const CLEANUP_BATCH = 100;
+
+/** States a document may be physically deleted from. */
+const DELETABLE_STATUSES = ['authorized', 'uploaded', 'verified'] as const;
 
 export interface DraftCleanupResult {
   deleted: number;
@@ -17,10 +21,22 @@ export interface DraftCleanupResult {
 type DocumentRow = typeof documentUploadsTable.$inferSelect;
 
 /**
- * Reaps expired claim drafts and their Private Blob objects (T5.4/O5). Rows in
- * `deletion_pending` are retried; only rows whose blob object was actually
- * removed advance to `deleted`. A blob deletion failure keeps the row in
- * `deletion_pending` so a later run retries it.
+ * Reaps expired claim drafts and their Private Blob objects (T5.4/O5).
+ *
+ * The blob deletion is irreversible, so a document is *claimed* before its bytes
+ * are removed: an atomic guarded UPDATE moves it to `deletion_pending`, and only
+ * the worker that won that UPDATE proceeds. Losing the claim means someone else
+ * owns the row — or that it became evidence under retention between the scan and
+ * the claim, which is exactly the race that used to make this unsafe.
+ *
+ * Two things are deliberately excluded from reaping:
+ *   - documents in a submitted claim (`linked`), as before;
+ *   - documents under disposal evidence retention, because an operator still has
+ *     to review those photos and `expiresAt` is never extended for them.
+ *
+ * Rows in `deletion_pending` are retried; only a row whose blob was actually
+ * removed advances to `deleted`. A blob failure leaves it `deletion_pending` so
+ * a later run retries.
  */
 export class DrizzleDraftCleanupWorker {
   constructor(
@@ -31,50 +47,90 @@ export class DrizzleDraftCleanupWorker {
   async runBatch(): Promise<DraftCleanupResult> {
     const db = this.db;
 
-    // Documents eligible for physical deletion: soft-deleted (deletion_pending)
-    // or owned by an expired draft. Claim-locked drafts stay untouched.
-    const candidates = await db
+    // Already claimed in an earlier run (or by the consumer's own delete), so
+    // these are safe to retry: a `deletion_pending` row can no longer be added
+    // to an evidence batch, which requires `verified`.
+    const alreadyClaimed = await db
+      .select()
+      .from(documentUploads)
+      .where(eq(documentUploads.uploadStatus, 'deletion_pending'))
+      .limit(CLEANUP_BATCH);
+
+    // Newly reapable: expired and still in a deletable state. Retention is
+    // re-checked atomically at claim time below, so this filter is an
+    // optimisation rather than the guarantee.
+    const expired = await db
       .select()
       .from(documentUploads)
       .where(
         and(
           lte(documentUploads.expiresAt, new Date()),
-          inArray(documentUploads.uploadStatus, [
-            'deletion_pending',
-            'authorized',
-            'uploaded',
-            'verified',
-          ]),
+          inArray(documentUploads.uploadStatus, [...DELETABLE_STATUSES]),
+          notUnderEvidenceRetention(db, documentUploads.id),
         ),
       )
       .limit(CLEANUP_BATCH);
 
     let deleted = 0;
     let pending = 0;
-    for (const document of candidates) {
-      const resolved = await this.deleteDocumentIfExpired(db, document);
-      if (resolved) deleted += 1;
+
+    for (const document of alreadyClaimed) {
+      if (await this.removeBlob(document)) deleted += 1;
       else pending += 1;
     }
+
+    for (const document of expired) {
+      if (!(await this.claim(document.id))) continue;
+      if (await this.removeBlob({ ...document, uploadStatus: 'deletion_pending' })) deleted += 1;
+      else pending += 1;
+    }
+
     return { deleted, pending };
   }
 
-  private async deleteDocumentIfExpired(db: Database, document: DocumentRow): Promise<boolean> {
-    // Blob deletion is the irreversible step — only then mark the row deleted.
+  /**
+   * Atomically takes ownership of a document for deletion.
+   *
+   * The retention predicate is part of the UPDATE, not only of the scan: a
+   * batch submitted between the two would otherwise be left pointing at evidence
+   * whose bytes are about to disappear. Returns false when the claim was lost.
+   */
+  private async claim(documentId: string): Promise<boolean> {
+    const claimed = await this.db
+      .update(documentUploads)
+      .set({ uploadStatus: 'deletion_pending' })
+      .where(
+        and(
+          eq(documentUploads.id, documentId),
+          inArray(documentUploads.uploadStatus, [...DELETABLE_STATUSES]),
+          notUnderEvidenceRetention(this.db, documentUploads.id),
+        ),
+      )
+      .returning({ id: documentUploads.id });
+    return claimed.length > 0;
+  }
+
+  /** The irreversible step. Only then does the row advance to `deleted`. */
+  private async removeBlob(document: DocumentRow): Promise<boolean> {
     try {
       await this.blob.delete(document.storagePathname);
     } catch {
       // Keep deletion_pending so the next run retries the object removal.
       if (document.uploadStatus !== 'deletion_pending') {
-        await db
+        await this.db
           .update(documentUploads)
           .set({ uploadStatus: 'deletion_pending' })
-          .where(eq(documentUploads.id, document.id));
+          .where(
+            and(
+              eq(documentUploads.id, document.id),
+              inArray(documentUploads.uploadStatus, [...DELETABLE_STATUSES]),
+            ),
+          );
       }
       return false;
     }
 
-    await db
+    await this.db
       .update(documentUploads)
       .set({ uploadStatus: 'deleted' })
       .where(eq(documentUploads.id, document.id));

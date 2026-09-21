@@ -1,0 +1,1 @@
+ALTER TYPE "public"."evidence_category" ADD VALUE 'disposal_evidence';

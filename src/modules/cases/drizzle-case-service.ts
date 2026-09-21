@@ -54,6 +54,7 @@ import {
   normalizeEmail,
   normalizeOrderNumber,
 } from './normalization.js';
+import type { DisposalService } from '../disposal/service.js';
 import type { CaseService, ClaimSubmissionCommand } from './service.js';
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -126,6 +127,7 @@ export class DrizzleCaseService implements CaseService {
   private readonly beforeIdempotencyInsert: () => Promise<void>;
   private readonly malwareScanRequired: boolean;
   private readonly incidentStrictValidation: boolean;
+  private readonly disposal: DisposalService | undefined;
   private readonly notifications: CommunicationQueueService | undefined;
 
   constructor(
@@ -137,6 +139,7 @@ export class DrizzleCaseService implements CaseService {
     malwareScanRequired = false,
     notifications?: CommunicationQueueService,
     incidentStrictValidation = false,
+    disposal?: DisposalService,
   ) {
     this.handle = handle;
     this.crypto = crypto;
@@ -170,6 +173,7 @@ export class DrizzleCaseService implements CaseService {
     this.malwareScanRequired =
       typeof beforeOrMalware === 'boolean' ? beforeOrMalware : malwareScanRequired;
     this.incidentStrictValidation = incidentStrictValidation;
+    this.disposal = disposal;
   }
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
@@ -438,11 +442,32 @@ export class DrizzleCaseService implements CaseService {
       }
       if (!caseReference) throw new Error('Unable to allocate a unique Case Reference.');
 
+      // Disposal applies only when the pinned Campaign Version carries an
+      // approved instruction version backed by an authorizing approval. When it
+      // does not, this stays null and the consumer never sees a disposal step —
+      // the feature is dark because the content is absent, not because a flag is off.
+      const disposalTask = await this.disposal?.createTaskForSubmission(tx, {
+        draftId: locked.draftId,
+        caseId,
+        campaignVersionId: locked.campaignVersionId,
+        productIds: command.body.products.map((product) => product.campaignProductId),
+        hasIncident,
+      });
+
       const response: ClaimSubmissionResponse = {
         caseReference,
         submittedAt: submittedAt.toISOString(),
         emailStatus: 'queued',
         nextStep: 'Keep this reference. We will email you after your claim has been received.',
+        ...(disposalTask
+          ? {
+              disposal: {
+                taskId: disposalTask.taskId,
+                token: disposalTask.token,
+                resumePath: `/recalls/${command.campaignSlug}/disposal/${disposalTask.taskId}`,
+              },
+            }
+          : {}),
       };
 
       await tx.insert(caseConsumers).values({

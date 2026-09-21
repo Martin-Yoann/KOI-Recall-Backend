@@ -12,4 +12,6 @@ export * from './documents.js';
 export * from './claims.js';
 export * from './case-status-lookups.js';
 export * from './consumer-auth.js';
+export * from './disposal.js';
+export * from './disposal-routes.js';
 export * from './routes.js';
