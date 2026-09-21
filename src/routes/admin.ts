@@ -1125,7 +1125,24 @@ export function registerAdminRoutes(
       ...(cpscReference ? { cpscReference } : {}),
     } as const;
     if (context.get('legacyAdminKey')) {
-      await registry.services.admin?.closeReportabilityReview(reviewId, input);
+      // This branch used to close a review with no audit row and no transaction,
+      // so a safety decision could be recorded nowhere — which is how most
+      // existing reviews reached a terminal state with no trail. The legacy
+      // contract is preserved (the key still works, and `reviewerId` still comes
+      // from the body), but the decision is now audited with the sentinel
+      // principal and marked as coming through the legacy path.
+      await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
+        await admin.closeReportabilityReview(reviewId, input);
+        await audit.record({
+          actorUserId: guard.userId,
+          actorRole: guard.role,
+          action: 'review.close',
+          resourceType: 'review',
+          resourceId: reviewId,
+          outcome: 'success',
+          metadata: { outcome, via: 'legacy_admin_key', assertedReviewerId: reviewerId },
+        });
+      });
       return context.body(null, 204);
     }
     await requireAdminTransactions(registry).run(async ({ admin, audit }) => {

@@ -162,6 +162,21 @@ const STAGE_RULES: Record<string, StageRule> = {
 
 type StageKey = keyof typeof STAGE_RULES;
 
+/**
+ * Statuses where an open safety review outranks the ordinary intake stage.
+ *
+ * `submitted` is included deliberately: an injury/hazard case must be visible in
+ * the compliance queue from the moment it is submitted, not once customer
+ * service moves it along. Routing that depended on an earlier transition was the
+ * reason a clean "yes" submission (status `submitted`) sat with customer service
+ * while its reportability review was already pending.
+ */
+const PENDING_REVIEW_OVERRIDE_STATUSES: ReadonlySet<CaseStatus> = new Set([
+  'submitted',
+  'triage',
+  'under_review',
+]);
+
 function isIncidentPending(state: WorkflowCaseState): boolean {
   return state.incidentFlag && state.reportabilityStatus === 'pending';
 }
@@ -177,13 +192,12 @@ function resolutionExternallyCompleted(state: WorkflowCaseState): boolean {
  * replacement/refund processing).
  */
 function stageKey(state: WorkflowCaseState): StageKey {
+  if (isIncidentPending(state) && PENDING_REVIEW_OVERRIDE_STATUSES.has(state.caseStatus)) {
+    return 'compliance_review';
+  }
   if (state.caseStatus === 'submitted') return 'submitted';
-  if (state.caseStatus === 'triage') {
-    return isIncidentPending(state) ? 'compliance_review' : 'triage';
-  }
-  if (state.caseStatus === 'under_review') {
-    return isIncidentPending(state) ? 'compliance_review' : 'under_review';
-  }
+  if (state.caseStatus === 'triage') return 'triage';
+  if (state.caseStatus === 'under_review') return 'under_review';
   if (state.caseStatus === 'need_info') return 'need_info';
   if (state.caseStatus === 'approved') {
     const resolutionStatus = state.resolution?.status ?? null;

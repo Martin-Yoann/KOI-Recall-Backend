@@ -11,6 +11,7 @@ const cryptoFake: SensitiveDataCryptoPort = {
 };
 
 const CASE_ID = '11111111-1111-4111-8111-111111111111';
+const INCIDENT_ID = '33333333-3333-4333-8333-333333333333';
 const STAFF_ID = '22222222-2222-4222-8222-222222222222';
 const CASE_REFERENCE = 'KOI-7N4Q-A91M2X6P';
 const WEB_BASE_URL = 'https://web.example';
@@ -276,6 +277,92 @@ describe('DrizzleAdminService RBAC operations', () => {
     await service.transitionCaseStatus(CASE_REFERENCE, 'under_review', STAFF_ID);
 
     expect(triggered).toEqual([]);
+  });
+
+  // --- P0: the safety reportability gate holds on EVERY path, force included ---
+
+  it('refuses a closure while the reportability review is pending, even forced (A09/A10)', async () => {
+    const { service, triggered } = createEmailCapturingService([
+      openCaseRow('closure_review'),
+      { id: INCIDENT_ID },
+      { reportabilityStatus: 'pending' },
+      { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+    ]);
+
+    // A note is supplied so the failure can only come from the reportability
+    // gate, not from the consumer-notice reason gate that runs before it.
+    await expect(
+      service.transitionCaseStatus(
+        CASE_REFERENCE,
+        'closed',
+        STAFF_ID,
+        'Attempting to close while the safety review is still open.',
+        true,
+      ),
+    ).rejects.toThrow('safety reportability review is pending');
+    expect(triggered).toEqual([]);
+  });
+
+  it('refuses a closure when the safety review row is missing entirely', async () => {
+    const { service } = createEmailCapturingService([
+      openCaseRow('closure_review'),
+      { id: INCIDENT_ID },
+      undefined,
+      { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+    ]);
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID, undefined, true),
+    ).rejects.toThrow('review is missing');
+  });
+
+  it('allows the closure once the review has been decided', async () => {
+    const { service } = createEmailCapturingService([
+      openCaseRow('closure_review'),
+      { id: INCIDENT_ID },
+      { reportabilityStatus: 'filed' },
+      { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+    ]);
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID, undefined, true),
+    ).resolves.toBeUndefined();
+  });
+
+  it('still allows a consumer withdrawal while the review is pending', async () => {
+    // Only `closed` is gated. A consumer asking to withdraw must never be blocked
+    // by an internal review; the pending row stays visible in the compliance
+    // queue against the withdrawn case.
+    const { service } = createEmailCapturingService([
+      openCaseRow('under_review'),
+      { id: INCIDENT_ID },
+      { reportabilityStatus: 'pending' },
+      undefined,
+    ]);
+
+    await expect(
+      service.transitionCaseStatus(
+        CASE_REFERENCE,
+        'withdrawn',
+        STAFF_ID,
+        'Withdrawn at the consumer request.',
+        true,
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('leaves a case without an incident closable', async () => {
+    // No incident row means no safety review is owed, so standard cases must
+    // still close normally — the gate keys on the incident, not on status alone.
+    const { service } = createEmailCapturingService([
+      openCaseRow('closure_review'),
+      undefined,
+      { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+    ]);
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID),
+    ).resolves.toBeUndefined();
   });
 });
 

@@ -121,3 +121,120 @@ describe('claim incident contract', () => {
     expect(result.success).toBe(true);
   });
 });
+
+describe('structured incident fields (P0-4)', () => {
+  // Stage 1 of the rollout: the new fields are accepted but optional, so a
+  // payload that omits every one of them must still validate.
+  it('accepts a confirmed incident without the new structured fields', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['other'],
+        narrative: 'A fictional hazard was observed but no injury occurred.',
+        occurredDateUnknown: true,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts the full structured set', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['injury', 'choking'],
+        narrative: 'A fictional choking incident occurred during use.',
+        occurredDateUnknown: true,
+        injurySeverity: 'medical_attention',
+        medicalTreatment: 'emergency',
+        usedAsIntended: 'no',
+        failureMode: 'body_rupture',
+        injuryDescription: 'A fictional description of the reported injury.',
+        medicalTreatmentReceived: 'yes',
+        unitType: 'original',
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an unknown failure mode rather than storing free text', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['other'],
+        narrative: 'A fictional hazard was observed but no injury occurred.',
+        occurredDateUnknown: true,
+        failureMode: 'battery_exploded_spontaneously',
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue: ZodIssue) => issue.path.join('.'))).toContain(
+        'incidentDetails.failureMode',
+      );
+    }
+  });
+
+  // The contradiction is rejected in every release stage: the strict switch
+  // governs required fields, never self-contradictory ones.
+  it('rejects "no treatment received" alongside a named treatment', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['injury'],
+        narrative: 'A fictional minor injury occurred during use.',
+        occurredDateUnknown: true,
+        injurySeverity: 'minor',
+        medicalTreatment: 'emergency',
+        medicalTreatmentReceived: 'no',
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue: ZodIssue) => issue.path.join('.'))).toContain(
+        'incidentDetails.medicalTreatmentReceived',
+      );
+    }
+  });
+
+  it('allows "no treatment received" when no treatment is named', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['injury'],
+        narrative: 'A fictional minor injury occurred during use.',
+        occurredDateUnknown: true,
+        injurySeverity: 'minor',
+        medicalTreatment: 'none',
+        medicalTreatmentReceived: 'no',
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  // New fields must not open a hole in the existing `no` rejection.
+  it('still rejects an explicit no carrying structured incident fields', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'no',
+      incidentDetails: {
+        narrative: 'No incident is reported.',
+        occurredDateUnknown: true,
+        failureMode: 'battery_exposure',
+        injuryDescription: 'Should never be accepted for a no.',
+        unitType: 'original',
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});

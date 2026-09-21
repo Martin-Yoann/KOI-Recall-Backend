@@ -38,6 +38,21 @@ const incidentEventTypeSchema = z.enum([
   'unknown',
 ]);
 
+/**
+ * Structured failure modes (P0-4). Deliberately a closed, short list: the
+ * compliance queue filters on it, so a free-text value would be unqueryable.
+ * `other` plus the narrative covers anything not enumerated.
+ */
+const incidentFailureModeSchema = z.enum([
+  'body_rupture',
+  'battery_exposure',
+  'choking_hazard',
+  'leak',
+  'overheating',
+  'other',
+  'unknown',
+]);
+
 export const incidentDetailsSchema = z
   .object({
     eventTypes: z.array(incidentEventTypeSchema).min(1).optional(),
@@ -51,6 +66,13 @@ export const incidentDetailsSchema = z
       .enum(['none', 'first_aid', 'outpatient', 'emergency', 'hospitalized', 'unknown'])
       .optional(),
     usedAsIntended: z.enum(['yes', 'no', 'unknown']).optional(),
+    // P0-4 structured capture. Optional here on purpose: the switch that makes
+    // them required lives in the service layer (INCIDENT_STRICT_VALIDATION), so
+    // the published contract stays backward-compatible during rollout.
+    failureMode: incidentFailureModeSchema.optional(),
+    injuryDescription: z.string().trim().min(1).max(2000).optional(),
+    medicalTreatmentReceived: z.enum(['yes', 'no', 'unknown']).optional(),
+    unitType: z.enum(['original', 'replacement', 'unknown']).optional(),
   })
   .openapi('IncidentDetailsInput');
 
@@ -139,6 +161,23 @@ export const claimSubmissionRequestSchema = claimSubmissionRequestObject
         code: 'custom',
         path: ['incidentDetails', 'medicalTreatment'],
         message: 'medicalTreatment is required for injury or illness events.',
+      });
+    }
+
+    // "No treatment was received" cannot coexist with a named treatment type.
+    // This is a contradiction rather than a missing field, so it is rejected in
+    // every release stage — the strict-validation switch governs required
+    // fields, never self-contradictory ones.
+    const treatedSomehow =
+      details.medicalTreatment !== undefined &&
+      details.medicalTreatment !== 'none' &&
+      details.medicalTreatment !== 'unknown';
+    if (details.medicalTreatmentReceived === 'no' && treatedSomehow) {
+      context.addIssue({
+        code: 'custom',
+        path: ['incidentDetails', 'medicalTreatmentReceived'],
+        message:
+          'medicalTreatmentReceived cannot be no while medicalTreatment names a treatment that was provided.',
       });
     }
   })

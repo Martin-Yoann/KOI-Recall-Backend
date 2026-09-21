@@ -43,6 +43,37 @@ describe('CaseWorkflowPolicy — stage mapping (ADR redesign §7)', () => {
     expect(snap.responsibleDepartment).toBe('customer_service');
   });
 
+  it('maps submitted with pending incident → compliance_review / compliance (A02)', () => {
+    // A clean "yes" submission lands at `submitted`, so the review must outrank
+    // intake here too — otherwise the case waits for customer service to move it
+    // before compliance can see it.
+    const snap = evaluate(
+      state({
+        caseStatus: 'submitted',
+        incidentFlag: true,
+        subtype: 'injury_hazard',
+        reportabilityStatus: 'pending',
+      }),
+    );
+    expect(snap.currentStage).toBe('compliance_review');
+    expect(snap.responsibleDepartment).toBe('compliance');
+  });
+
+  it('maps submitted with a decided incident back to intake_review', () => {
+    // Once the review is no longer pending the case returns to the ordinary
+    // intake queue; the override tracks the review, not the incident flag.
+    const snap = evaluate(
+      state({
+        caseStatus: 'submitted',
+        incidentFlag: true,
+        subtype: 'injury_hazard',
+        reportabilityStatus: 'filed',
+      }),
+    );
+    expect(snap.currentStage).toBe('intake_review');
+    expect(snap.responsibleDepartment).toBe('customer_service');
+  });
+
   it('maps triage with pending incident → compliance_review / compliance', () => {
     const snap = evaluate(
       state({

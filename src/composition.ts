@@ -159,6 +159,9 @@ export function createApplicationRegistry(
   // configuration leaves this as a no-op rather than an error, because the
   // public read still expires on its own revalidate window.
   cacheInvalidator: CampaignCacheInvalidator = new NotConfiguredCacheInvalidator(),
+  // Stage 3 of the structured-incident rollout; off by default so a deployed
+  // backend never starts rejecting payloads an older web app still sends.
+  incidentStrictValidation = false,
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   const emailTrigger = new EmailTriggerService(communicationQueue);
@@ -186,6 +189,7 @@ export function createApplicationRegistry(
               undefined,
               malwareScanRequired,
               communicationQueue,
+              incidentStrictValidation,
             ),
             caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
             admin: new DrizzleAdminService({
@@ -313,6 +317,7 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     config.MALWARE_SCAN_REQUIRED,
     config.CONSUMER_WEB_BASE_URL,
     createCacheInvalidator(config),
+    config.INCIDENT_STRICT_VALIDATION,
   );
 }
 

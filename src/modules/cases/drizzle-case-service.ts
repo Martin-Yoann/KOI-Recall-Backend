@@ -45,6 +45,7 @@ import {
   resolutionTypeForRemedyCode,
 } from '../resolutions/drizzle-case-resolution-service.js';
 import type { CaseResolutionService } from '../resolutions/service.js';
+import { assertIncidentDetailsCompleteness } from './incident-strictness.js';
 import {
   canonicalJson,
   generateCaseReference,
@@ -114,6 +115,7 @@ interface EncryptedSubmission {
   products: EncryptedProduct[];
   snapshot: Ciphertext;
   incidentNarrative?: Ciphertext;
+  injuryDescription?: Ciphertext;
 }
 
 export class DrizzleCaseService implements CaseService {
@@ -123,6 +125,7 @@ export class DrizzleCaseService implements CaseService {
   private readonly referenceGenerator: () => string;
   private readonly beforeIdempotencyInsert: () => Promise<void>;
   private readonly malwareScanRequired: boolean;
+  private readonly incidentStrictValidation: boolean;
   private readonly notifications: CommunicationQueueService | undefined;
 
   constructor(
@@ -133,6 +136,7 @@ export class DrizzleCaseService implements CaseService {
     beforeOrMalware?: (() => Promise<void>) | boolean,
     malwareScanRequired = false,
     notifications?: CommunicationQueueService,
+    incidentStrictValidation = false,
   ) {
     this.handle = handle;
     this.crypto = crypto;
@@ -165,9 +169,13 @@ export class DrizzleCaseService implements CaseService {
           : () => Promise.resolve();
     this.malwareScanRequired =
       typeof beforeOrMalware === 'boolean' ? beforeOrMalware : malwareScanRequired;
+    this.incidentStrictValidation = incidentStrictValidation;
   }
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
+    // Checked before the transaction opens: a rejected payload should not take a
+    // row lock or allocate a case reference.
+    assertIncidentDetailsCompleteness(command.body, this.incidentStrictValidation);
     const endpoint = `/v1/recall-campaigns/${command.campaignSlug}/claims`;
     const requestHash = hashCanonicalRequest(command.body);
     const keyHash = await this.crypto.lookupHash(command.idempotencyKey);
@@ -527,6 +535,12 @@ export class DrizzleCaseService implements CaseService {
             injurySeverity: details.injurySeverity,
             medicalTreatment: details.medicalTreatment,
             usedAsIntended: details.usedAsIntended,
+            failureMode: details.failureMode,
+            // Written as a pair: the CHECK on incidents requires both or neither.
+            injuryDescriptionKeyVersion: encrypted.injuryDescription?.keyVersion,
+            injuryDescriptionEncrypted: encrypted.injuryDescription?.value,
+            medicalTreatmentReceived: details.medicalTreatmentReceived,
+            unitType: details.unitType,
             companyObtainedAt: submittedAt,
           })
           .returning({ id: incidents.id });
@@ -778,6 +792,9 @@ export class DrizzleCaseService implements CaseService {
       products,
       ...(body.incidentDetails
         ? { incidentNarrative: await this.crypto.encrypt(body.incidentDetails.narrative) }
+        : {}),
+      ...(body.incidentDetails?.injuryDescription
+        ? { injuryDescription: await this.crypto.encrypt(body.incidentDetails.injuryDescription) }
         : {}),
     };
   }

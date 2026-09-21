@@ -189,6 +189,15 @@ export interface AdminIncidentSummary {
   eventTypes: string[];
   injurySeverity?: string | null;
   medicalTreatment?: string | null;
+  /**
+   * Structured capture (P0-4). These three are queue-visible so compliance can
+   * triage without opening the case. `injuryDescription` is deliberately absent
+   * from this shape — it is person-level free text and only reaches the raw-PII
+   * detail view, keeping the broad list surface free of it.
+   */
+  failureMode?: string | null;
+  medicalTreatmentReceived?: string | null;
+  unitType?: string | null;
   occurredAt?: string | null;
   createdAt: string;
   reportability: {

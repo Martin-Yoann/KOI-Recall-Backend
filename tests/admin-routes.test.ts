@@ -4,11 +4,45 @@ import { createApp } from '../src/app.js';
 import { createPlaceholderRegistry, type ApplicationRegistry } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
 import type { AdminService } from '../src/modules/admin/service.js';
+import type { AuditEventInput, AuditService } from '../src/modules/staff/audit-service.js';
+import type { StaffService } from '../src/modules/staff/service.js';
 
-function appWith(admin: AdminService) {
+/**
+ * Records audit calls so tests can assert the trail, not just the status code.
+ */
+function makeAuditSpy(): { service: AuditService; inputs: AuditEventInput[] } {
+  const inputs: AuditEventInput[] = [];
+  return {
+    inputs,
+    service: {
+      record: (input) => {
+        inputs.push(input);
+        return Promise.resolve();
+      },
+      query: () => Promise.resolve({ events: [], total: 0, nextCursor: null }),
+    },
+  };
+}
+
+// None of the routes exercised here reach the staff service, so an empty object
+// is honest rather than a stub with fake behaviour. The transaction runner only
+// requires the shape because real callers (staff management) do use it.
+const staffStub = {} as StaffService;
+
+function appWith(admin: AdminService, audit: AuditService = makeAuditSpy().service) {
   const base = createPlaceholderRegistry();
   const registry: ApplicationRegistry = {
-    services: { ...base.services, admin },
+    services: {
+      ...base.services,
+      admin,
+      audit,
+      // `admin`, `audit` and the transaction runner are created in one block by
+      // createApplicationRegistry, so a registry holding `admin` without a
+      // runner is a shape production cannot produce — the harness mirrors the
+      // real one. Previously it did not, which is why the legacy close path
+      // looked like it needed no transaction.
+      adminTransactions: { run: (work) => work({ admin, staff: staffStub, audit }) },
+    },
     platform: base.platform,
   };
   return createApp({
@@ -76,7 +110,8 @@ describe('admin routes (T8/O10)', () => {
   });
 
   it('closes a reportability review with the admin key', async () => {
-    const response = await appWith(admin).request(
+    const spy = makeAuditSpy();
+    const response = await appWith(admin, spy.service).request(
       '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
       {
         method: 'POST',
@@ -90,6 +125,17 @@ describe('admin routes (T8/O10)', () => {
       },
     );
     expect(response.status).toBe(204);
+
+    // This path used to write no audit row at all, which is how a safety
+    // decision could reach a terminal state with no trail.
+    expect(spy.inputs).toHaveLength(1);
+    expect(spy.inputs[0]).toMatchObject({
+      action: 'review.close',
+      resourceType: 'review',
+      resourceId: '00000000-0000-4000-8000-000000000001',
+      outcome: 'success',
+      metadata: { outcome: 'filed', via: 'legacy_admin_key' },
+    });
   });
 
   it('preserves the legacy reviewerId during the M2 dual-mode window', async () => {

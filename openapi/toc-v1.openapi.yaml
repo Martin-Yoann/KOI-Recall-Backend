@@ -506,6 +506,20 @@ components:
             type: string
           minItems: 1
           type: array
+        failureMode:
+          enum:
+            - body_rupture
+            - battery_exposure
+            - choking_hazard
+            - leak
+            - overheating
+            - other
+            - unknown
+          type: string
+        injuryDescription:
+          maxLength: 2000
+          minLength: 1
+          type: string
         injurySeverity:
           enum:
             - none
@@ -524,6 +538,12 @@ components:
             - hospitalized
             - unknown
           type: string
+        medicalTreatmentReceived:
+          enum:
+            - yes
+            - no
+            - unknown
+          type: string
         narrative:
           maxLength: 4000
           minLength: 10
@@ -534,6 +554,12 @@ components:
         occurredDateUnknown:
           default: false
           type: boolean
+        unitType:
+          enum:
+            - original
+            - replacement
+            - unknown
+          type: string
         usedAsIntended:
           enum:
             - yes

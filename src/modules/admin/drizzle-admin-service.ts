@@ -300,6 +300,9 @@ export class DrizzleAdminService implements AdminService {
         eventTypes: incidents.eventTypes,
         injurySeverity: incidents.injurySeverity,
         medicalTreatment: incidents.medicalTreatment,
+        failureMode: incidents.failureMode,
+        medicalTreatmentReceived: incidents.medicalTreatmentReceived,
+        unitType: incidents.unitType,
         occurredAt: incidents.occurredAt,
         createdAt: incidents.createdAt,
         reviewId: reportabilityReviews.id,
@@ -351,6 +354,9 @@ export class DrizzleAdminService implements AdminService {
         eventTypes: row.eventTypes,
         injurySeverity: row.injurySeverity ?? null,
         medicalTreatment: row.medicalTreatment ?? null,
+        failureMode: row.failureMode ?? null,
+        medicalTreatmentReceived: row.medicalTreatmentReceived ?? null,
+        unitType: row.unitType ?? null,
         occurredAt: row.occurredAt ? row.occurredAt.toISOString() : null,
         createdAt: row.createdAt.toISOString(),
         reportability: row.reviewId
@@ -379,6 +385,9 @@ export class DrizzleAdminService implements AdminService {
         eventTypes: incidents.eventTypes,
         injurySeverity: incidents.injurySeverity,
         medicalTreatment: incidents.medicalTreatment,
+        failureMode: incidents.failureMode,
+        medicalTreatmentReceived: incidents.medicalTreatmentReceived,
+        unitType: incidents.unitType,
         occurredAt: incidents.occurredAt,
         createdAt: incidents.createdAt,
         reviewId: reportabilityReviews.id,
@@ -403,6 +412,9 @@ export class DrizzleAdminService implements AdminService {
       eventTypes: row.eventTypes,
       injurySeverity: row.injurySeverity ?? null,
       medicalTreatment: row.medicalTreatment ?? null,
+      failureMode: row.failureMode ?? null,
+      medicalTreatmentReceived: row.medicalTreatmentReceived ?? null,
+      unitType: row.unitType ?? null,
       occurredAt: row.occurredAt ? row.occurredAt.toISOString() : null,
       createdAt: row.createdAt.toISOString(),
       reportability: row.reviewId
@@ -416,8 +428,16 @@ export class DrizzleAdminService implements AdminService {
         : null,
     };
 
-    // Review history: reportability/incident-scoped audit events (best-effort;
-    // only fields already returned by the audit service are used).
+    // Review history. Audit rows hang off the *review* id: both writers (the
+    // staff-session close and the legacy admin-key close) record
+    // `resourceType: 'review'` / `resourceId: <reviewId>`, and no writer ever
+    // emits 'reportability' or 'incident'. Matching on those two — as this
+    // query used to — returned nothing on every incident, so a completed
+    // safety review rendered with an empty trail.
+    //
+    // Case-scoped events are included as well: status transitions are what
+    // make a review closable, so they belong on the same timeline.
+    const reviewId = row.reviewId;
     const reviewEvents = await this.db
       .select({
         id: adminAuditEvents.id,
@@ -430,12 +450,16 @@ export class DrizzleAdminService implements AdminService {
       .from(adminAuditEvents)
       .where(
         or(
+          ...(reviewId
+            ? [
+                and(
+                  eq(adminAuditEvents.resourceType, 'review'),
+                  eq(adminAuditEvents.resourceId, reviewId),
+                ),
+              ]
+            : []),
           and(
-            eq(adminAuditEvents.resourceType, 'reportability'),
-            eq(adminAuditEvents.resourceId, id),
-          ),
-          and(
-            eq(adminAuditEvents.resourceType, 'incident'),
+            eq(adminAuditEvents.resourceType, 'case'),
             eq(adminAuditEvents.resourceId, row.caseReference),
           ),
         ),
@@ -720,6 +744,11 @@ export class DrizzleAdminService implements AdminService {
         injurySeverity: incidents.injurySeverity,
         medicalTreatment: incidents.medicalTreatment,
         usedAsIntended: incidents.usedAsIntended,
+        failureMode: incidents.failureMode,
+        medicalTreatmentReceived: incidents.medicalTreatmentReceived,
+        unitType: incidents.unitType,
+        injuryDescriptionKeyVersion: incidents.injuryDescriptionKeyVersion,
+        injuryDescriptionEncrypted: incidents.injuryDescriptionEncrypted,
         occurredAt: incidents.occurredAt,
         occurredDateUnknown: incidents.occurredDateUnknown,
         companyObtainedAt: incidents.companyObtainedAt,
@@ -742,6 +771,17 @@ export class DrizzleAdminService implements AdminService {
           })
         : undefined;
 
+    // The injury description is testimonial detail about a person, so it follows
+    // the narrative's tier rule exactly: decrypted for the raw tier, never sent
+    // to a masked viewer, covered by the same audited raw read.
+    const injuryDescription =
+      tier === 'raw' && row.injuryDescriptionEncrypted && row.injuryDescriptionKeyVersion
+        ? await this.crypto.decrypt({
+            value: row.injuryDescriptionEncrypted,
+            keyVersion: row.injuryDescriptionKeyVersion,
+          })
+        : undefined;
+
     return {
       id: row.id,
       answer: row.answer,
@@ -749,6 +789,9 @@ export class DrizzleAdminService implements AdminService {
       injurySeverity: row.injurySeverity ?? null,
       medicalTreatment: row.medicalTreatment ?? null,
       usedAsIntended: row.usedAsIntended ?? null,
+      failureMode: row.failureMode ?? null,
+      medicalTreatmentReceived: row.medicalTreatmentReceived ?? null,
+      unitType: row.unitType ?? null,
       occurredAt: row.occurredAt ? row.occurredAt.toISOString() : null,
       occurredDateUnknown: row.occurredDateUnknown,
       companyObtainedAt: row.companyObtainedAt.toISOString(),
@@ -761,6 +804,7 @@ export class DrizzleAdminService implements AdminService {
           }
         : null,
       ...(narrative !== undefined ? { narrative } : {}),
+      ...(injuryDescription !== undefined ? { injuryDescription } : {}),
     };
   }
 
@@ -1031,6 +1075,32 @@ export class DrizzleAdminService implements AdminService {
       (!trimmedNote || trimmedNote.length < 10)
     ) {
       throw new ClaimValidationError(transitionReasonRequiredMessage(nextStatus));
+    }
+
+    // Reportability gate — deliberately OUTSIDE the bypassWorkflow branch below.
+    // A safety review is a regulatory control, not a workflow convenience, so no
+    // role may close a case while its review is open *or missing*. This is the
+    // only reason `force` cannot move a case to `closed`; every other transition
+    // stays bypassable.
+    //
+    // Scope notes:
+    //  - `incident` and `incidentReview` were already loaded above, so this adds
+    //    no query.
+    //  - Only `closed` is gated. A consumer-driven `withdrawn` must stay
+    //    available (the review row simply remains pending against a closed-lite
+    //    case, which is visible in the compliance queue).
+    //  - A case with no incident needs no review, so standard cases close freely.
+    if (nextStatus === 'closed' && incident) {
+      if (!incidentReview) {
+        throw new ClaimValidationError(
+          'This case cannot be closed because its safety reportability review is missing. Create and complete the review first.',
+        );
+      }
+      if (incidentReview.reportabilityStatus === 'pending') {
+        throw new ClaimValidationError(
+          'This case cannot be closed while its safety reportability review is pending. Complete the review first.',
+        );
+      }
     }
 
     if (bypassWorkflow) {

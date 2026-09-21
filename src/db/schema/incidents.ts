@@ -41,6 +41,22 @@ export const incidents = pgTable(
     injurySeverity: varchar('injury_severity', { length: 40 }),
     medicalTreatment: varchar('medical_treatment', { length: 40 }),
     usedAsIntended: varchar('used_as_intended', { length: 16 }),
+    // Structured incident capture (P0-4). All nullable and never backfilled:
+    // historical incidents keep NULL, and the required-field contract is
+    // switched on separately via INCIDENT_STRICT_VALIDATION once submissions
+    // actually carry the data.
+    //
+    // `failure_mode`, `medical_treatment_received` and `unit_type` follow
+    // `injury_severity`'s pattern — varchar constrained by a contract enum, not
+    // a Postgres enum — so adding a failure mode is a code change, never a
+    // type migration.
+    failureMode: varchar('failure_mode', { length: 40 }),
+    // `injury_description` is testimonial detail about a person, so it gets the
+    // same envelope encryption as the narrative rather than plain text.
+    injuryDescriptionKeyVersion: varchar('injury_description_key_version', { length: 40 }),
+    injuryDescriptionEncrypted: text('injury_description_encrypted'),
+    medicalTreatmentReceived: varchar('medical_treatment_received', { length: 16 }),
+    unitType: varchar('unit_type', { length: 16 }),
     companyObtainedAt: timestamp('company_obtained_at', {
       withTimezone: true,
       mode: 'date',
@@ -56,6 +72,12 @@ export const incidents = pgTable(
       sql`${table.occurredAt} is not null or ${table.occurredDateUnknown} = true`,
     ),
     check('incidents_event_types_chk', sql`cardinality(${table.eventTypes}) > 0`),
+    // Ciphertext without its key version cannot be decrypted after a key
+    // rotation, so the pair is only ever written together.
+    check(
+      'incidents_injury_description_pair_chk',
+      sql`(${table.injuryDescriptionKeyVersion} is null) = (${table.injuryDescriptionEncrypted} is null)`,
+    ),
   ],
 );
 

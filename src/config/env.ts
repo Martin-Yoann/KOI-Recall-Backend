@@ -21,6 +21,16 @@ const environmentSchema = z.object({
     .enum(['true', 'false'])
     .default('false')
     .transform((value) => value === 'true'),
+  /**
+   * Stage 3 of the structured-incident rollout. While false (the default) the
+   * new incident fields are accepted but optional, so older clients keep
+   * submitting; when true a confirmed incident must carry them. Turning it off
+   * again is a complete rollback — no collected field is ever dropped.
+   */
+  INCIDENT_STRICT_VALIDATION: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
   CRON_SECRET: z.string().optional(),
   /** Single-role Admin API key (T8/O10). When absent, admin routes are 501. */
   ADMIN_API_KEY: z.string().optional(),
