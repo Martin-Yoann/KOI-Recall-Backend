@@ -49,6 +49,26 @@ export interface AppDependencies {
   readyCheck?: () => Promise<boolean>;
 }
 
+/**
+ * Headers a browser is allowed to send.
+ *
+ * Exported so a test can hold it against the request contracts. A custom header
+ * that is missing from this list is never rejected by the API — the browser
+ * preflight fails first, and the client can only report a network error, which
+ * looks like an outage rather than a configuration mistake. `X-Disposal-Token`
+ * shipped that way and was caught by loading the page, not by any test.
+ *
+ * `tests/cors-headers.test.ts` enumerates every header parameter in the OpenAPI
+ * document and fails if one is absent here, so the next header cannot repeat it.
+ */
+export const CORS_ALLOW_HEADERS: readonly string[] = [
+  'Content-Type',
+  'Authorization',
+  'Idempotency-Key',
+  'X-Draft-Token',
+  'X-Disposal-Token',
+  'X-Request-Id',
+];
 export function createApp(dependencies: AppDependencies = {}) {
   const config = dependencies.config ?? loadConfig();
   const registry = dependencies.registry ?? createDefaultRegistry(config);
@@ -82,17 +102,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     cors({
       origin: (origin) => (config.allowedOrigins.includes(origin) ? origin : ''),
       allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowHeaders: [
-        'Content-Type',
-        'Authorization',
-        'Idempotency-Key',
-        'X-Draft-Token',
-        // Every consumer credential a browser must send. A custom header that is
-        // missing here is not rejected by the API — it never reaches it, because
-        // the preflight fails first and the client can only report a network error.
-        'X-Disposal-Token',
-        'X-Request-Id',
-      ],
+      allowHeaders: [...CORS_ALLOW_HEADERS],
       exposeHeaders: [
         'ETag',
         'Content-Language',

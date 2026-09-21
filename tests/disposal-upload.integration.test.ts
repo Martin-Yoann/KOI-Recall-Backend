@@ -126,8 +126,7 @@ describe.skipIf(!enabled)('disposal evidence upload path', { timeout: 120_000 },
         ),
       );
     await handle.close();
-    // Cleanup is many sequential deletes; the 10s default assumes a local database.
-  }, 120_000);
+  });
 
   /** A draft that has already been submitted, as a real task's draft would be. */
   async function submittedDraft(): Promise<string> {
