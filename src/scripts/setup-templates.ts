@@ -187,7 +187,7 @@ async function setupTemplates() {
     {
       templateKey: 'claim_confirmation',
       locale: 'en-US',
-      version: 3,
+      version: 4,
       subject: 'We received your recall claim {{caseReference}}',
       htmlBody: shell({
         preheader: 'Your claim is in the queue and needs no action right now.',
@@ -208,7 +208,8 @@ async function setupTemplates() {
           para(
             'Keep your case reference handy — it identifies your claim in every message and on the tracking page.',
             true,
-          ),
+          ) +
+          para('{{disposalSection}}', true),
       }),
       textBody: text({
         title: 'We received your recall claim',
@@ -221,6 +222,8 @@ async function setupTemplates() {
           '',
           'A reviewer will check your submission and the evidence you provided.',
           'If anything is missing we will email you with exactly what we need.',
+          '',
+          '{{disposalSection}}',
         ],
       }),
     },
