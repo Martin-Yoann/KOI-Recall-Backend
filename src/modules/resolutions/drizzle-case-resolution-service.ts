@@ -28,9 +28,36 @@ import type {
   RequestResolutionInput,
 } from './service.js';
 
-/** Map a campaign remedy code to the normalized resolution type. */
+/**
+ * Normalises a campaign remedy code to the resolution type this ledger tracks.
+ *
+ * The two are different vocabularies. A campaign names what the consumer asked
+ * for; the ledger records how the remedy is fulfilled, which is either a payment
+ * or a shipment. `repair` and `voucher` are fulfilled by posting something, so
+ * they normalise to `replacement`.
+ *
+ * A code this ledger cannot fulfil fails closed instead of being classified.
+ * The previous form — `remedyCode === 'refund' ? 'refund' : 'replacement'` —
+ * classified every other code as a shipment, so a campaign offering disposal
+ * instructions produced a case waiting to post a product the consumer had been
+ * told to dispose of, with nothing in the flow having asked about disposal.
+ * Consumer disposal is never a remedy option: it runs through the disposal task
+ * surface, which gates it on eligibility, approved instructions and an issued
+ * permission. Refusing the code here is what keeps the two vocabularies apart.
+ */
 export function resolutionTypeForRemedyCode(remedyCode: string): CaseResolutionType {
-  return remedyCode === 'refund' ? 'refund' : 'replacement';
+  switch (remedyCode) {
+    case 'refund':
+      return 'refund';
+    case 'replacement':
+    case 'repair':
+    case 'voucher':
+      return 'replacement';
+    default:
+      throw new ClaimValidationError(
+        `The remedy "${remedyCode}" is not one this claim ledger can fulfil.`,
+      );
+  }
 }
 
 function toCaseResolution(row: typeof caseResolutions.$inferSelect): CaseResolution {
