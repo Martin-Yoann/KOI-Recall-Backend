@@ -24,6 +24,13 @@ import { defineConfig } from 'vitest/config';
  * whole case-detail read. Give a suite that submits claims a budget that fits its
  * real round trips (`{ timeout: 120_000 }`), and note that `RUN_DB_INTEGRATION`
  * runs against whatever `DATABASE_URL` points at, shared databases included.
+ *
+ * A third, which cost an hour of debugging: cleanup must delete every document a
+ * fixture created, and must delete documents before their draft. The draft's FK
+ * nulls `document_uploads.draft_id` on delete, and `document_uploads_owner_chk`
+ * requires `draft_id` or `case_id` to be set — so deleting a draft that still
+ * owns a document fails the check, the rest of the cleanup never runs, and the
+ * fixture is left behind while the test still reports a pass.
  */
 export default defineConfig({
   test: {

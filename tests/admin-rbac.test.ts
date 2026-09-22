@@ -221,7 +221,12 @@ function makeAdminFake(): AdminService & { detailTierByRef: Map<string, 'masked'
   };
 }
 
-function makeAdminTransactions(admin: AdminService, staff: StaffService, audit: AuditService) {
+function makeAdminTransactions(
+  admin: AdminService,
+  staff: StaffService,
+  audit: AuditService,
+  disposal: DisposalService = makeDisposalFake(),
+) {
   return {
     run: <T>(
       work: (services: {
@@ -230,7 +235,7 @@ function makeAdminTransactions(admin: AdminService, staff: StaffService, audit: 
         audit: AuditService;
         disposal: DisposalService;
       }) => Promise<T>,
-    ) => work({ admin, staff, audit, disposal: makeDisposalFake() }),
+    ) => work({ admin, staff, audit, disposal }),
   };
 }
 
@@ -239,6 +244,8 @@ function appWith(opts: {
   audit?: AuditService;
   admin?: AdminService;
   crypto?: SensitiveDataCryptoPort;
+  /** Defaults to the refusing stub; override one method to exercise a route. */
+  disposal?: DisposalService;
 }) {
   const base = createPlaceholderRegistry();
   const registry: ApplicationRegistry = {
@@ -247,9 +254,18 @@ function appWith(opts: {
       ...(opts.admin ? { admin: opts.admin } : {}),
       ...(opts.staff ? { staff: opts.staff } : {}),
       ...(opts.audit ? { audit: opts.audit } : {}),
+      // The disposal routes read the service straight off the registry, while the
+      // transactional admin paths receive it through the runner — so both have to
+      // see the same instance.
+      ...(opts.disposal ? { disposal: opts.disposal } : {}),
       ...(opts.admin && opts.staff && opts.audit
         ? {
-            adminTransactions: makeAdminTransactions(opts.admin, opts.staff, opts.audit),
+            adminTransactions: makeAdminTransactions(
+              opts.admin,
+              opts.staff,
+              opts.audit,
+              opts.disposal,
+            ),
           }
         : {}),
     },
@@ -1080,5 +1096,107 @@ describe('B-end RBAC (ADR-0004)', () => {
       body: JSON.stringify({ currentPassword: 'wrong', newPassword: 'newpassword1234' }),
     });
     expect(bad.status).toBe(422);
+  });
+
+  // D16: the console hiding a control is not the enforcement. A role holding none
+  // of the disposal permissions is refused by the server on every route, and the
+  // refusal is recorded rather than silent.
+  it('refuses every disposal route for a role that holds none of its permissions', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    await staff.createStaffUser({
+      email: 'manager@x.com',
+      displayName: 'Manager',
+      role: 'MANAGER',
+      password: 'password1234',
+    });
+    const token = (await staff.login('manager@x.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit });
+
+    const taskId = '11111111-1111-4111-8111-111111111111';
+    const productId = '22222222-2222-4222-8222-222222222222';
+    const batchId = '33333333-3333-4333-8333-333333333333';
+    const versionId = '44444444-4444-4444-8444-444444444444';
+
+    const routes: Array<[string, string]> = [
+      ['GET', '/admin/disposal-tasks'],
+      ['GET', `/admin/disposal-tasks/${taskId}`],
+      ['POST', `/admin/disposal-tasks/${taskId}/products/${productId}/confirm`],
+      ['POST', `/admin/disposal-tasks/${taskId}/eligibility`],
+      ['POST', `/admin/disposal-batches/${batchId}/review`],
+      ['POST', `/admin/disposal-tasks/${taskId}/authorization`],
+      ['POST', `/admin/disposal-tasks/${taskId}/hold`],
+      ['POST', `/admin/disposal-tasks/${taskId}/hold/release`],
+      ['GET', '/admin/disposal-instructions'],
+      ['POST', '/admin/disposal-instructions'],
+      ['POST', `/admin/disposal-instructions/${versionId}/approvals`],
+      ['POST', `/admin/disposal-instructions/${versionId}/publish`],
+      ['POST', `/admin/disposal-instructions/${versionId}/withdraw`],
+    ];
+
+    for (const [method, path] of routes) {
+      const response = await app.request(path, {
+        method,
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        ...(method === 'POST' ? { body: JSON.stringify({}) } : {}),
+      });
+      expect(`${method} ${path} → ${response.status}`).toBe(`${method} ${path} → 403`);
+    }
+
+    // One denied row per attempt: a refusal leaves a trail, it is not invisible.
+    const denials = audit.events.filter((event) => event.outcome === 'denied');
+    expect(denials).toHaveLength(routes.length);
+    expect(denials.every((event) => event.actorRole === 'MANAGER')).toBe(true);
+  });
+
+  // D24: a disposal decision is attributable. Placing a hold is the smallest
+  // action that writes a row, so it is the clearest place to see the trail.
+  it('records who placed a disposal hold, and against which task', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    const compliance = await staff.createStaffUser({
+      email: 'compliance@x.com',
+      displayName: 'Compliance',
+      role: 'COMPLIANCE',
+      password: 'password1234',
+    });
+    const token = (await staff.login('compliance@x.com', 'password1234'))!.token;
+    const placement = { taskId: '', reason: '', actor: '' };
+    const disposal: DisposalService = {
+      ...makeDisposalFake(),
+      // Everything else still refuses loudly; only the method under test is wired.
+      placeHold: (input) => {
+        placement.taskId = input.taskId;
+        placement.reason = input.reason;
+        placement.actor = input.actorStaffUserId ?? '';
+        return Promise.resolve();
+      },
+    };
+    const app = appWith({ admin: makeAdminFake(), staff, audit, disposal });
+
+    const taskId = '11111111-1111-4111-8111-111111111111';
+    const response = await app.request(`/admin/disposal-tasks/${taskId}/hold`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        reason: 'compliance_investigation',
+        note: 'Holding while a related report is reviewed.',
+      }),
+    });
+
+    expect(response.status).toBe(204);
+    expect(placement).toEqual({
+      taskId,
+      reason: 'compliance_investigation',
+      actor: compliance.id,
+    });
+
+    const recorded = audit.events.filter((event) => event.resourceType === 'disposal');
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]!.action).toBe('disposal.hold.place');
+    expect(recorded[0]!.resourceId).toBe(taskId);
+    expect(recorded[0]!.actorUserId).toBe(compliance.id);
+    expect(recorded[0]!.actorRole).toBe('COMPLIANCE');
+    expect(recorded[0]!.outcome).toBe('success');
   });
 });

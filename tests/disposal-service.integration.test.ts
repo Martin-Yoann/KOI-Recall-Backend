@@ -13,11 +13,13 @@ import {
   campaignVersions,
   claimDrafts,
   disposalAuthorizations,
+  disposalDeclarations,
   disposalEvidenceBatches,
   disposalHolds,
   disposalInstructionApprovals,
   disposalInstructionVersions,
   disposalAuthorizationItems,
+  disposalReviews,
   disposalTasks,
   disposalTaskProducts,
   documentUploads,
@@ -208,6 +210,28 @@ describe.skipIf(!enabled)(
         retentionUntil: null,
       });
       return { ...opened, taskId, documentId, batch };
+    }
+
+    /**
+     * A task that is allowed to accept its *first* batch, with none submitted.
+     *
+     * The policy permits a new batch only while the latest one is absent, sent
+     * back, or already superseded — so a task that has just been handed to human
+     * review refuses anything else, and a test that needs to reach the gates
+     * inside `submitEvidenceBatch` has to start from here.
+     */
+    async function openForFirstSubmission() {
+      const opened = await openTask({ authorizes: true, approved: true });
+      const taskId = opened.created!.taskId;
+      await service.confirmProductAffected({ taskId, campaignProductId: productId, quantity: 1 });
+      await service.confirmEligibility({
+        taskId,
+        eligibilityStatus: 'confirmed_eligible',
+        note: 'Confirmed against the recall notice.',
+        actorStaffUserId: staffUserId,
+        expectedVersion: 1,
+      });
+      return { ...opened, taskId };
     }
 
     // ---- dark ship ---------------------------------------------------------
@@ -789,6 +813,260 @@ describe.skipIf(!enabled)(
       expect(afterHold!.blockingReasons).toContain('DISPOSAL_ON_HOLD');
 
       await cleanup(opened, { taskId });
+    });
+
+    // ---- the acceptance rows that had no execution behind them --------------
+
+    // D09: an accepted batch cannot be replaced at all. The policy permits a new
+    // batch only while the latest one is absent, sent back, or already
+    // superseded, so once evidence is accepted the permission built on it cannot
+    // be retired by submitting different photos over the top — a stronger
+    // guarantee than suspending the permission would be.
+    it('refuses to replace accepted evidence, so its permission cannot be re-derived', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'accepted',
+        rationale: 'The label is readable and the unit is undamaged.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+      const issued = await service.issueAuthorization({
+        taskId: opened.taskId,
+        actorStaffUserId: staffUserId,
+      });
+
+      const otherDocumentId = await verifiedEvidence(opened.draftId);
+      await expect(
+        service.submitEvidenceBatch({
+          taskId: opened.taskId,
+          taskToken: opened.created!.token,
+          idempotencyKey: randomUUID(),
+          documents: [{ documentId: otherDocumentId }],
+          retentionUntil: null,
+        }),
+      ).rejects.toThrow(/cannot be submitted/i);
+
+      const [authorization] = await handle!.db
+        .select({
+          status: disposalAuthorizations.status,
+          batchId: disposalAuthorizations.batchId,
+        })
+        .from(disposalAuthorizations)
+        .where(eq(disposalAuthorizations.id, issued.authorizationId));
+      expect(authorization!.status).toBe('active');
+      expect(authorization!.batchId).toBe(opened.batch.batchId);
+
+      await cleanup(opened, {
+        taskId: opened.taskId,
+        documentIds: [opened.documentId, otherDocumentId],
+      });
+    });
+
+    // D09, the replacement that is allowed: a batch sent back for resubmission
+    // is superseded by the next one rather than reviewed twice.
+    it('supersedes a batch that was sent back for resubmission', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'needs_resubmission',
+        rationale: 'The date code is cut off in both photos.',
+        reasonCode: 'recognition_unreadable',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+
+      const betterDocumentId = await verifiedEvidence(opened.draftId);
+      const replacement = await service.submitEvidenceBatch({
+        taskId: opened.taskId,
+        taskToken: opened.created!.token,
+        idempotencyKey: randomUUID(),
+        documents: [{ documentId: betterDocumentId }],
+        retentionUntil: null,
+      });
+
+      expect(replacement.batchId).not.toBe(opened.batch.batchId);
+      expect(replacement.reviewStatus).toBe('pending');
+
+      const [superseded] = await handle!.db
+        .select({ reviewStatus: disposalEvidenceBatches.reviewStatus })
+        .from(disposalEvidenceBatches)
+        .where(eq(disposalEvidenceBatches.id, opened.batch.batchId));
+      expect(superseded!.reviewStatus).toBe('superseded');
+
+      await cleanup(opened, {
+        taskId: opened.taskId,
+        documentIds: [opened.documentId, betterDocumentId],
+      });
+    });
+
+    // D10: a photo cannot be moved onto someone else's task, even with a
+    // perfectly valid task credential of one's own. The target task has no batch
+    // yet, so the policy gate is not what refuses this.
+    it("refuses a document that belongs to another consumer's task", async () => {
+      const mine = await openForFirstSubmission();
+      const theirs = await readyForAuthorization();
+
+      await expect(
+        service.submitEvidenceBatch({
+          taskId: mine.taskId,
+          taskToken: mine.created!.token,
+          idempotencyKey: randomUUID(),
+          documents: [{ documentId: theirs.documentId }],
+          retentionUntil: null,
+        }),
+      ).rejects.toThrow(/does not belong/i);
+
+      await cleanup(mine, { taskId: mine.taskId });
+      await cleanup(theirs, { taskId: theirs.taskId, documentIds: [theirs.documentId] });
+    });
+
+    // D11: expiry had never been exercised on any of the three consumer paths.
+    // The task has no batch yet, so nothing but the credential can refuse the
+    // upload.
+    it('refuses an expired credential on read, upload and declaration', async () => {
+      const opened = await openForFirstSubmission();
+      await handle!.db
+        .update(disposalTasks)
+        .set({ tokenExpiresAt: new Date(Date.now() - 1_000) })
+        .where(eq(disposalTasks.id, opened.taskId));
+
+      await expect(
+        service.getTaskForVisitor(opened.taskId, opened.created!.token),
+      ).resolves.toBeNull();
+
+      const documentId = await verifiedEvidence(opened.draftId);
+      await expect(
+        service.submitEvidenceBatch({
+          taskId: opened.taskId,
+          taskToken: opened.created!.token,
+          idempotencyKey: randomUUID(),
+          documents: [{ documentId }],
+          retentionUntil: null,
+        }),
+      ).rejects.toThrow();
+
+      await expect(
+        service.recordDeclaration({
+          taskId: opened.taskId,
+          taskToken: opened.created!.token,
+          declarationTextVersion: 'integration-v1',
+          exceptionType: 'evidence_unavailable',
+          exceptionNote: 'The photos were lost when the phone was replaced.',
+        }),
+      ).rejects.toThrow();
+
+      await cleanup(opened, {
+        taskId: opened.taskId,
+        documentIds: [documentId],
+      });
+    });
+
+    // D17: two identical submissions racing on one task must leave one batch,
+    // not two reviews of the same photos — and must not lose the evidence to a
+    // race that failed both.
+    it('records one batch when the same submission arrives twice at once', async () => {
+      const opened = await openForFirstSubmission();
+      const documentId = await verifiedEvidence(opened.draftId);
+      const idempotencyKey = randomUUID();
+      const submit = () =>
+        service.submitEvidenceBatch({
+          taskId: opened.taskId,
+          taskToken: opened.created!.token,
+          idempotencyKey,
+          documents: [{ documentId }],
+          retentionUntil: null,
+        });
+
+      const settled = await Promise.allSettled([submit(), submit()]);
+      expect(settled.some((result) => result.status === 'fulfilled')).toBe(true);
+
+      const batches = await handle!.db
+        .select({ id: disposalEvidenceBatches.id })
+        .from(disposalEvidenceBatches)
+        .where(eq(disposalEvidenceBatches.taskId, opened.taskId));
+      // Exactly one, whichever of the racing pair won.
+      expect(batches).toHaveLength(1);
+
+      await cleanup(opened, {
+        taskId: opened.taskId,
+        documentIds: [documentId],
+      });
+    });
+
+    // D19: with no live permission there is nothing to declare completion
+    // against, and claiming it anyway is refused rather than recorded.
+    it('offers no completion declaration while no permission is live', async () => {
+      const opened = await readyForAuthorization();
+      const detail = await service.getTaskForVisitor(opened.taskId, opened.created!.token);
+
+      expect(detail!.snapshot.allowedActions).toContain('disposal.declare_exception');
+      expect(detail!.snapshot.allowedActions).not.toContain('disposal.declare_completion');
+
+      await expect(
+        service.recordDeclaration({
+          taskId: opened.taskId,
+          taskToken: opened.created!.token,
+          declarationTextVersion: 'integration-v1',
+        }),
+      ).rejects.toThrow();
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
+
+    // D21: withdrawal closes the door on future actions without erasing what
+    // already happened.
+    it('keeps the batch, the decision and the declaration across a withdrawal', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'accepted',
+        rationale: 'Accepted before the approval behind the content was withdrawn.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+      const issued = await service.issueAuthorization({
+        taskId: opened.taskId,
+        actorStaffUserId: staffUserId,
+      });
+      await service.recordDeclaration({
+        taskId: opened.taskId,
+        taskToken: opened.created!.token,
+        declarationTextVersion: 'integration-v1',
+        authorizationId: issued.authorizationId,
+      });
+
+      const suspended = await service.withdrawInstruction({
+        instructionVersionId: opened.versionId,
+        reason: 'The approval behind this content was withdrawn.',
+        actorStaffUserId: staffUserId,
+      });
+      expect(suspended).toBeGreaterThanOrEqual(1);
+
+      const [batch] = await handle!.db
+        .select({ id: disposalEvidenceBatches.id })
+        .from(disposalEvidenceBatches)
+        .where(eq(disposalEvidenceBatches.id, opened.batch.batchId));
+      const [review] = await handle!.db
+        .select({ id: disposalReviews.id })
+        .from(disposalReviews)
+        .where(eq(disposalReviews.batchId, opened.batch.batchId));
+      const [authorization] = await handle!.db
+        .select({ status: disposalAuthorizations.status })
+        .from(disposalAuthorizations)
+        .where(eq(disposalAuthorizations.id, issued.authorizationId));
+      const [declaration] = await handle!.db
+        .select({ id: disposalDeclarations.id })
+        .from(disposalDeclarations)
+        .where(eq(disposalDeclarations.authorizationId, issued.authorizationId));
+
+      // Suspended, not deleted: the history a withdrawal has to keep.
+      expect(batch).toBeDefined();
+      expect(review).toBeDefined();
+      expect(authorization!.status).toBe('suspended');
+      expect(declaration).toBeDefined();
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
     });
   },
 );
