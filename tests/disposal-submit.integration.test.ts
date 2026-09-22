@@ -168,6 +168,30 @@ describe.skipIf(!enabled)('disposal task creation on submission', { timeout: 120
     return createClaimFixture(handle!, { campaignSlug });
   }
 
+  /**
+   * D03: an inapplicable recall must not ask the consumer for a disposal declaration.
+   *
+   * The consumer surface decides that from one value: whether the submission came back
+   * with a disposal task. What this asserts is that the value is *absent* rather than
+   * present-and-null. A null would still be falsy in the client, but absence is what
+   * makes "no task" and "a task we failed to serialise" both fail towards not asking.
+   *
+   * The other half of D03 lives in the web app — that the fall-through branch never
+   * renders a declaration — and is not covered by this test.
+   */
+  it('D03: a submission with no disposal task carries no disposal field at all', async () => {
+    await demoteApprovedVersions();
+
+    const claim = await fixture();
+    const result = await service.submit(claim.command());
+
+    expect(result.caseReference).toBeTruthy();
+    expect(Object.prototype.hasOwnProperty.call(result, 'disposal')).toBe(false);
+    expect(result.disposal).toBeUndefined();
+
+    await cleanupClaimFixture(handle!, claim);
+  });
+
   it('opens no disposal task when no approved instruction version exists', async () => {
     await demoteApprovedVersions();
 
