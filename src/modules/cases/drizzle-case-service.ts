@@ -55,6 +55,7 @@ import {
   normalizeOrderNumber,
 } from './normalization.js';
 import type { DisposalService } from '../disposal/service.js';
+import { DEFAULT_CONSUMER_WEB_BASE_URL } from '../../config/env.js';
 import type { CaseService, ClaimSubmissionCommand } from './service.js';
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -128,6 +129,7 @@ export class DrizzleCaseService implements CaseService {
   private readonly malwareScanRequired: boolean;
   private readonly incidentStrictValidation: boolean;
   private readonly disposal: DisposalService | undefined;
+  private readonly consumerWebBaseUrl: string;
   private readonly notifications: CommunicationQueueService | undefined;
 
   constructor(
@@ -140,6 +142,7 @@ export class DrizzleCaseService implements CaseService {
     notifications?: CommunicationQueueService,
     incidentStrictValidation = false,
     disposal?: DisposalService,
+    consumerWebBaseUrl = DEFAULT_CONSUMER_WEB_BASE_URL,
   ) {
     this.handle = handle;
     this.crypto = crypto;
@@ -174,6 +177,7 @@ export class DrizzleCaseService implements CaseService {
       typeof beforeOrMalware === 'boolean' ? beforeOrMalware : malwareScanRequired;
     this.incidentStrictValidation = incidentStrictValidation;
     this.disposal = disposal;
+    this.consumerWebBaseUrl = consumerWebBaseUrl;
   }
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
@@ -615,6 +619,10 @@ export class DrizzleCaseService implements CaseService {
         caseId,
         expiresAt: new Date(submittedAt.getTime() + IDEMPOTENCY_TTL_MS),
       });
+      const disposalResumeUrl = disposalTask
+        ? `${this.consumerWebBaseUrl}/recalls/${command.campaignSlug}/disposal/${disposalTask.taskId}#token=${disposalTask.token}`
+        : '';
+
       await this.notifications?.queue(tx, {
         caseId,
         templateVersionId,
@@ -622,7 +630,19 @@ export class DrizzleCaseService implements CaseService {
         recipientEncrypted: encrypted.recipientEmail.value,
         deduplicationKey: `claim-confirmation:${caseReference}`,
         eventType: 'claim.confirmation.requested',
-        variables: { caseReference, submittedAt: submittedAt.toISOString() },
+        variables: {
+          caseReference,
+          submittedAt: submittedAt.toISOString(),
+          // The URL on its own, for a template that can put it in an href.
+          disposalResumeUrl: disposalTask ? disposalResumeUrl : '',
+          // The same thing as a self-contained sentence, because the renderer has
+          // no conditionals and HTML-escapes every value: a link cannot be built
+          // from a variable, so the template drops this in as its own paragraph and
+          // both branches read correctly without an empty href ever being emitted.
+          disposalSection: disposalTask
+            ? `You can return to your product-disposal step at ${disposalResumeUrl}. Keep this email: the link is the only way back to it.`
+            : 'No product-disposal step applies to this claim.',
+        },
       });
 
       return response;

@@ -13,6 +13,7 @@ import {
   documentUploads,
   incidents,
   claimedProducts,
+  disposalTasks,
   recallCampaigns,
   recallCases,
   reportabilityReviews,
@@ -603,6 +604,12 @@ export class DrizzleAdminService implements AdminService {
       consumer,
       resolution: this.resolutions ? await this.resolutions.getForCase(caseRow.id) : null,
       workflow: await this.workflowFor(caseRow, incident?.reportability?.status ?? null),
+      disposalTaskId: await db
+        .select({ id: disposalTasks.id })
+        .from(disposalTasks)
+        .where(eq(disposalTasks.caseId, caseRow.id))
+        .limit(1)
+        .then((r) => r[0]?.id ?? null),
       events: (
         await db
           .select()

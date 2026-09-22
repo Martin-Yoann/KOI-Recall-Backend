@@ -212,6 +212,7 @@ export function createApplicationRegistry(
               communicationQueue,
               incidentStrictValidation,
               disposalService,
+              consumerWebBaseUrl,
             ),
             caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
             admin: new DrizzleAdminService({

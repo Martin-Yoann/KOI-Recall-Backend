@@ -291,6 +291,7 @@ export interface AdminCaseDetail {
   incident?: AdminCaseIncident | null;
   consumer: CaseDetailConsumer;
   resolution?: CaseResolution | null;
+  disposalTaskId?: string | null;
   workflow?: WorkflowSnapshot;
   events?: Array<{
     id: string;
