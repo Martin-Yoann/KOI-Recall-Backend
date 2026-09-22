@@ -110,8 +110,9 @@ function unavailable<T>(capability: string): Promise<T> {
 export function createDisposalService(
   handle: DatabaseHandle,
   evidenceRetentionDays: number | null,
+  notifications?: CommunicationQueueService,
 ): DisposalService {
-  return new DrizzleDisposalService({ handle, evidenceRetentionDays });
+  return new DrizzleDisposalService({ handle, evidenceRetentionDays, notifications });
 }
 
 export function createPlaceholderRegistry(): ApplicationRegistry {
@@ -184,7 +185,7 @@ export function createApplicationRegistry(
 ): ApplicationRegistry {
   const placeholder = createPlaceholderRegistry();
   // Built once so the case service and the registry share the same instance.
-  const disposalService = createDisposalService(handle, evidenceRetentionDays);
+  const disposalService = createDisposalService(handle, evidenceRetentionDays, communicationQueue);
   const emailTrigger = new EmailTriggerService(communicationQueue);
   return {
     services: {

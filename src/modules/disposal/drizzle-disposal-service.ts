@@ -1,5 +1,8 @@
 import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 
+import type { CommunicationQueueService } from '../communications/queue-service.js';
+import { getLatestTemplateVersionId } from '../communications/template-loader.js';
+
 import type { DisposalInstructionView } from '../../contracts/disposal.js';
 import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
@@ -14,6 +17,7 @@ import {
   disposalReviews,
   disposalTasks,
   disposalTaskProducts,
+  caseConsumers,
   documentUploads,
   recallCases,
 } from '../../db/schema/index.js';
@@ -59,6 +63,12 @@ export interface DrizzleDisposalServiceOptions {
    * retention period — evidence under review is never on the 48-hour clock.
    */
   evidenceRetentionDays?: number | null;
+  /**
+   * Sends the consumer an update when a decision lands on their disposal step.
+   * Optional so tests and any wiring without a queue still construct the service:
+   * a notification is never the reason an operator's action fails.
+   */
+  notifications?: CommunicationQueueService | undefined;
 }
 
 /**
@@ -73,9 +83,56 @@ export class DrizzleDisposalService implements DisposalService {
   private readonly handle: DatabaseHandle;
   private readonly evidenceRetentionDays: number | null;
 
+  private readonly notifications: CommunicationQueueService | undefined;
+
   constructor(options: DrizzleDisposalServiceOptions) {
     this.handle = options.handle;
     this.evidenceRetentionDays = options.evidenceRetentionDays ?? null;
+    this.notifications = options.notifications;
+  }
+
+  /**
+   * Mails the consumer about their disposal step.
+   *
+   * No link goes in the message: the task credential is stored only as a hash, so
+   * it cannot be rebuilt here, and rotating a fresh one would invalidate the link
+   * the confirmation email already told the consumer to keep. The template points
+   * back at that email instead. A task with no case has no consumer to write to,
+   * and no queue means nobody asked for notifications.
+   */
+  private async notifyConsumer(
+    tx: DatabaseExecutor,
+    taskId: string,
+    eventType: string,
+    deduplicationKey: string,
+    updateSection: string,
+  ): Promise<void> {
+    if (!this.notifications) return;
+    const [row] = await tx
+      .select({
+        caseId: recallCases.id,
+        caseReference: recallCases.publicReference,
+        locale: recallCases.locale,
+        recipientKeyVersion: caseConsumers.keyVersion,
+        recipientEncrypted: caseConsumers.emailEncrypted,
+      })
+      .from(disposalTasks)
+      .innerJoin(recallCases, eq(recallCases.id, disposalTasks.caseId))
+      .innerJoin(caseConsumers, eq(caseConsumers.caseId, recallCases.id))
+      .where(eq(disposalTasks.id, taskId))
+      .limit(1);
+    if (!row) return;
+
+    const templateVersionId = await getLatestTemplateVersionId(tx, 'disposal_update', row.locale);
+    await this.notifications.queue(tx, {
+      caseId: row.caseId,
+      templateVersionId,
+      recipientKeyVersion: row.recipientKeyVersion,
+      recipientEncrypted: row.recipientEncrypted,
+      deduplicationKey,
+      eventType,
+      variables: { caseReference: row.caseReference, updateSection },
+    });
   }
 
   /**
@@ -558,6 +615,16 @@ export class DrizzleDisposalService implements DisposalService {
         .update(disposalEvidenceBatches)
         .set({ reviewStatus: input.decision, updatedAt: new Date() })
         .where(eq(disposalEvidenceBatches.id, batch.id));
+
+      await this.notifyConsumer(
+        tx,
+        batch.taskId,
+        'disposal.review.decided',
+        `disposal-review:${batch.id}`,
+        input.decision === 'accepted'
+          ? 'Your photos passed review. Nothing else is needed from you for that step.'
+          : 'We need different photos. Open the step, check the instructions, and send new ones.',
+      );
     });
   }
 
@@ -714,6 +781,14 @@ export class DrizzleDisposalService implements DisposalService {
           campaignProductId: item.campaignProductId,
           quantity: item.quantity,
         })),
+      );
+
+      await this.notifyConsumer(
+        tx,
+        input.taskId,
+        'disposal.permission.granted',
+        `disposal-permission:${authorization!.id}`,
+        'You may now dispose of the product. Follow the instructions exactly as they were written, including the safety warnings.',
       );
 
       return { authorizationId: authorization!.id };
