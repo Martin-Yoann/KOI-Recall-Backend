@@ -517,6 +517,46 @@ describe.skipIf(!enabled)(
       await cleanup(opened, { taskId, documentIds: [documentId] });
     });
 
+    // ---- D15 / D13: withdrawal, and the hold that outlives a review ----------
+
+    /**
+     * Withdrawal had never been executed. Its failure mode is a consumer acting on
+     * instructions we have retracted, so it is asserted at both ends: the version
+     * stops being usable, and the permission resting on it stops being live.
+     */
+    it('D15: withdrawing suspends the permission it issued and bars the version', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'accepted',
+        rationale: 'D15: evidence is good enough to permit disposal.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+      await service.issueAuthorization({ taskId: opened.taskId, actorStaffUserId: staffUserId });
+
+      const suspended = await service.withdrawInstruction({
+        instructionVersionId: opened.versionId,
+        reason: 'D15: the coordinated method changed after this version was approved.',
+        actorStaffUserId: staffUserId,
+      });
+      expect(suspended).toBe(1);
+
+      const detail = await service.getTaskForVisitor(opened.taskId, opened.created!.token);
+      expect(detail!.task.instructionStatus).toBe('withdrawn');
+      expect(detail!.task.authorizationStatus).toBe('suspended');
+
+      // A withdrawn version yields no instruction content, so a consumer holding the
+      // old page is not shown something we have retracted.
+      expect(detail!.instruction).toBeNull();
+
+      await expect(
+        service.issueAuthorization({ taskId: opened.taskId, actorStaffUserId: staffUserId }),
+      ).rejects.toThrow();
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
+
     // ---- D14: what a permission covers -------------------------------------
 
     it('covers only the confirmed products the evidence accounts for', async () => {

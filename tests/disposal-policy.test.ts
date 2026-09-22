@@ -211,6 +211,49 @@ describe('disposal policy', () => {
     });
   });
 
+  /**
+   * D13, asserted where the rule is decided rather than by scenario: the policy
+   * cannot depend on the reportability review, because its input has no such field.
+   * Closing a review is therefore incapable of lifting a hold — not because a code
+   * path happens to avoid it, but because there is nothing to read.
+   */
+  describe('D13: a hold is independent of the reportability review', () => {
+    it('has no reportability input to branch on', () => {
+      const keys = Object.keys(satisfiable);
+      expect(keys.filter((key) => /reportab/i.test(key))).toEqual([]);
+    });
+
+    it('blocks the authorization whatever else is true, while the hold stands', () => {
+      // Every combination of the other inputs still refuses. If a reportability
+      // review could lift a hold, some combination here would have to succeed.
+      const instructionStatuses = ['draft', 'approved', 'withdrawn', null] as const;
+      const batchStatuses = [null, 'pending', 'accepted', 'needs_resubmission'] as const;
+      const authorizations = [null, 'active', 'suspended', 'revoked'] as const;
+      const eligibilities = ['pending_confirmation', 'confirmed_eligible'] as const;
+
+      for (const instructionStatus of instructionStatuses) {
+        for (const latestBatchReviewStatus of batchStatuses) {
+          for (const authorizationStatus of authorizations) {
+            for (const eligibilityStatus of eligibilities) {
+              const state = {
+                ...satisfiable,
+                holdActive: true,
+                instructionStatus,
+                latestBatchReviewStatus,
+                authorizationStatus,
+                eligibilityStatus,
+              };
+              expect(canIssueAuthorization(state)).toBe(false);
+              expect(evaluateDisposal(state).blockingReasons).toContain(
+                DISPOSAL_BLOCKING_REASONS.DISPOSAL_ON_HOLD,
+              );
+            }
+          }
+        }
+      }
+    });
+  });
+
   // The service must fail closed with a reason, so a missed gate surfaces as an
   // actionable message rather than a bare 500.
   describe('assertCanIssueAuthorization', () => {
