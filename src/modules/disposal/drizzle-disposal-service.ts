@@ -3,6 +3,7 @@ import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
 import type { DisposalInstructionView } from '../../contracts/disposal.js';
 import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
+  disposalAuthorizationItems,
   disposalAuthorizations,
   disposalDeclarations,
   disposalEvidenceBatchDocuments,
@@ -598,6 +599,72 @@ export class DrizzleDisposalService implements DisposalService {
   }
 
   /**
+   * The products and quantities one permission covers, taken from the accepted
+   * batch and capped by what a person confirmed.
+   *
+   * A batch document may name the product it shows; when it does not, it stands for
+   * every confirmed product, which is what the column comment on
+   * `disposal_evidence_batch_documents.campaign_product_id` says. Either way the
+   * result is capped by `disposal_task_products`: a permission never covers more of
+   * a product than a person confirmed was affected.
+   */
+  private async coverageFor(
+    tx: DatabaseExecutor,
+    taskId: string,
+    batchId: string,
+  ): Promise<Array<{ campaignProductId: string; quantity: number }>> {
+    const confirmed = await tx
+      .select({
+        campaignProductId: disposalTaskProducts.campaignProductId,
+        quantity: disposalTaskProducts.quantity,
+      })
+      .from(disposalTaskProducts)
+      .where(
+        and(
+          eq(disposalTaskProducts.taskId, taskId),
+          eq(disposalTaskProducts.confirmedAffected, true),
+        ),
+      );
+    if (confirmed.length === 0) return [];
+
+    const documents = await tx
+      .select({
+        campaignProductId: disposalEvidenceBatchDocuments.campaignProductId,
+        quantityCovered: disposalEvidenceBatchDocuments.quantityCovered,
+      })
+      .from(disposalEvidenceBatchDocuments)
+      .where(eq(disposalEvidenceBatchDocuments.batchId, batchId));
+
+    const covered = new Map<string, number>();
+    for (const document of documents) {
+      if (document.campaignProductId) {
+        const confirmedQuantity =
+          confirmed.find((row) => row.campaignProductId === document.campaignProductId)?.quantity ??
+          0;
+        if (confirmedQuantity === 0) continue; // not confirmed, so not covered
+        const requested = document.quantityCovered ?? confirmedQuantity;
+        covered.set(
+          document.campaignProductId,
+          Math.min(
+            confirmedQuantity,
+            Math.max(covered.get(document.campaignProductId) ?? 0, requested),
+          ),
+        );
+      } else {
+        // Covers everything confirmed, at full confirmed quantity.
+        for (const row of confirmed) {
+          covered.set(row.campaignProductId, row.quantity);
+        }
+      }
+    }
+
+    return [...covered.entries()].map(([campaignProductId, quantity]) => ({
+      campaignProductId,
+      quantity,
+    }));
+  }
+
+  /**
    * Issues the permission.
    *
    * The state is read inside this transaction and the gate is asserted against
@@ -620,6 +687,16 @@ export class DrizzleDisposalService implements DisposalService {
         throw new ClaimValidationError('No accepted evidence batch was found for this task.');
       }
 
+      // A permission that covers nothing is not a permission. Refusing here is the
+      // same rule as the rest of the gate: it holds at the moment of issue, against
+      // state read in this transaction.
+      const coverage = await this.coverageFor(tx, input.taskId, record.latestBatchId);
+      if (coverage.length === 0) {
+        throw new ClaimValidationError(
+          'No confirmed product is covered by the accepted evidence, so there is nothing this permission could permit.',
+        );
+      }
+
       const [authorization] = await tx
         .insert(disposalAuthorizations)
         .values({
@@ -628,6 +705,16 @@ export class DrizzleDisposalService implements DisposalService {
           instructionVersionId: record.instructionVersionId,
         })
         .returning({ id: disposalAuthorizations.id });
+
+      // Snapshotted, not derived on read: a later batch or a product un-confirmed
+      // must not silently widen or narrow a permission that was already given.
+      await tx.insert(disposalAuthorizationItems).values(
+        coverage.map((item) => ({
+          authorizationId: authorization!.id,
+          campaignProductId: item.campaignProductId,
+          quantity: item.quantity,
+        })),
+      );
 
       return { authorizationId: authorization!.id };
     });

@@ -134,6 +134,13 @@
       "when": 1789964305770,
       "tag": "0019_magical_the_twelve",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1790057956829,
+      "tag": "0020_mean_invaders",
+      "breakpoints": true
     }
   ]
 }

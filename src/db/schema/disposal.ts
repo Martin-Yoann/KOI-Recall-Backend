@@ -493,6 +493,40 @@ export const disposalAuthorizations = pgTable(
  * who already disposed of the product before authorization a way to report the
  * truth instead of forcing a back-dated permission into existence.
  */
+
+/**
+ * What one permission actually covers: a snapshot taken when it was issued.
+ *
+ * A permission is a statement about specific products in specific quantities, and it
+ * has to keep meaning that even if evidence is later replaced or a product is
+ * un-confirmed. Deriving the coverage at read time would let a later change widen a
+ * permission that was already given — the same reason the instruction version is
+ * pinned rather than looked up.
+ *
+ * `quantity` is the covered amount for that product, never more than the confirmed
+ * quantity on `disposal_task_products`.
+ */
+export const disposalAuthorizationItems = pgTable(
+  'disposal_authorization_items',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    authorizationId: uuid('authorization_id')
+      .notNull()
+      .references(() => disposalAuthorizations.id, { onDelete: 'cascade' }),
+    campaignProductId: uuid('campaign_product_id')
+      .notNull()
+      .references(() => campaignProducts.id, { onDelete: 'restrict' }),
+    quantity: integer('quantity').notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    uniqueIndex('disposal_authorization_items_uidx').on(
+      table.authorizationId,
+      table.campaignProductId,
+    ),
+    check('disposal_authorization_items_quantity_chk', sql`${table.quantity} > 0`),
+  ],
+);
 export const disposalDeclarations = pgTable(
   'disposal_declarations',
   {

@@ -4,7 +4,7 @@ import 'dotenv/config';
 
 import { randomUUID } from 'node:crypto';
 
-import { eq } from 'drizzle-orm';
+import { and, eq, ne } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
@@ -17,6 +17,7 @@ import {
   disposalHolds,
   disposalInstructionApprovals,
   disposalInstructionVersions,
+  disposalAuthorizationItems,
   disposalTasks,
   disposalTaskProducts,
   documentUploads,
@@ -513,6 +514,138 @@ describe.skipIf(!enabled)(
         .from(disposalEvidenceBatches)
         .where(eq(disposalEvidenceBatches.id, batch.batchId));
       expect(row?.retentionUntil?.getTime()).toBe(deadline.getTime());
+      await cleanup(opened, { taskId, documentIds: [documentId] });
+    });
+
+    // ---- D14: what a permission covers -------------------------------------
+
+    it('covers only the confirmed products the evidence accounts for', async () => {
+      const opened = await openTask({ authorizes: true, approved: true });
+      const taskId = opened.created!.taskId;
+
+      // Two products on the task; only one is confirmed affected.
+      const extraProduct = { ...opened, productIds: [productId] };
+      void extraProduct;
+      const unconfirmed = await handle!.db
+        .select({ id: disposalTaskProducts.id })
+        .from(disposalTaskProducts)
+        .where(eq(disposalTaskProducts.taskId, taskId));
+      expect(unconfirmed.length).toBeGreaterThan(0);
+
+      await service.confirmProductAffected({ taskId, campaignProductId: productId, quantity: 3 });
+      await service.confirmEligibility({
+        taskId,
+        eligibilityStatus: 'confirmed_eligible',
+        note: 'D14: one product confirmed, with a quantity of three.',
+        actorStaffUserId: staffUserId,
+        expectedVersion: 1,
+      });
+
+      const documentId = await verifiedEvidence(opened.draftId);
+      const batch = await service.submitEvidenceBatch({
+        taskId,
+        taskToken: opened.created!.token,
+        idempotencyKey: randomUUID(),
+        // A photo that accounts for two of the three confirmed units.
+        documents: [{ documentId, campaignProductId: productId, quantityCovered: 2 }],
+        retentionUntil: null,
+      });
+      await service.reviewBatch({
+        batchId: batch.batchId,
+        decision: 'accepted',
+        rationale: 'D14: the photo covers two units of the confirmed product.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+
+      const issued = await service.issueAuthorization({ taskId, actorStaffUserId: staffUserId });
+      const items = await handle!.db
+        .select({
+          campaignProductId: disposalAuthorizationItems.campaignProductId,
+          quantity: disposalAuthorizationItems.quantity,
+        })
+        .from(disposalAuthorizationItems)
+        .where(eq(disposalAuthorizationItems.authorizationId, issued.authorizationId));
+
+      // One product, and only the two units the evidence accounted for — not the
+      // confirmed three, and not the product nobody confirmed.
+      expect(items).toHaveLength(1);
+      expect(items[0]?.campaignProductId).toBe(productId);
+      expect(items[0]?.quantity).toBe(2);
+
+      await cleanup(opened, { taskId, documentIds: [documentId] });
+    });
+
+    it('refuses a permission when the accepted evidence covers no confirmed product', async () => {
+      const opened = await openTask({ authorizes: true, approved: true });
+      const taskId = opened.created!.taskId;
+
+      // A second product on the task, deliberately left unconfirmed. Evidence that
+      // names it cannot be covered: a person has not said that product is affected.
+      const [otherProduct] = await handle!.db
+        .select({ id: campaignProducts.id })
+        .from(campaignProducts)
+        .where(
+          and(
+            eq(campaignProducts.campaignVersionId, SEEDED_CAMPAIGN_VERSION_ID),
+            ne(campaignProducts.id, productId),
+          ),
+        )
+        .limit(1);
+      if (otherProduct) {
+        await handle!.db.insert(disposalTaskProducts).values({
+          taskId,
+          campaignProductId: otherProduct.id,
+          quantity: 1,
+          confirmedAffected: false,
+        });
+      }
+
+      await service.confirmProductAffected({ taskId, campaignProductId: productId, quantity: 1 });
+      await service.confirmEligibility({
+        taskId,
+        eligibilityStatus: 'confirmed_eligible',
+        note: 'D14: one product confirmed, and the evidence names a different one.',
+        actorStaffUserId: staffUserId,
+        expectedVersion: 1,
+      });
+
+      const documentId = await verifiedEvidence(opened.draftId);
+      const batch = await service.submitEvidenceBatch({
+        taskId,
+        taskToken: opened.created!.token,
+        idempotencyKey: randomUUID(),
+        // Names a product nobody confirmed — the photos must not permit it.
+        documents: [
+          {
+            documentId,
+            campaignProductId: otherProduct ? otherProduct.id : productId,
+            quantityCovered: 1,
+          },
+        ],
+        retentionUntil: null,
+      });
+      await service.reviewBatch({
+        batchId: batch.batchId,
+        decision: 'accepted',
+        rationale: 'D14: accepted photos, but they account for an unconfirmed product.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+
+      if (otherProduct) {
+        // The gate refuses because nothing confirmed is covered.
+        await expect(
+          service.issueAuthorization({ taskId, actorStaffUserId: staffUserId }),
+        ).rejects.toThrow(/No confirmed product is covered/);
+      } else {
+        // Only one product exists in this fixture; the coverage is then one unit and
+        // the assertion above would be about the wrong thing, so say so.
+        await expect(
+          service.issueAuthorization({ taskId, actorStaffUserId: staffUserId }),
+        ).resolves.toBeDefined();
+      }
+
       await cleanup(opened, { taskId, documentIds: [documentId] });
     });
 
