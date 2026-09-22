@@ -20,6 +20,7 @@ import {
 } from '../../db/schema/index.js';
 import type { PrivateBlobPort } from '../../platform/blob/port.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
+import { consoleSafeLogger } from '../../platform/observability/logger.js';
 import type { EmailTriggerService } from '../communications/email-trigger-service.js';
 import {
   resolveCaseStatusEmail,
@@ -770,24 +771,44 @@ export class DrizzleAdminService implements AdminService {
       .limit(1);
     if (!row) return null;
 
-    const narrative =
-      tier === 'raw'
-        ? await this.crypto.decrypt({
-            value: row.narrativeEncrypted,
-            keyVersion: row.narrativeKeyVersion,
-          })
-        : undefined;
+    // The same key-mismatch hazard as consumer PII: raw-tier detail that cannot
+    // be decrypted degrades to an explicit flag instead of failing the case
+    // view, and is never silently indistinguishable from an incident that has
+    // no narrative at all.
+    let narrative: string | undefined;
+    let injuryDescription: string | undefined;
+    let piiUnreadable = false;
+    if (tier === 'raw') {
+      try {
+        narrative = await this.crypto.decrypt({
+          value: row.narrativeEncrypted,
+          keyVersion: row.narrativeKeyVersion,
+        });
+      } catch {
+        piiUnreadable = true;
+      }
 
-    // The injury description is testimonial detail about a person, so it follows
-    // the narrative's tier rule exactly: decrypted for the raw tier, never sent
-    // to a masked viewer, covered by the same audited raw read.
-    const injuryDescription =
-      tier === 'raw' && row.injuryDescriptionEncrypted && row.injuryDescriptionKeyVersion
-        ? await this.crypto.decrypt({
+      // The injury description is testimonial detail about a person, so it
+      // follows the narrative's tier rule exactly: decrypted for the raw tier,
+      // never sent to a masked viewer, covered by the same audited raw read.
+      if (row.injuryDescriptionEncrypted && row.injuryDescriptionKeyVersion) {
+        try {
+          injuryDescription = await this.crypto.decrypt({
             value: row.injuryDescriptionEncrypted,
             keyVersion: row.injuryDescriptionKeyVersion,
-          })
-        : undefined;
+          });
+        } catch {
+          piiUnreadable = true;
+        }
+      }
+
+      if (piiUnreadable) {
+        consoleSafeLogger.error('Stored incident narrative could not be decrypted', {
+          caseId,
+          errorCode: 'pii_decrypt_failed',
+        });
+      }
+    }
 
     return {
       id: row.id,
@@ -812,6 +833,7 @@ export class DrizzleAdminService implements AdminService {
         : null,
       ...(narrative !== undefined ? { narrative } : {}),
       ...(injuryDescription !== undefined ? { injuryDescription } : {}),
+      ...(piiUnreadable ? { piiUnavailable: true } : {}),
     };
   }
 
@@ -861,24 +883,37 @@ export class DrizzleAdminService implements AdminService {
     row: typeof caseConsumers.$inferSelect,
     tier: 'masked' | 'raw',
   ): Promise<CaseDetailConsumer> {
-    const firstName = await this.crypto.decrypt({
-      value: row.firstNameEncrypted,
-      keyVersion: row.keyVersion,
-    });
-    const lastName = await this.crypto.decrypt({
-      value: row.lastNameEncrypted,
-      keyVersion: row.keyVersion,
-    });
-    const email = await this.crypto.decrypt({
-      value: row.emailEncrypted,
-      keyVersion: row.keyVersion,
-    });
-    const phone = row.phoneEncrypted
-      ? await this.crypto.decrypt({ value: row.phoneEncrypted, keyVersion: row.keyVersion })
-      : undefined;
-    const address = row.addressEncrypted
-      ? await this.crypto.decrypt({ value: row.addressEncrypted, keyVersion: row.keyVersion })
-      : undefined;
+    // One key covers every field of the row, so an authentication failure is
+    // never partial — the whole record is unreadable. That happens when a key
+    // is rotated without a backfill, or when another environment writing to the
+    // same database holds a different key. It must degrade to an explicit
+    // "unreadable" answer: failing the request would take down the whole case
+    // view over one row, and rendering blanks would read as "the consumer left
+    // this empty". The ciphertext is never echoed back.
+    let unreadable = false;
+    const read = async (value: string | null): Promise<string | undefined> => {
+      if (!value) return undefined;
+      try {
+        return await this.crypto.decrypt({ value, keyVersion: row.keyVersion });
+      } catch {
+        unreadable = true;
+        return undefined;
+      }
+    };
+    const firstName = await read(row.firstNameEncrypted);
+    const lastName = await read(row.lastNameEncrypted);
+    const email = await read(row.emailEncrypted);
+    const phone = await read(row.phoneEncrypted);
+    const address = await read(row.addressEncrypted);
+
+    if (unreadable) {
+      consoleSafeLogger.error('Stored case consumer PII could not be decrypted', {
+        caseId: row.caseId,
+        errorCode: 'pii_decrypt_failed',
+      });
+      return { piiTier: tier, piiUnavailable: true };
+    }
+
     let parsedAddress: Record<string, unknown> | undefined;
     if (address) {
       try {
@@ -901,9 +936,9 @@ export class DrizzleAdminService implements AdminService {
     }
     return {
       piiTier: 'masked',
-      firstName: maskName(firstName),
-      lastName: maskName(lastName),
-      email: maskEmail(email),
+      firstName: firstName ? maskName(firstName) : undefined,
+      lastName: lastName ? maskName(lastName) : undefined,
+      email: email ? maskEmail(email) : undefined,
       phone: phone ? maskPhone(phone) : undefined,
       countryCode: row.countryCode,
       address: maskAddress(parsedAddress) as unknown as Record<string, unknown>,

@@ -96,6 +96,13 @@ export type PiiTier = 'masked' | 'raw';
 /** The masked shape for a consumer field in a case detail view. */
 export interface CaseDetailConsumer {
   piiTier: PiiTier;
+  /**
+   * The stored row exists but its ciphertext did not authenticate with the
+   * configured key, so nothing could be read from it. Deliberately distinct
+   * from the fields being absent: a reviewer must be able to tell "we cannot
+   * read this" apart from "the consumer left it blank".
+   */
+  piiUnavailable?: boolean | undefined;
   firstName?: string | undefined;
   lastName?: string | undefined;
   email?: string | undefined;
@@ -178,6 +185,16 @@ export interface AdminCaseIncident {
    * that writes the `pii.view_raw` audit event). Masked viewers never see it.
    */
   narrative?: string | undefined;
+  /**
+   * Raw-tier injury detail. Same tier rule and audit coverage as `narrative`;
+   * declared here so the shape the API actually returns is the declared one.
+   */
+  injuryDescription?: string | undefined;
+  /**
+   * True when raw-tier narrative or injury detail could not be decrypted, so
+   * the raw view is incomplete rather than the incident simply having none.
+   */
+  piiUnavailable?: boolean | undefined;
 }
 
 /** Incident operations row: one incident joined to its case and review gate. */
