@@ -109,6 +109,43 @@ covered by D06, which was checked separately. D03's skip path needs the five-ste
 walk in the browser; the flow's session deliberately does not persist consumer identity
 (`ClaimFlowSessionSnapshot`), so the consumer form has to be filled by hand.
 
+## What the feature still lacks
+
+Four gaps were found by reading for them, and one of them turned out not to exist.
+Each is a missing capability, not a broken one — the acceptance matrix above is about
+criteria, this is about what a consumer or an operator still cannot do.
+
+**A review outcome never reaches the consumer.** The confirmation email is the only
+disposal-related message in the system; there is no path that mails an acceptance, a
+resubmission request, a permission, or a closure. Evidence review is asynchronous by
+design (D18), so after submitting photos the consumer has to return and press _Refresh
+status_ to learn anything. Closing this has a design constraint worth stating: the task
+token is stored only as a hash, so **no later message can reconstruct the resume link**
+the confirmation email carries — it exists only in memory at submission time. The
+choices are to send no link and point at the original email (whose link is valid for 90
+days and which already says to keep it), or to rotate a new token, which invalidates the
+one already sent because `disposal_tasks.token_hash` holds a single value. The first is
+the smaller and safer of the two.
+
+**An exception declaration asks for a follow-up nothing surfaces.** The consumer page
+promises _our team follows up_ when a statement is recorded, and D20 shows the statement
+is stored faithfully — but no admin surface lists the tasks that ended that way, and the
+task is closed, so it leaves every work queue.
+
+**The evidence retention period has no operator surface.** It is a configured default,
+and the business value is still one of the open questions below. (Distinct from the
+`incident_evidence_retention` hold reason, which is a pause and does have a UI.)
+
+**Locally there is no blob storage.** Composition wires
+`NotImplementedPrivateBlobAdapter`, so a real upload answers 501 and photo evidence can
+only be exercised by writing verified rows directly. That is why the browser runs above
+submitted claims with their evidence already verified.
+
+Creating a new instruction version is **not** on this list: the console can do it
+(`createDisposalInstruction`, used from the content library page). A first version of
+this note claimed otherwise on the strength of a search for the service method name
+rather than the client wrapper — recorded here because a wrong gap is worse than no gap.
+
 ## What this means for §7.3
 
 The P0 slice — D01–D08, D12–D16, D25–D29 — is proven at the service layer and, for the
