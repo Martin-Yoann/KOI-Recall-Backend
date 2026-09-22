@@ -35,6 +35,7 @@ import {
   type CreateInstructionVersionInput,
   type DisposalQueueRowView,
   type DisposalService,
+  type DisposalBatchForAdmin,
   type EvidenceDocumentSummary,
   type InstructionVersionSummary,
   type RecordInstructionApprovalInput,
@@ -280,6 +281,55 @@ export class DrizzleDisposalService implements DisposalService {
    * upload shown on this page means the same thing as an upload shown on the claim
    * form.
    */
+  async getLatestBatchForAdmin(taskId: string): Promise<DisposalBatchForAdmin | null> {
+    const db = this.handle.db;
+    const [batch] = await db
+      .select({
+        id: disposalEvidenceBatches.id,
+        batchNumber: disposalEvidenceBatches.batchNumber,
+        reviewStatus: disposalEvidenceBatches.reviewStatus,
+        submittedAt: disposalEvidenceBatches.submittedAt,
+      })
+      .from(disposalEvidenceBatches)
+      .where(eq(disposalEvidenceBatches.taskId, taskId))
+      .orderBy(desc(disposalEvidenceBatches.batchNumber))
+      .limit(1);
+    if (!batch) return null;
+
+    const rows = await db
+      .select({
+        documentId: disposalEvidenceBatchDocuments.documentId,
+        fileName: documentUploads.originalFileName,
+        uploadStatus: documentUploads.uploadStatus,
+        scanStatus: documentUploads.scanStatus,
+        expiresAt: documentUploads.expiresAt,
+      })
+      .from(disposalEvidenceBatchDocuments)
+      .innerJoin(documentUploads, eq(documentUploads.id, disposalEvidenceBatchDocuments.documentId))
+      .where(eq(disposalEvidenceBatchDocuments.batchId, batch.id));
+
+    const now = new Date();
+    return {
+      id: batch.id,
+      batchNumber: batch.batchNumber,
+      reviewStatus: batch.reviewStatus,
+      submittedAt: batch.submittedAt.toISOString(),
+      documents: rows.map((row) => {
+        const derived = deriveDocumentStatus(
+          row.uploadStatus as ListedUploadStatus,
+          row.scanStatus,
+          row.expiresAt.getTime() <= now.getTime(),
+        );
+        return {
+          documentId: row.documentId,
+          fileName: row.fileName,
+          status: derived.status,
+          statusReason: derived.statusReason,
+        };
+      }),
+    };
+  }
+
   async listEvidenceDocuments(
     taskId: string,
     taskToken: string,

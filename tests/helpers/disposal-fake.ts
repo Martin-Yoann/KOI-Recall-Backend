@@ -17,6 +17,7 @@ export function makeDisposalFake(): DisposalService {
     getTaskForAdmin: () => Promise.resolve(null),
     confirmEligibility: refuse('confirmEligibility'),
     assertCanUploadEvidence: refuse('assertCanUploadEvidence'),
+    getLatestBatchForAdmin: () => Promise.resolve(null),
     listEvidenceDocuments: () => Promise.resolve([]),
     confirmProductAffected: refuse('confirmProductAffected'),
     submitEvidenceBatch: refuse('submitEvidenceBatch'),

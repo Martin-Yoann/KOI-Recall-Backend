@@ -225,6 +225,26 @@ export interface EvidenceDocumentSummary {
 export type DocumentStatusValue =
   'uploading' | 'verifying' | 'verified' | 'scan_pending' | 'rejected' | 'expired';
 
+/**
+ * The newest evidence batch, with the documents a reviewer must look at.
+ *
+ * A review decision needs the photos, and the task read only carried the batch
+ * id and status — enough to know something is waiting, not enough to decide it.
+ * Access URLs are not included: the per-document endpoint already resolves those
+ * and audits the read.
+ */
+export interface DisposalBatchForAdmin {
+  id: string;
+  batchNumber: number;
+  reviewStatus: DisposalBatchReviewStatus;
+  submittedAt: string;
+  documents: Array<{
+    documentId: string;
+    fileName: string;
+    status: DocumentStatusValue;
+    statusReason: 'mime_mismatch' | 'malware_detected' | null;
+  }>;
+}
 export interface DisposalService {
   /**
    * Opens a task at claim submission, or returns null when disposal does not
@@ -286,6 +306,9 @@ export interface DisposalService {
    * Deliberately the same six-state vocabulary as the claim form, so a consumer
    * sees one consistent story about an upload across both surfaces.
    */
+  /** The newest batch with its documents, for the review decision. */
+  getLatestBatchForAdmin(taskId: string): Promise<DisposalBatchForAdmin | null>;
+
   listEvidenceDocuments(taskId: string, taskToken: string): Promise<EvidenceDocumentSummary[]>;
 
   submitEvidenceBatch(
