@@ -228,6 +228,46 @@ async function setupTemplates() {
       }),
     },
     {
+      /**
+       * Sent when a decision lands on the disposal step: photos accepted, photos
+       * sent back, or a permission issued. It carries no link on purpose — the
+       * task credential exists only as a hash, so it cannot be rebuilt here, and
+       * rotating a fresh one would invalidate the link the confirmation email
+       * already told the consumer to keep. The body points back at that email.
+       */
+      templateKey: 'disposal_update',
+      locale: 'en-US',
+      version: 1,
+      subject: 'An update on the disposal step for {{caseReference}}',
+      htmlBody: shell({
+        preheader: 'There is a change on the product-disposal step of your claim.',
+        kicker: 'Disposal update',
+        kickerColor: INFO,
+        title: 'An update on your disposal step',
+        body:
+          para('{{updateSection}}') +
+          facts([{ label: 'Case reference', value: '{{caseReference}}' }]) +
+          para(
+            'To see the current state of this step, open the link in the email we sent when you filed this claim. That link is still the only way back to it, so please keep that message.',
+            true,
+          ) +
+          para('This step is separate from your remedy. It does not change what you are owed.'),
+      }),
+      textBody: text({
+        title: 'An update on your disposal step',
+        lines: [
+          '{{updateSection}}',
+          '',
+          'Case reference: {{caseReference}}',
+          '',
+          'To see the current state of this step, open the link in the email we sent when you filed this claim.',
+          'That link is still the only way back to it, so please keep that message.',
+          '',
+          'This step is separate from your remedy. It does not change what you are owed.',
+        ],
+      }),
+    },
+    {
       templateKey: 'need_info',
       locale: 'en-US',
       version: 4,
