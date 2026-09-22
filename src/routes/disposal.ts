@@ -184,10 +184,16 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     // Admin read: the visitor token is not held by staff, so eligibility, the
     // policy snapshot and the products are assembled from the same policy the
     // consumer surface uses.
-    const detail = await requireDisposalService(registry).getTaskForAdmin(taskId);
+    const service = requireDisposalService(registry);
+    const detail = await service.getTaskForAdmin(taskId);
     if (!detail) return notFound(context, 'Disposal task');
+    // The batch comes along because a review decision needs the photos: the task
+    // alone says something is waiting, not what to look at. Access URLs stay out —
+    // the per-document endpoint mints and audits those.
+    const latestBatch = await service.getLatestBatchForAdmin(taskId);
     return context.json(
       {
+        latestBatch,
         task: {
           ...detail.task,
           policyState: undefined,
