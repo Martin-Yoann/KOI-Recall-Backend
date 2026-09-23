@@ -106,8 +106,12 @@ browser run can reach: the blob adapter is the not-implemented stub, so a real u
 answers 501, and the in-app browser cannot drive a file input. Claims were therefore
 submitted with their evidence rows already technically verified — the upload _UI_ is
 covered by D06, which was checked separately. D03's skip path needs the five-step claim
-walk in the browser; the flow's session deliberately does not persist consumer identity
-(`ClaimFlowSessionSnapshot`), so the consumer form has to be filled by hand.
+walk in the browser, and that walk cannot be shortened by pre-seeding the session:
+`ClaimFlowSessionSnapshot` deliberately omits consumer identity, so a session written
+straight into sessionStorage has nothing to submit with and the form has to be filled by
+hand. Only the evidence step can be bypassed — by uploading for the draft and writing the
+resulting receipts into the session — because that step is the one the in-app browser
+cannot drive at all.
 
 ## What the feature still lacks
 
