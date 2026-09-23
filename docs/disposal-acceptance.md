@@ -175,6 +175,27 @@ must be filled by hand); D23's screen-reader half has no way to be exercised her
 depends on a content pack that does not exist; and E2, E3 and E4 are deployment,
 rehearsal and business prerequisites rather than code. None of those is a known defect.
 
+## Before deploying any of this
+
+E2 is not a push. Three things have to happen against the production database, and two of
+them are not part of the deploy, in this order:
+
+1. **Apply the migrations.** Vercel does not run them; `0021` adds `app_settings`, which the
+   retention endpoints read.
+2. **Install the template library** (`src/scripts/setup-templates.ts`). This one is a hazard
+   rather than a chore: `notifyConsumer` resolves `disposal_update` through
+   `getLatestTemplateVersionId`, which **throws** when a key has no version — and it is
+   called inside `reviewBatch`'s transaction. Deploy the notification code without the
+   template and evidence review fails for every task that has a case, rather than sending
+   no notification. That contradicts the rule the rest of the wiring follows, that a
+   notification is never the reason an operator's action fails, and it should be fixed
+   before the first deploy rather than after.
+3. **Then deploy the three apps.**
+
+What this cannot tell you: `.vercel/.env.production.local` redacts `DATABASE_URL` as
+`[SENSITIVE]`, so which database production points at is not knowable from the repository —
+including whether it is the same Neon database that local work has been writing to.
+
 ## Prerequisites this matrix cannot resolve
 
 Real enablement is blocked on the business side, not here: the approval material that
