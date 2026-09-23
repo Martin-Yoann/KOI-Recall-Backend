@@ -141,6 +141,16 @@ and the business value is still one of the open questions below. (Distinct from 
 only be exercised by writing verified rows directly. That is why the browser runs above
 submitted claims with their evidence already verified.
 
+Closing that is a two-sided change, which is worth knowing before starting it. A server
+adapter implementing `PrivateBlobPort` over the local filesystem is the obvious half and
+is needed either way, but it is not sufficient: the browser uploads through `put()` from
+`@vercel/blob/client` (`claim-flow.ts` and `disposal-evidence.ts`), which performs the
+transfer itself. `handleUploadUrl` is configurable, but that is only the route that mints
+the token — the destination of the transfer is the SDK's own. Whether that destination can
+be redirected is unconfirmed, so the choice is between a development-only client branch
+that uploads to a local endpoint, or routing the app's uploads through our own endpoint in
+every environment. Deciding that first avoids writing the server half twice.
+
 Creating a new instruction version is **not** on this list: the console can do it
 (`createDisposalInstruction`, used from the content library page). A first version of
 this note claimed otherwise on the strength of a search for the service method name
