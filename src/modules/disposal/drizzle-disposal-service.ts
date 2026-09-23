@@ -22,7 +22,12 @@ import {
   appSettings,
   recallCases,
 } from '../../db/schema/index.js';
-import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
+import { consoleSafeLogger } from '../../platform/observability/logger.js';
+import {
+  ClaimValidationError,
+  EmailTemplateMissingError,
+  ResourceNotFoundError,
+} from '../../shared/errors.js';
 import {
   deriveDocumentStatus,
   LISTED_UPLOAD_STATUSES,
@@ -124,7 +129,23 @@ export class DrizzleDisposalService implements DisposalService {
       .limit(1);
     if (!row) return;
 
-    const templateVersionId = await getLatestTemplateVersionId(tx, 'disposal_update', row.locale);
+    let templateVersionId: string;
+    try {
+      templateVersionId = await getLatestTemplateVersionId(tx, 'disposal_update', row.locale);
+    } catch (error) {
+      // A content key with no version is a configuration gap an operator can see
+      // and fix. It must not fail the decision that triggered it: this runs inside
+      // the review's own transaction, so throwing would roll back the review, the
+      // hold or the permission — the record of what a person decided — because a
+      // message could not be composed.
+      if (!(error instanceof EmailTemplateMissingError)) throw error;
+      consoleSafeLogger.error('Disposal notification skipped: no template version', {
+        caseId: row.caseId,
+        errorCode: 'email_template_missing',
+      });
+      return;
+    }
+
     await this.notifications.queue(tx, {
       caseId: row.caseId,
       templateVersionId,
