@@ -131,10 +131,12 @@ days and which already says to keep it), or to rotate a new token, which invalid
 one already sent because `disposal_tasks.token_hash` holds a single value. The first is
 the smaller and safer of the two.
 
-**An exception declaration asks for a follow-up nothing surfaces.** The consumer page
-promises _our team follows up_ when a statement is recorded, and D20 shows the statement
-is stored faithfully — but no admin surface lists the tasks that ended that way, and the
-task is closed, so it leaves every work queue.
+**An exception declaration's follow-up is now surfaced.** The consumer page promises
+_our team follows up_ when a statement is recorded, and D20 shows the statement is stored
+faithfully. The disposal queue carries the kind of statement and the consumer's own words,
+and a filter narrows it to those rows — verified in a browser by putting one open task and
+one statement-closed task in the queue: the filter left the statement row and dropped the
+open one, and cleared again when untoggled.
 
 **The evidence retention period has no operator surface.** It is a configured default,
 and the business value is still one of the open questions below. (Distinct from the
