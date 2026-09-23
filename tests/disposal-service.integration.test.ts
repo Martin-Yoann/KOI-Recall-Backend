@@ -1,14 +1,17 @@
+import { assertLocalIntegrationDatabase } from './helpers/db-guard.js';
 // Opt-in integration test for the disposal service's hard gates.
 // Runs only when RUN_DB_INTEGRATION=true AND DATABASE_URL is set.
 import 'dotenv/config';
 
 import { randomUUID } from 'node:crypto';
 
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, like, ne } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
 import {
+  caseConsumers,
+  caseEvents,
   campaignProducts,
   campaignVersions,
   claimDrafts,
@@ -23,15 +26,28 @@ import {
   disposalTasks,
   disposalTaskProducts,
   documentUploads,
+  communications,
+  outboxEvents,
+  recallCases,
   staffUsers,
 } from '../src/db/schema/index.js';
+import { DrizzleCommunicationQueueService } from '../src/modules/communications/queue-service.js';
 import { DrizzleDisposalService } from '../src/modules/disposal/drizzle-disposal-service.js';
+import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 import { evaluateDisposal } from '../src/modules/disposal/policy.js';
 
 const enabled = process.env.RUN_DB_INTEGRATION === 'true' && Boolean(process.env.DATABASE_URL);
+
+assertLocalIntegrationDatabase(process.env.DATABASE_URL);
 const handle: DatabaseHandle | null = enabled
   ? createDatabase(process.env.DATABASE_URL as string)
   : null;
+
+/** Only used to write a readable-looking consumer row for the notification test. */
+const crypto = new NodeSensitiveDataCrypto(
+  Buffer.alloc(32, 1).toString('base64'),
+  Buffer.alloc(32, 2).toString('base64'),
+);
 
 const SEEDED_CAMPAIGN_ID = '2bdac8b0-73d8-4e38-a7e2-98fd5608788a';
 const SEEDED_CAMPAIGN_VERSION_ID = '85eafab1-a5bd-4d57-a697-38bce973deab';
@@ -48,7 +64,12 @@ describe.skipIf(!enabled)(
     let productId: string;
 
     beforeAll(async () => {
-      service = new DrizzleDisposalService({ handle: handle! });
+      // The queue is injected so the notification paths are exercised rather
+      // than short-circuited by their own 'no queue means nobody asked' guard.
+      service = new DrizzleDisposalService({
+        handle: handle!,
+        notifications: new DrizzleCommunicationQueueService(),
+      });
       const [staff] = await handle!.db.select({ id: staffUsers.id }).from(staffUsers).limit(1);
       const [product] = await handle!.db
         .select({ id: campaignProducts.id })
@@ -1067,6 +1088,79 @@ describe.skipIf(!enabled)(
       expect(declaration).toBeDefined();
 
       await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
+
+    // Exception declaration notification test: recording an exception enqueues
+    // an update notifying the consumer, without carrying a token link.
+    it('enqueues a notification when an exception declaration is recorded', async () => {
+      const opened = await openForFirstSubmission();
+
+      // notifyConsumer only writes when the task has a case: a draft-only task
+      // has no consumer to write to. Attaching a real case is what makes this
+      // test prove the exception actually reaches the consumer.
+      const [caseRow] = await handle!.db
+        .insert(recallCases)
+        .values({
+          publicReference: `KOI-TEST-${randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`,
+          campaignId: SEEDED_CAMPAIGN_ID,
+          campaignVersionId: opened.campaignVersionId,
+          locale: 'en-US',
+        })
+        .returning({ id: recallCases.id });
+      const encryptedEmail = await crypto.encrypt('exception-run@example.com');
+      const encryptedAddress = await crypto.encrypt(JSON.stringify({ line1: '1 Way' }));
+      await handle!.db.insert(caseConsumers).values({
+        caseId: caseRow!.id,
+        keyVersion: encryptedEmail.keyVersion,
+        firstNameEncrypted: (await crypto.encrypt('Exception')).value,
+        lastNameEncrypted: (await crypto.encrypt('Run')).value,
+        emailEncrypted: encryptedEmail.value,
+        emailLookupHash: await crypto.lookupHash('exception-run@example.com'),
+        addressEncrypted: encryptedAddress.value,
+        addressLookupHash: await crypto.lookupHash('1 Way'),
+      });
+      await handle!.db
+        .update(disposalTasks)
+        .set({ caseId: caseRow!.id })
+        .where(eq(disposalTasks.id, opened.taskId));
+
+      await service.recordDeclaration({
+        taskId: opened.taskId,
+        taskToken: opened.created!.token,
+        declarationTextVersion: 'integration-v1',
+        exceptionType: 'already_disposed_before_authorization',
+        exceptionNote: 'Disposed of at the local recycling center.',
+      });
+
+      const notifications = await handle!.db
+        .select({
+          eventType: outboxEvents.eventType,
+          deduplicationKey: outboxEvents.deduplicationKey,
+          payload: outboxEvents.payload,
+        })
+        .from(outboxEvents)
+        .where(
+          and(
+            eq(outboxEvents.eventType, 'disposal.exception.recorded'),
+            like(outboxEvents.deduplicationKey, `disposal-exception:${opened.taskId}`),
+          ),
+        );
+
+      expect(notifications).toHaveLength(1);
+      expect(notifications[0]!.deduplicationKey).toBe(`disposal-exception:${opened.taskId}`);
+      const serialized = JSON.stringify(notifications[0]!.payload);
+      expect(serialized).not.toContain('#token=');
+      expect(serialized).toContain('already disposed of');
+
+      // Everything the notification wrote hangs off the case, so it all goes
+      // before the case itself.
+      await handle!.db.delete(communications).where(eq(communications.caseId, caseRow!.id));
+      await handle!.db.delete(outboxEvents).where(eq(outboxEvents.aggregateId, caseRow!.id));
+      await handle!.db.delete(caseEvents).where(eq(caseEvents.caseId, caseRow!.id));
+      await handle!.db.delete(caseConsumers).where(eq(caseConsumers.caseId, caseRow!.id));
+      await handle!.db.delete(recallCases).where(eq(recallCases.id, caseRow!.id));
+      // Cleanup last: it removes the campaign version the case referenced.
+      await cleanup(opened, { taskId: opened.taskId });
     });
   },
 );

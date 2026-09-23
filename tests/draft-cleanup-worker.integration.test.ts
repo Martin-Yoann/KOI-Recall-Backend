@@ -1,3 +1,4 @@
+import { assertLocalIntegrationDatabase } from './helpers/db-guard.js';
 // Opt-in integration test for the draft cleanup path.
 // Runs only when RUN_DB_INTEGRATION=true AND DATABASE_URL is set.
 import 'dotenv/config';
@@ -26,6 +27,8 @@ import type {
 } from '../src/platform/blob/port.js';
 
 const enabled = process.env.RUN_DB_INTEGRATION === 'true' && Boolean(process.env.DATABASE_URL);
+
+assertLocalIntegrationDatabase(process.env.DATABASE_URL);
 const handle: DatabaseHandle | null = enabled
   ? createDatabase(process.env.DATABASE_URL as string)
   : null;

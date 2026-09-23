@@ -367,5 +367,10 @@ export interface DisposalService {
   listInstructionVersions(campaignVersionId?: string): Promise<InstructionVersionSummary[]>;
 
   /** Admin queue: tasks awaiting a person, newest first. */
+  /** Reads the active retention period in days, falling back to the service default. */
+  getRetentionDays(): Promise<number | null>;
+  /** Updates or clears the evidence retention period override in the database. */
+  setRetentionDays(days: number | null): Promise<void>;
+
   listQueue(filter?: { limit?: number }): Promise<DisposalQueueRowView[]>;
 }

@@ -564,4 +564,37 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     });
     return context.json({ suspendedAuthorizations: suspended }, 200);
   });
+
+  // ---- retention config ----------------------------------------------------
+
+  app.get('/admin/disposal/retention', async (context) => {
+    const guard = await requirePermission(context, registry, 'disposal.review');
+    if (guard instanceof Response) return guard;
+    const days = await requireDisposalService(registry).getRetentionDays();
+    return context.json({ retentionDays: days }, 200);
+  });
+
+  app.patch('/admin/disposal/retention', async (context) => {
+    const guard = await requirePermission(context, registry, 'disposal.hold.manage');
+    if (guard instanceof Response) return guard;
+    const body = await bodyRecord(context);
+    const daysRaw = body.retentionDays;
+    const days = daysRaw === null ? null : asNumber(daysRaw);
+    if (days !== null && (days === undefined || days < 0)) {
+      return validationError(context, 'retentionDays must be a non-negative integer or null.');
+    }
+    const audit = requireAuditService(registry);
+    const service = requireDisposalService(registry);
+    await service.setRetentionDays(days ?? null);
+    await audit.record({
+      actorUserId: guard.userId,
+      actorRole: guard.role,
+      action: 'disposal.retention.update',
+      resourceType: 'disposal',
+      resourceId: 'retention-config',
+      outcome: 'success',
+      metadata: { retentionDays: days ?? null },
+    });
+    return context.json({ retentionDays: days ?? null }, 200);
+  });
 }

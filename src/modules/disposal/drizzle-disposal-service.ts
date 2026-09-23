@@ -19,6 +19,7 @@ import {
   disposalTaskProducts,
   caseConsumers,
   documentUploads,
+  appSettings,
   recallCases,
 } from '../../db/schema/index.js';
 import { ClaimValidationError, ResourceNotFoundError } from '../../shared/errors.js';
@@ -839,6 +840,16 @@ export class DrizzleDisposalService implements DisposalService {
         exceptionNote: input.exceptionNote ?? null,
         declarationTextVersion: input.declarationTextVersion,
       });
+
+      await this.notifyConsumer(
+        tx,
+        record.id,
+        'disposal.exception.recorded',
+        `disposal-exception:${record.id}`,
+        input.exceptionType
+          ? 'We recorded your statement that the product was already disposed of, or that the photos could not be taken. Your note has reached our team, who will follow up if anything else is needed.'
+          : 'We recorded that you disposed of the product. Your note has reached our team, who will follow up if anything else is needed.',
+      );
       await tx
         .update(disposalTasks)
         .set({ status: 'completed', version: record.version + 1, updatedAt: new Date() })
@@ -1370,6 +1381,32 @@ export class DrizzleDisposalService implements DisposalService {
       caseId: row.caseId,
       policyState,
     };
+  }
+
+  async getRetentionDays(): Promise<number | null> {
+    const [row] = await this.handle.db
+      .select({ value: appSettings.value })
+      .from(appSettings)
+      .where(eq(appSettings.key, 'evidence_retention_days'))
+      .limit(1);
+    if (!row) return this.evidenceRetentionDays;
+    const parsed = Number.parseInt(row.value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  async setRetentionDays(days: number | null): Promise<void> {
+    const db = this.handle.db;
+    if (days === null || isNaN(days)) {
+      await db.delete(appSettings).where(eq(appSettings.key, 'evidence_retention_days'));
+    } else {
+      await db
+        .insert(appSettings)
+        .values({ key: 'evidence_retention_days', value: String(days) })
+        .onConflictDoUpdate({
+          target: appSettings.key,
+          set: { value: String(days), updatedAt: new Date() },
+        });
+    }
   }
 }
 

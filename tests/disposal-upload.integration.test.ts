@@ -1,3 +1,4 @@
+import { assertLocalIntegrationDatabase } from './helpers/db-guard.js';
 // Opt-in integration test for the task-scoped evidence upload path.
 // Runs only when RUN_DB_INTEGRATION=true AND DATABASE_URL is set.
 //
@@ -28,6 +29,8 @@ import { DrizzleDisposalService } from '../src/modules/disposal/drizzle-disposal
 import { VerificationRequiredBlob } from './helpers/verification-blob.js';
 
 const enabled = process.env.RUN_DB_INTEGRATION === 'true' && Boolean(process.env.DATABASE_URL);
+
+assertLocalIntegrationDatabase(process.env.DATABASE_URL);
 const handle: DatabaseHandle | null = enabled
   ? createDatabase(process.env.DATABASE_URL as string)
   : null;

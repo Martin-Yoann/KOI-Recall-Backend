@@ -32,5 +32,7 @@ export function makeDisposalFake(): DisposalService {
     publishInstructionVersion: refuse('publishInstructionVersion'),
     listInstructionVersions: () => Promise.resolve([]),
     listQueue: () => Promise.resolve([]),
+    getRetentionDays: () => Promise.resolve(null),
+    setRetentionDays: refuse('setRetentionDays'),
   };
 }

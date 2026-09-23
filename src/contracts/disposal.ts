@@ -115,6 +115,10 @@ export const disposalQueueRowSchema = z
     holdActive: z.boolean(),
     blockingReasons: z.array(z.string()),
     productCount: z.number().int().nonnegative(),
+    exceptionType: z
+      .enum(['already_disposed_before_authorization', 'evidence_unavailable', 'other'])
+      .nullable(),
+    exceptionNote: z.string().nullable(),
     createdAt: isoDateTime,
   })
   .openapi('DisposalQueueRow');

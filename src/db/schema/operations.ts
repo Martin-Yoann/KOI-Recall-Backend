@@ -178,3 +178,9 @@ export const webhookEvents = pgTable(
     index('webhook_events_status_received_idx').on(table.status, table.receivedAt),
   ],
 );
+
+export const appSettings = pgTable('app_settings', {
+  key: varchar('key', { length: 60 }).primaryKey(),
+  value: text('value').notNull(),
+  ...timestamps,
+});
