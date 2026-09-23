@@ -1092,6 +1092,8 @@ export class DrizzleDisposalService implements DisposalService {
         createdAt: disposalTasks.createdAt,
         instructionVersionNumber: disposalInstructionVersions.versionNumber,
         instructionStatus: disposalInstructionVersions.status,
+        exceptionType: disposalDeclarations.exceptionType,
+        exceptionNote: disposalDeclarations.exceptionNote,
         authorizingCount: sql<number>`(
           select count(*)::int from ${disposalInstructionApprovals}
           where ${disposalInstructionApprovals.instructionVersionId} = ${disposalTasks.instructionVersionId}
@@ -1105,6 +1107,7 @@ export class DrizzleDisposalService implements DisposalService {
         eq(disposalInstructionVersions.id, disposalTasks.instructionVersionId),
       )
       .leftJoin(recallCases, eq(recallCases.id, disposalTasks.caseId))
+      .leftJoin(disposalDeclarations, eq(disposalDeclarations.taskId, disposalTasks.id))
       .orderBy(desc(disposalTasks.createdAt))
       .limit(filter.limit ?? 100);
     if (rows.length === 0) return [];
@@ -1170,6 +1173,8 @@ export class DrizzleDisposalService implements DisposalService {
         holdActive,
         blockingReasons: evaluateDisposal(policyState).blockingReasons,
         productCount: productCountByTask.get(row.taskId) ?? 0,
+        exceptionType: row.exceptionType ?? null,
+        exceptionNote: row.exceptionNote ?? null,
         createdAt: row.createdAt.toISOString(),
       };
     });

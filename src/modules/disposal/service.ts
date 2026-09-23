@@ -198,6 +198,13 @@ export interface DisposalQueueRowView {
   holdActive: boolean;
   blockingReasons: string[];
   productCount: number;
+  /**
+   * Set when the consumer closed this step with a statement instead of photos.
+   * The task is complete and leaves every work queue, so this is what puts it in
+   * front of an operator who has to follow it up.
+   */
+  exceptionType: 'already_disposed_before_authorization' | 'evidence_unavailable' | 'other' | null;
+  exceptionNote: string | null;
   createdAt: string;
 }
 
