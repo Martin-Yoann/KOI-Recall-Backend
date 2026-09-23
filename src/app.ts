@@ -24,6 +24,7 @@ import { registerCampaignRoutes } from './routes/campaigns.js';
 import { registerCaseStatusLookupRoutes } from './routes/case-status-lookups.js';
 import { registerClaimRoutes } from './routes/claims.js';
 import { registerConsumerAuthRoutes } from './routes/consumer-auth.js';
+import { registerDevBlobRoutes } from './routes/dev-blobs.js';
 import { registerDisposalRoutes } from './routes/disposal.js';
 import { registerDocumentRoutes } from './routes/documents.js';
 import { notImplementedJobHandler, registerInternalJobRoutes } from './routes/internal-jobs.js';
@@ -172,6 +173,8 @@ export function createApp(dependencies: AppDependencies = {}) {
   registerConsumerAuthRoutes(app);
   registerCaseStatusLookupRoutes(app, registry);
   registerDisposalRoutes(app, registry);
+  // Registers itself only when the filesystem adapter is the configured store.
+  registerDevBlobRoutes(app, registry);
   registerInternalJobRoutes(app, config.CRON_SECRET, {
     drainOutbox: registry.jobs?.drainOutbox ?? notImplementedJobHandler('Outbox processing'),
     cleanupDrafts: registry.jobs?.cleanupDrafts ?? notImplementedJobHandler('Draft cleanup'),

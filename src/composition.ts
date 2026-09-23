@@ -33,6 +33,7 @@ import { DrizzleDraftCleanupWorker } from './jobs/draft-cleanup-worker.js';
 import { DrizzleOutboxWorker } from './jobs/drizzle-outbox-worker.js';
 import type { DraftCleanupResult } from './routes/internal-jobs.js';
 import type { OutboxJobResult } from './jobs/outbox.js';
+import { LocalFilesystemBlobAdapter } from './platform/blob/local-filesystem.js';
 import { NotImplementedPrivateBlobAdapter } from './platform/blob/not-implemented.js';
 import type { PrivateBlobPort } from './platform/blob/port.js';
 import { VercelBlobAdapter } from './platform/blob/vercel-blob.js';
@@ -312,6 +313,13 @@ function validateDatabaseUrl(databaseUrl: string): void {
  * the not-implemented stub keeps blob operations at 501 rather than crashing.
  */
 function createBlobAdapter(config: AppConfig): PrivateBlobPort {
+  // Explicitly naming a local directory is what selects the filesystem adapter.
+  // Without it nothing changes, so no existing environment behaves differently
+  // because this exists — and a deployment that never sets LOCAL_BLOB_DIR cannot
+  // reach it.
+  const localBlobDir = process.env.LOCAL_BLOB_DIR;
+  if (localBlobDir) return new LocalFilesystemBlobAdapter({ root: localBlobDir });
+
   const onVercel = process.env.VERCEL === '1';
   if (!config.BLOB_READ_WRITE_TOKEN && !onVercel) return new NotImplementedPrivateBlobAdapter();
   // An empty callback URL signals local dev where Vercel cannot reach the host;
