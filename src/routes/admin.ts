@@ -1040,8 +1040,14 @@ export function registerAdminRoutes(
     const legacyReviewerId = asString(body.reviewerId);
     const rationaleValue = asString(body.rationale) ?? '';
     const reviewerId = context.get('legacyAdminKey') ? (legacyReviewerId ?? '') : guard.userId;
+    // Anything that is not one of the two decisions is refused. This used to fall
+    // through to 'filed', so a typo — or a missing field — closed a safety review as
+    // filed with no CPSC reference and no intent to file.
+    if (outcome !== 'filed' && outcome !== 'documented_non_reportable') {
+      return validationError(context, "outcome must be 'filed' or 'documented_non_reportable'.");
+    }
     const input = {
-      outcome: outcome === 'documented_non_reportable' ? 'documented_non_reportable' : 'filed',
+      outcome,
       // Staff sessions use the resolved principal; legacy M2 preserves the old body contract.
       reviewerId,
       rationale: rationaleValue,

@@ -112,6 +112,28 @@ describe('admin routes (T8/O10)', () => {
     expect(csv).toContain('KOI-7N4Q-A91M2X6P');
   });
 
+  it('refuses an outcome that is not one of the two decisions', async () => {
+    const spy = makeAuditSpy();
+    const response = await appWith(admin, spy.service).request(
+      '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
+      {
+        method: 'POST',
+        headers: { Authorization: 'Bearer admin-secret' },
+        body: JSON.stringify({
+          outcome: 'Reportable',
+          reviewerId: '00000000-0000-4000-8000-000000000002',
+          rationale: 'Verified the incident report and filed with CPSC.',
+          cpscReference: 'CPSC-2026-001',
+        }),
+      },
+    );
+
+    // 'Reportable' is not a decision this endpoint records, and it used to be closed
+    // as 'filed' — a safety review recorded as filed with no intent to file.
+    expect(response.status).toBe(422);
+    expect(spy.inputs).toHaveLength(0);
+  });
+
   it('closes a reportability review with the admin key', async () => {
     const spy = makeAuditSpy();
     const response = await appWith(admin, spy.service).request(
