@@ -13,6 +13,7 @@ import {
 } from 'drizzle-orm/pg-core';
 
 import { recallCases } from './claims.js';
+import { staffUsers } from './staff.js';
 
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -106,6 +107,72 @@ export const reportabilityReviews = pgTable(
     check(
       'reportability_reviews_filed_chk',
       sql`${table.status} <> 'filed' or (${table.cpscReference} is not null and ${table.filedAt} is not null)`,
+    ),
+  ],
+);
+
+/**
+ * Why a case needed more than the standard path.
+ *
+ * Deliberately separate from `incidents.event_types`. An incident can report an
+ * `ingestion` that has nothing to do with a battery, and a case can be escalated to
+ * legal or the media with no incident at all — so reading one vocabulary as the other
+ * would turn "a child swallowed a piece of candy" into "a battery was ingested". These
+ * are the categories a case is escalated *under*, not the events a claim reported.
+ */
+export const caseEscalationCategoryEnum = pgEnum('case_escalation_category', [
+  'injury',
+  'battery_ingestion',
+  'legal',
+  'regulator',
+  'media',
+  'other',
+]);
+
+/**
+ * One escalation of a case, opened and closed by people.
+ *
+ * Append-only in the sense that matters: closing sets fields, nothing is deleted, so the
+ * record of why a case left the standard path survives whatever happened afterwards.
+ * An open escalation is one with no `closed_at`.
+ */
+export const caseEscalations = pgTable(
+  'case_escalations',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    caseId: uuid('case_id')
+      .notNull()
+      .references(() => recallCases.id, { onDelete: 'cascade' }),
+    /** The reportability review this rests on, when it rests on one. */
+    reviewId: uuid('review_id').references(() => reportabilityReviews.id, {
+      onDelete: 'restrict',
+    }),
+    category: caseEscalationCategoryEnum('category').notNull(),
+    reason: text('reason').notNull(),
+    openedByStaffUserId: uuid('opened_by_staff_user_id').references(() => staffUsers.id, {
+      onDelete: 'set null',
+    }),
+    openedAt: timestamp('opened_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+    closedByStaffUserId: uuid('closed_by_staff_user_id').references(() => staffUsers.id, {
+      onDelete: 'set null',
+    }),
+    closedAt: timestamp('closed_at', { withTimezone: true, mode: 'date' }),
+    /**
+     * What closed it: a filing receipt, a decision letter, a regulator reference. Held
+     * as text rather than a pointer because the artefact lives outside this system.
+     */
+    closureEvidence: text('closure_evidence'),
+    ...timestamps,
+  },
+  (table) => [
+    index('case_escalations_open_idx').on(table.caseId, table.closedAt),
+    check('case_escalations_reason_chk', sql`char_length(${table.reason}) >= 10`),
+    // A closure records when, who and what together, or none of them. A closed
+    // escalation with nothing behind it is an unexplained gap in a safety record.
+    check(
+      'case_escalations_closure_chk',
+      sql`(${table.closedAt} is null and ${table.closedByStaffUserId} is null and ${table.closureEvidence} is null)
+          or (${table.closedAt} is not null and ${table.closedByStaffUserId} is not null and ${table.closureEvidence} is not null)`,
     ),
   ],
 );
