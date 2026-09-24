@@ -78,6 +78,43 @@ export interface CaseListPage {
   nextCursor: string | null;
 }
 
+/**
+ * Why a case is escalated. Separate from `incidents.event_types` on purpose — an
+ * incident can report an ingestion with nothing battery-related about it, and a case can
+ * go to legal with no incident at all.
+ */
+export type CaseEscalationCategory =
+  'injury' | 'battery_ingestion' | 'legal' | 'regulator' | 'media' | 'other';
+
+/** One escalation of a case: why it left the standard path, and what closed it. */
+export interface CaseEscalationRow {
+  id: string;
+  category: CaseEscalationCategory;
+  reason: string;
+  openedAt: string;
+  openedByStaffUserId: string | null;
+  closedAt: string | null;
+  closedByStaffUserId: string | null;
+  closureEvidence: string | null;
+  reviewId: string | null;
+}
+
+export interface OpenCaseEscalationInput {
+  caseReference: string;
+  category: CaseEscalationCategory;
+  reason: string;
+  /** The reportability review it rests on, when it rests on one. */
+  reviewId?: string;
+  actorStaffUserId: string;
+}
+
+export interface CloseCaseEscalationInput {
+  escalationId: string;
+  /** What closed it: a receipt, a decision letter, a regulator reference. */
+  closureEvidence: string;
+  actorStaffUserId: string;
+}
+
 export interface CloseReportabilityReviewInput {
   outcome: 'filed' | 'documented_non_reportable';
   reviewerId: string;
@@ -393,6 +430,13 @@ export interface AdminService {
     /** ADMIN may bypass workflow transition preconditions. */
     bypassWorkflow?: boolean,
   ): Promise<void>;
+
+  /** A case's escalations, open first. */
+  listCaseEscalations(caseReference: string): Promise<CaseEscalationRow[]>;
+  /** Opens an escalation. Refuses a reason too short to explain anything. */
+  openCaseEscalation(input: OpenCaseEscalationInput): Promise<{ escalationId: string }>;
+  /** Closes an escalation, recording what closed it. */
+  closeCaseEscalation(input: CloseCaseEscalationInput): Promise<void>;
 
   /**
    * Mints short-lived access URLs for one evidence file of a case, verifying

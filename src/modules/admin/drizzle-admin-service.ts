@@ -67,6 +67,11 @@ import {
   parseCaseListCursor,
   parseIncidentCursor,
 } from './service.js';
+import type {
+  CaseEscalationRow,
+  CloseCaseEscalationInput,
+  OpenCaseEscalationInput,
+} from './service.js';
 
 /**
  * Statuses that put a case in each operational queue. `incident` is special:
@@ -948,6 +953,82 @@ export class DrizzleAdminService implements AdminService {
       countryCode: row.countryCode,
       address: maskAddress(parsedAddress) as unknown as Record<string, unknown>,
     };
+  }
+
+  async listCaseEscalations(caseReference: string): Promise<CaseEscalationRow[]> {
+    const caseId = await this.caseIdForReference(caseReference);
+    const rows = await this.db
+      .select({
+        id: caseEscalations.id,
+        category: caseEscalations.category,
+        reason: caseEscalations.reason,
+        openedAt: caseEscalations.openedAt,
+        openedByStaffUserId: caseEscalations.openedByStaffUserId,
+        closedAt: caseEscalations.closedAt,
+        closedByStaffUserId: caseEscalations.closedByStaffUserId,
+        closureEvidence: caseEscalations.closureEvidence,
+        reviewId: caseEscalations.reviewId,
+      })
+      .from(caseEscalations)
+      .where(eq(caseEscalations.caseId, caseId))
+      // Open first, then most recent: the ones that block a closure are the ones a
+      // reader needs to see.
+      .orderBy(asc(caseEscalations.closedAt), desc(caseEscalations.openedAt));
+    return rows.map((row) => ({
+      id: row.id,
+      category: row.category,
+      reason: row.reason,
+      openedAt: row.openedAt.toISOString(),
+      openedByStaffUserId: row.openedByStaffUserId ?? null,
+      closedAt: row.closedAt ? row.closedAt.toISOString() : null,
+      closedByStaffUserId: row.closedByStaffUserId ?? null,
+      closureEvidence: row.closureEvidence ?? null,
+      reviewId: row.reviewId ?? null,
+    }));
+  }
+
+  async openCaseEscalation(input: OpenCaseEscalationInput): Promise<{ escalationId: string }> {
+    const reason = input.reason.trim();
+    if (reason.length < 10) {
+      throw new ClaimValidationError('An escalation reason of at least 10 characters is required.');
+    }
+    const caseId = await this.caseIdForReference(input.caseReference);
+    const [row] = await this.db
+      .insert(caseEscalations)
+      .values({
+        caseId,
+        category: input.category,
+        reason,
+        ...(input.reviewId ? { reviewId: input.reviewId } : {}),
+        openedByStaffUserId: input.actorStaffUserId,
+      })
+      .returning({ id: caseEscalations.id });
+    return { escalationId: row!.id };
+  }
+
+  async closeCaseEscalation(input: CloseCaseEscalationInput): Promise<void> {
+    const evidence = input.closureEvidence.trim();
+    if (evidence.length < 10) {
+      throw new ClaimValidationError(
+        'What closed this escalation must be recorded in at least 10 characters.',
+      );
+    }
+    // The predicate carries the "still open" condition rather than reading first and
+    // writing after: two closers racing would otherwise both succeed, the second
+    // overwriting who closed it and on what.
+    const closed = await this.db
+      .update(caseEscalations)
+      .set({
+        closedAt: new Date(),
+        closedByStaffUserId: input.actorStaffUserId,
+        closureEvidence: evidence,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(caseEscalations.id, input.escalationId), isNull(caseEscalations.closedAt)))
+      .returning({ id: caseEscalations.id });
+    if (closed.length === 0) {
+      throw new ClaimValidationError('This escalation is not open, or does not exist.');
+    }
   }
 
   async approveResolution(

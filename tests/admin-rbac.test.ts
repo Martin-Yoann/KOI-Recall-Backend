@@ -217,6 +217,13 @@ function makeAdminFake(): AdminService & { detailTierByRef: Map<string, 'masked'
       };
     },
     async assignCase() {},
+    async listCaseEscalations() {
+      return [];
+    },
+    async openCaseEscalation() {
+      return { escalationId: 'escalation-1' };
+    },
+    async closeCaseEscalation() {},
     async transitionCaseStatus() {},
   };
 }

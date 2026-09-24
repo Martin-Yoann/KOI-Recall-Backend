@@ -66,6 +66,9 @@ const summary = {
 };
 
 const admin: AdminService = {
+  listCaseEscalations: () => Promise.resolve([]),
+  openCaseEscalation: () => Promise.resolve({ escalationId: 'escalation-1' }),
+  closeCaseEscalation: () => Promise.resolve(),
   listCases: () => Promise.resolve({ cases: [summary], total: 1, nextCursor: null }),
   listIncidents: () => Promise.resolve({ incidents: [], total: 0, nextCursor: null }),
   getIncidentDetail: () => Promise.resolve(null),
