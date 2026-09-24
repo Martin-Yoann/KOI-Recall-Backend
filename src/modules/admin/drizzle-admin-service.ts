@@ -96,6 +96,33 @@ const QUEUE_STATUS: Record<AdminQueue, readonly CaseStatus[]> = {
 const TERMINAL_STATUSES: readonly CaseStatus[] = ['closed', 'rejected', 'duplicate', 'withdrawn'];
 
 /**
+ * The widest gap between two civil dates is 26 hours (UTC+14 to UTC-12), so a
+ * filing date that far ahead can still be "today" for the operator who recorded
+ * it. Anything beyond that is a date that has not happened yet.
+ */
+const FILED_AT_FUTURE_TOLERANCE_MS = 26 * 60 * 60 * 1000;
+
+/**
+ * Turns the operator's filing date into a timestamp. Exported so the boundary is
+ * tested directly rather than only through a database round trip.
+ */
+export function parseFiledAt(value: string | undefined): Date {
+  if (!value || value.trim().length === 0) {
+    throw new ClaimValidationError(
+      'filedAt is required when closing as filed: the date the filing was actually made.',
+    );
+  }
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw new ClaimValidationError('filedAt must be an ISO 8601 date.');
+  }
+  if (parsed.getTime() > Date.now() + FILED_AT_FUTURE_TOLERANCE_MS) {
+    throw new ClaimValidationError('filedAt cannot be in the future.');
+  }
+  return parsed;
+}
+
+/**
  * Constructor dependencies for {@link DrizzleAdminService}. Grouped so the
  * optional capabilities are named at every construction site instead of
  * positional holes (`undefined, emailTrigger, ...`).
@@ -559,8 +586,27 @@ export class DrizzleAdminService implements AdminService {
     if (input.rationale.trim().length < 10) {
       throw new ClaimValidationError('A rationale of at least 10 characters is required.');
     }
+    if (
+      input.outcome === 'filed' &&
+      (!input.filingEvidence || input.filingEvidence.trim().length < 10)
+    ) {
+      throw new ClaimValidationError(
+        'filingEvidence of at least 10 characters is required when closing as filed: what the filing rests on.',
+      );
+    }
+    if (input.outcome !== 'filed' && (input.filedAt || input.filingEvidence)) {
+      // A filing date or a filing receipt on a review that decided not to file is a
+      // contradiction: one of the two is wrong, and a silent ignore would store the
+      // half that was meant while discarding the half that was not.
+      throw new ClaimValidationError(
+        'A review closed as documented_non_reportable cannot carry filedAt or filingEvidence.',
+      );
+    }
 
+    const filedAt = input.outcome === 'filed' ? parseFiledAt(input.filedAt) : null;
     const rationale = await this.crypto.encrypt(input.rationale);
+    const filingEvidence =
+      input.outcome === 'filed' ? await this.crypto.encrypt(input.filingEvidence ?? '') : null;
     await db
       .update(reportabilityReviews)
       .set({
@@ -569,7 +615,11 @@ export class DrizzleAdminService implements AdminService {
         rationaleEncrypted: rationale.value,
         decisionAt: new Date(),
         ...(input.outcome === 'filed'
-          ? { cpscReference: input.cpscReference, filedAt: new Date() }
+          ? {
+              cpscReference: input.cpscReference,
+              filedAt,
+              filingEvidenceEncrypted: filingEvidence?.value,
+            }
           : {}),
       })
       .where(eq(reportabilityReviews.id, reviewId));

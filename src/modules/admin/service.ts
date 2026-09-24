@@ -121,6 +121,19 @@ export interface CloseReportabilityReviewInput {
   rationale: string;
   /** Required when outcome = filed. */
   cpscReference?: string;
+  /**
+   * The date the filing was actually made, ISO 8601, supplied by the operator.
+   * Required when outcome = filed: when this row is written is a different fact,
+   * and it is already recorded as `decisionAt`. A filing entered a week after the
+   * fact must not read as having been made on the day someone typed it in.
+   */
+  filedAt?: string;
+  /**
+   * What the filing rests on — the receipt, the acknowledgement, the submission
+   * confirmation. Required when outcome = filed, encrypted at rest, and write-only
+   * for now, exactly like `rationale`.
+   */
+  filingEvidence?: string;
 }
 
 /**
@@ -400,9 +413,10 @@ export interface AdminService {
   exportCases(): Promise<AdminCaseSummary[]>;
 
   /**
-   * Closes a reportability review: pending -> filed (requires cpscReference)
-   * or documented_non_reportable. The decision is recorded with the reviewer
-   * id and rationale, satisfying the reportability obligation gate.
+   * Closes a reportability review: pending -> filed (requires cpscReference, the
+   * operator-supplied `filedAt`, and `filingEvidence`) or documented_non_reportable.
+   * The decision is recorded with the reviewer id and rationale, satisfying the
+   * reportability obligation gate.
    */
   closeReportabilityReview(reviewId: string, input: CloseReportabilityReviewInput): Promise<void>;
 

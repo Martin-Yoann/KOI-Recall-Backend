@@ -94,7 +94,21 @@ export const reportabilityReviews = pgTable(
     rationaleEncrypted: text('rationale_encrypted'),
     decisionAt: timestamp('decision_at', { withTimezone: true, mode: 'date' }),
     cpscReference: varchar('cpsc_reference', { length: 160 }),
+    /**
+     * The date the filing was actually made — supplied by the operator, NOT the
+     * moment this row was written. `decisionAt` already carries the latter, so
+     * the two mean different things and both are kept: a filing recorded a week
+     * late must not read as having been filed that day.
+     */
     filedAt: timestamp('filed_at', { withTimezone: true, mode: 'date' }),
+    /**
+     * What the filing rests on: the receipt, the acknowledgement, the submission
+     * confirmation. Encrypted at rest, and — like `rationaleEncrypted` —
+     * write-only: no read path returns it yet. Who may read a filing receipt is a
+     * role question the structured report has to answer first, and inventing a
+     * PII tier for it here would decide that by accident.
+     */
+    filingEvidenceEncrypted: text('filing_evidence_encrypted'),
     ...timestamps,
   },
   (table) => [
@@ -106,7 +120,7 @@ export const reportabilityReviews = pgTable(
     ),
     check(
       'reportability_reviews_filed_chk',
-      sql`${table.status} <> 'filed' or (${table.cpscReference} is not null and ${table.filedAt} is not null)`,
+      sql`${table.status} <> 'filed' or (${table.cpscReference} is not null and ${table.filedAt} is not null and ${table.filingEvidenceEncrypted} is not null)`,
     ),
   ],
 );

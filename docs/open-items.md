@@ -86,3 +86,35 @@ totalCases: 34            既有真实数据，未受影响
      （已改为写 60 秒 / 读 10 秒）
 - **集成测试库守卫**：未显式设置 `ALLOW_REMOTE_INTEGRATION_TESTS=true` 时，拒绝对非本地
   库运行集成测试 —— 因为本仓库的 `DATABASE_URL` 就是生产库。
+
+---
+
+## 审查结案的实质依据（reportability ・ 2026-09-24）
+
+`filed` 过去只要求一个 `cpscReference`，`filed_at` 由服务器时钟填入。于是"实报日期"其实是
+"某人按下按钮的日期"：一笔迟到一周才补录的实报，读起来像当天报的；除了一串引用号，也没有
+任何东西记录这次实报依据什么。规格要求 Filed 记录实质依据，改成了：
+
+- **`filedAt` 由操作人填写**（ISO 8601；拒绝未来日期，但允许 26 小时时差——UTC+14 到
+  UTC−12 之间，操作人那一天仍然可能是"今天"）。落库的是操作人给的日期，不是 `new Date()`。
+  服务器时钟本来就有它的位置：`decisionAt`。两者含义不同，所以两者都留。
+- **新增 `filing_evidence_encrypted`**（迁移 0024）：回执、确认函、提交凭证。加密落库，与
+  `rationale` 同一套 AES-256-GCM 信封，并且**只写**——当前没有任何读路径返回它。谁能读一份
+  实报回执是角色问题，属于 P1-B 结构化报告的设计范围；在这里顺手给新字段定一个 PII 层级，
+  等于替那个决定做了选择。
+- 服务端在缺任一项时拒绝（不代填）。管理端两个入口（案件详情、事故队列）已改为把这两件事
+  问出来，而不是让服务端替操作人补一个日期。
+- `scripts/seed-test-data.ts` 同步补上它自己编造的那份回执。
+
+**验证**：隔离测试库已应用迁移 0024（列存在；约束 `convalidated = false`；迁移计数 24）。
+`tests/reportability-filing.integration.test.ts` 直接绕过服务层写表，证明**新写入仍被约束
+拒绝**，补齐回执后同一更新被接受——即 NOT VALID 只豁免历史行。单元层 11 项另见
+`tests/reportability-filing.test.ts`。
+
+**尚未闭环（不要当成已完成）**：
+
+1. 约束是 `NOT VALID`。既有的 `filed` 行没有回执也不可能有了——该列此前不存在，为几个月前
+   做出的安全决定补造依据就是捏造。要让它们也纳入约束，需要人工按原始卷宗回填，然后显式执行
+   `ALTER TABLE reportability_reviews VALIDATE CONSTRAINT reportability_reviews_filed_chk;`
+   在那之前，历史行的状态是"已知不合规但被豁免"，不是"合规"。
+2. 回执写入后只能从数据库读，接口上不可见（原因见上）。

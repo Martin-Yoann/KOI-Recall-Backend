@@ -1066,6 +1066,14 @@ async function main() {
         cpscReference:
           reviewStatus === 'filed' ? `CPSC-FILE-2026-${String(1000 + i).padStart(3, '0')}` : null,
         filedAt: reviewStatus === 'filed' ? new Date(c.submittedAt.getTime() + 3 * DAY) : null,
+        // A filed review must carry what the filing rests on, so the seed supplies the
+        // receipt it invented along with the reference.
+        filingEvidenceEncrypted:
+          reviewStatus === 'filed'
+            ? await encryptNarrative(
+                `Submission receipt CPSC-FILE-2026-${String(1000 + i).padStart(3, '0')}, kept with the filing folder for this incident.`,
+              )
+            : null,
       })
       .onConflictDoNothing();
 

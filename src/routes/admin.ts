@@ -1146,6 +1146,10 @@ export function registerAdminRoutes(
     const outcome = asString(body.outcome);
     const legacyReviewerId = asString(body.reviewerId);
     const rationaleValue = asString(body.rationale) ?? '';
+    // The filing date and its receipt material. Both are the operator's facts, not
+    // the server's, and neither is filled in for them — see CloseReportabilityReviewInput.
+    const filedAt = asString(body.filedAt);
+    const filingEvidence = asString(body.filingEvidence);
     const reviewerId = context.get('legacyAdminKey') ? (legacyReviewerId ?? '') : guard.userId;
     // Anything that is not one of the two decisions is refused. This used to fall
     // through to 'filed', so a typo — or a missing field — closed a safety review as
@@ -1159,6 +1163,8 @@ export function registerAdminRoutes(
       reviewerId,
       rationale: rationaleValue,
       ...(cpscReference ? { cpscReference } : {}),
+      ...(filedAt ? { filedAt } : {}),
+      ...(filingEvidence ? { filingEvidence } : {}),
     } as const;
     if (context.get('legacyAdminKey')) {
       // This branch used to close a review with no audit row and no transaction,
@@ -1176,7 +1182,12 @@ export function registerAdminRoutes(
           resourceType: 'review',
           resourceId: reviewId,
           outcome: 'success',
-          metadata: { outcome, via: 'legacy_admin_key', assertedReviewerId: reviewerId },
+          metadata: {
+            outcome,
+            via: 'legacy_admin_key',
+            assertedReviewerId: reviewerId,
+            ...(filedAt ? { filedAt } : {}),
+          },
         });
       });
       return context.body(null, 204);
@@ -1190,7 +1201,9 @@ export function registerAdminRoutes(
         resourceType: 'review',
         resourceId: reviewId,
         outcome: 'success',
-        metadata: { outcome },
+        // The filing date is a compliance fact every internal role may see; the receipt
+        // material is not, so it stays on the review row and out of the audit trail.
+        metadata: { outcome, ...(filedAt ? { filedAt } : {}) },
       });
     });
     return context.body(null, 204);
