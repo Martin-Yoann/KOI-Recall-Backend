@@ -1031,6 +1031,112 @@ export function registerAdminRoutes(
   });
   // ---- Reportability review close (review.close) ----
 
+  // ---- case escalations ----------------------------------------------------
+  //
+  // Guarded by `review.close`: opening or closing an escalation is a compliance act —
+  // the categories include legal, a regulator and the media — and that is already the
+  // compliance-only permission. Widening the closed permission set for this would be a
+  // larger change than the act warrants; a dedicated permission is a reasonable
+  // follow-up. Deliberately no `allowLegacy`: the legacy key predates escalations and
+  // should not acquire a new surface through this.
+
+  const ESCALATION_CATEGORIES = [
+    'injury',
+    'battery_ingestion',
+    'legal',
+    'regulator',
+    'media',
+    'other',
+  ] as const;
+
+  app.get('/admin/cases/:caseRef/escalations', async (context) => {
+    const guard = await requirePermission(context, registry, 'review.close');
+    if (guard instanceof Response) return guard;
+    const caseReference = context.req.param('caseRef');
+    const escalations = await requireAdminTransactions(registry).run((services) =>
+      services.admin.listCaseEscalations(caseReference),
+    );
+    return context.json({ escalations }, 200);
+  });
+
+  app.post('/admin/cases/:caseRef/escalations', async (context) => {
+    const guard = await requirePermission(context, registry, 'review.close');
+    if (guard instanceof Response) return guard;
+    const caseReference = context.req.param('caseRef');
+    const body = await bodyRecord(context);
+    const category = asString(body.category);
+    const reason = asString(body.reason)?.trim();
+    const reviewId = asString(body.reviewId);
+
+    if (
+      !category ||
+      !ESCALATION_CATEGORIES.includes(category as (typeof ESCALATION_CATEGORIES)[number])
+    ) {
+      return validationError(
+        context,
+        `category must be one of ${ESCALATION_CATEGORIES.join(', ')}.`,
+      );
+    }
+    if (!reason || reason.length < 10) {
+      return validationError(context, 'A reason of at least 10 characters is required.');
+    }
+
+    const opened = await requireAdminTransactions(registry).run(async (services) => {
+      const created = await services.admin.openCaseEscalation({
+        caseReference,
+        category: category as (typeof ESCALATION_CATEGORIES)[number],
+        reason,
+        ...(reviewId ? { reviewId } : {}),
+        actorStaffUserId: guard.userId,
+      });
+      await services.audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'case.escalation.open',
+        resourceType: 'case',
+        resourceId: caseReference,
+        outcome: 'success',
+        // The category, not the reason: an escalation reason can name counsel, a
+        // regulator or a journalist, and the audit trail is readable by every internal
+        // role. The reason itself lives on the row, where it can be read deliberately.
+        metadata: { category },
+      });
+      return created;
+    });
+    return context.json(opened, 201);
+  });
+
+  app.post('/admin/case-escalations/:id/close', async (context) => {
+    const guard = await requirePermission(context, registry, 'review.close');
+    if (guard instanceof Response) return guard;
+    const escalationId = context.req.param('id');
+    const body = await bodyRecord(context);
+    const closureEvidence = asString(body.closureEvidence)?.trim();
+    if (!closureEvidence || closureEvidence.length < 10) {
+      return validationError(
+        context,
+        'What closed this escalation must be recorded in at least 10 characters.',
+      );
+    }
+
+    await requireAdminTransactions(registry).run(async (services) => {
+      await services.admin.closeCaseEscalation({
+        escalationId,
+        closureEvidence,
+        actorStaffUserId: guard.userId,
+      });
+      await services.audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'case.escalation.close',
+        resourceType: 'case_escalation',
+        resourceId: escalationId,
+        outcome: 'success',
+      });
+    });
+    return context.body(null, 204);
+  });
+
   app.post('/admin/reportability-reviews/:id/close', async (context) => {
     const guard = await requirePermission(context, registry, 'review.close', { allowLegacy: true });
     if (guard instanceof Response) return guard;

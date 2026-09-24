@@ -1108,6 +1108,62 @@ describe('B-end RBAC (ADR-0004)', () => {
   // D16: the console hiding a control is not the enforcement. A role holding none
   // of the disposal permissions is refused by the server on every route, and the
   // refusal is recorded rather than silent.
+  // Case escalations are a compliance act, so they are guarded by `review.close` —
+  // which MANAGER deliberately does not hold. These two cases pin both halves: the
+  // role that may, and the role that may not.
+  it('lets compliance open a case escalation, and records the category', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    await staff.createStaffUser({
+      email: 'compliance@x.com',
+      displayName: 'Compliance',
+      role: 'COMPLIANCE',
+      password: 'password1234',
+    });
+    const token = (await staff.login('compliance@x.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit });
+
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/escalations', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        category: 'legal',
+        reason: 'Counsel asked for the file to be held while they review it.',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+    const opened = audit.events.find((event) => event.action === 'case.escalation.open');
+    expect(opened?.resourceId).toBe('KOI-7N4Q-A91M2X6P');
+    // The category, not the reason: an escalation reason can name counsel, a regulator
+    // or a journalist, and the audit trail is readable by every internal role.
+    expect(opened?.metadata).toEqual({ category: 'legal' });
+  });
+
+  it('refuses an escalation category it does not have, and records nothing', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    await staff.createStaffUser({
+      email: 'compliance@x.com',
+      displayName: 'Compliance',
+      role: 'COMPLIANCE',
+      password: 'password1234',
+    });
+    const token = (await staff.login('compliance@x.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit });
+
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/escalations', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      // The enum is the vocabulary: 'Injury' is not one of the categories, and a near-miss
+      // must be refused rather than stored as something it resembles.
+      body: JSON.stringify({ category: 'Injury', reason: 'Looks like an injury escalation.' }),
+    });
+
+    expect(response.status).toBe(422);
+    expect(audit.events.filter((event) => event.action === 'case.escalation.open')).toHaveLength(0);
+  });
+
   it('refuses every disposal route for a role that holds none of its permissions', async () => {
     const staff = makeStaffFake();
     const audit = makeAuditFake();
