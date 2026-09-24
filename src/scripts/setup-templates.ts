@@ -187,7 +187,7 @@ async function setupTemplates() {
     {
       templateKey: 'claim_confirmation',
       locale: 'en-US',
-      version: 4,
+      version: 5,
       subject: 'We received your recall claim {{caseReference}}',
       htmlBody: shell({
         preheader: 'Your claim is in the queue and needs no action right now.',
