@@ -270,7 +270,9 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       resourceType: 'disposal',
       resourceId: taskId,
       outcome: 'success',
-      metadata: { eligibilityStatus, note },
+      // `note` is on the task row (`eligibility_note`); the audit trail is readable
+      // by every internal role, so the operator's words are not copied into it.
+      metadata: { eligibilityStatus },
     });
     return context.body(null, 204);
   });
@@ -313,7 +315,9 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       resourceType: 'disposal',
       resourceId: batchId,
       outcome: 'success',
-      metadata: { decision, ...(reasonCode ? { reasonCode } : {}), rationale },
+      // The rationale is on the review row, encrypted like every other decision
+      // reason; copying it here would have stored it in the clear.
+      metadata: { decision, ...(reasonCode ? { reasonCode } : {}) },
     });
     return context.body(null, 204);
   });
@@ -373,7 +377,9 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       resourceType: 'disposal',
       resourceId: taskId,
       outcome: 'success',
-      metadata: { reason, note },
+      // `reason` is an enum and stays; `note` is the operator's prose and lives on
+      // the hold row.
+      metadata: { reason },
     });
     return context.body(null, 204);
   });
@@ -401,7 +407,8 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       resourceType: 'disposal',
       resourceId: taskId,
       outcome: 'success',
-      metadata: { note },
+      // The release note lives on the hold row (`release_note`).
+      metadata: {},
     });
     return context.body(null, 204);
   });
@@ -560,7 +567,9 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       resourceType: 'disposal_instruction',
       resourceId: versionId,
       outcome: 'success',
-      metadata: { reason, suspendedAuthorizations: suspended },
+      // The withdrawal reason is on the instruction version; only the count of
+      // suspended authorizations is a fact of the audit trail itself.
+      metadata: { suspendedAuthorizations: suspended },
     });
     return context.json({ suspendedAuthorizations: suspended }, 200);
   });

@@ -1,6 +1,7 @@
 import { and, count, desc, eq, gte, lt, lte, or, sql } from 'drizzle-orm';
 
 import type { DatabaseExecutor } from '../../db/client.js';
+import { sanitizeAuditMetadata } from './audit-metadata.js';
 import { adminAuditEvents } from '../../db/schema/index.js';
 import type {
   AuditEvent,
@@ -29,7 +30,7 @@ export class DrizzleAuditService implements AuditService {
       resourceId: input.resourceId ?? null,
       outcome: input.outcome,
       reasonCode: input.reasonCode ?? null,
-      metadata: input.metadata ?? {},
+      metadata: sanitizeAuditMetadata(input.metadata),
       ipAddressHash: input.ipAddressHash ?? null,
       userAgentHash: input.userAgentHash ?? null,
     });

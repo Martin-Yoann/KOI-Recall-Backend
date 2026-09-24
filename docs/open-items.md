@@ -146,3 +146,37 @@ Received）。开关关闭时，状态判定与改动前**逐字节相同**。
    但含义不同：状态=合规正在看，记录=案件已在某个对外对话里（律师、监管、媒体）。因此结案门禁
    （有未关闭升级记录则不得关案）**不适用于**仅仅状态为 `escalated` 的案子。如果规格的原意是
    "受伤申报也应自动开一条记录并受门禁约束"，那是一处实质改动，请确认。
+
+---
+
+## 审计元数据：把操作人的原话请出去（P1-B D2 前半 ・ 2026-09-24）
+
+规格里那句"现状 `admin_audit_events.metadata` 是无约束 jsonb，且已有多处自由文本进入"是真的，
+而且比预想的多。逐块清点后发现 **7 处把操作人写的整句话写进了这张表**：
+
+| 位置                                | 键                   | 原话现在住在哪里                                  |
+| ----------------------------------- | -------------------- | ------------------------------------------------- |
+| `routes/admin.ts` 案件流转          | `note`（≤2000 字）   | 流转记录（并进消费者的邮件）                      |
+| `routes/disposal.ts` 资格确认       | `note`               | `disposal_tasks.eligibility_note`                 |
+| `routes/disposal.ts` 批次审查       | `rationale`          | `disposal_reviews.rationale`                      |
+| `routes/disposal.ts` 放置 hold      | `note`               | `disposal_holds.note`                             |
+| `routes/disposal.ts` 解除 hold      | `note`               | `disposal_holds.release_note`                     |
+| `routes/disposal.ts` 撤回指引       | `reason`             | `disposal_instruction_versions.withdrawal_reason` |
+| `modules/refund-exports/service.ts` | `purpose`（≤500 字） | `refund_export_batches.purpose`                   |
+
+七处的共同点是：**原话在它自己的记录上已经有一份**，而审计表里那一份是唯一没有读权限把守的
+一份（`admin_audit_events` 每个内部角色都能读）。所以处理方式是"不写第二份"，而不是"加密第二份"
+——信息一点没少，少的是一个所有人都能看的副本。枚举与标识符照旧保留（例如放置 hold 的 `reason`
+是枚举，留下；撤回指引的 `suspendedAuthorizations` 是计数，留下）。
+
+**写入侧新增兜底**（`src/modules/staff/audit-metadata.ts`，接入 `DrizzleAuditService.record`）：
+超过 200 字符的值在落库时被替换为 `[withheld: too long for the audit trail]` —— 留标记而不是静默
+丢弃，审计员看得到"这里有东西被扣下了"，而不是读到一行看起来完整的记录。
+
+**这条兜底的边界要说清楚：它不是散文过滤器。**"Refund issued after counsel confirmed it." 只有
+40 来字符，照样通过。真正把散文挡在外面的是上面那七处不再写它；兜底只拦明显不是值的值（整段、
+整个 dump）。测试里专门留了一条注释说明这一点，避免后来的人误以为有 200 字符上限就安全了。
+
+**尚未闭环**：写入侧的**键**白名单还没做（现在只约束了值的长度）。要做的话应当做成编译期类型
+（`metadata` 的键收成一个联合类型），让新增一个键必须经过一次刻意的修改——这在 21 个调用点上
+都有编译错误，适合单独一次改动，不适合塞进这次。

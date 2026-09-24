@@ -173,7 +173,13 @@ export class RefundExportService {
         resourceType: 'refund_export',
         resourceId: batch.id,
         outcome: 'success',
-        metadata: { rowCount: rows.length, fileSha256: sha256, purpose: input.purpose },
+        metadata: {
+          rowCount: rows.length,
+          fileSha256: sha256,
+          // `purpose` is a sentence the requester wrote and is stored on the batch
+          // row; the audit trail is readable by every internal role, so it is not
+          // copied here.
+        },
       });
       return { batchId: batch.id, rowCount: rows.length, sha256, csv };
     });

@@ -1108,6 +1108,36 @@ describe('B-end RBAC (ADR-0004)', () => {
   // D16: the console hiding a control is not the enforcement. A role holding none
   // of the disposal permissions is refused by the server on every route, and the
   // refusal is recorded rather than silent.
+  // The audit trail is readable by every internal role, so the operator's note about a
+  // case must not be copied into it. The note still reaches the transition record and
+  // the consumer's email; this case is about the copy that has no guard on it.
+  it('keeps the operator note out of the audit trail', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    await staff.createStaffUser({
+      email: 'manager@x.com',
+      displayName: 'Manager',
+      role: 'MANAGER',
+      password: 'password1234',
+    });
+    const token = (await staff.login('manager@x.com', 'password1234'))!.token;
+    const app = appWith({ admin: makeAdminFake(), staff, audit });
+
+    const response = await app.request('/admin/cases/KOI-7N4Q-A91M2X6P/status', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        status: 'under_review',
+        note: 'Consumer called to say the replacement arrived and asked us to close the file.',
+      }),
+    });
+
+    expect(response.status).toBe(204);
+    const event = audit.events.find((entry) => entry.action === 'case.status.transition');
+    expect(event?.metadata.nextStatus).toBe('under_review');
+    expect(event?.metadata).not.toHaveProperty('note');
+  });
+
   // Case escalations are a compliance act, so they are guarded by `review.close` —
   // which MANAGER deliberately does not hold. These two cases pin both halves: the
   // role that may, and the role that may not.

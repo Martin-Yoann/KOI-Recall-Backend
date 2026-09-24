@@ -819,7 +819,10 @@ export function registerAdminRoutes(
         metadata: {
           nextStatus: body.status,
           ...(guard.role === 'ADMIN' ? { forced: true } : {}),
-          ...(trimmedNote ? { note: trimmedNote } : {}),
+          // The note itself is not repeated here. It is stored on the transition
+          // record and appears in the consumer's email; `admin_audit_events` is
+          // readable by every internal role, so a second copy there would be the one
+          // copy with no guard on it.
         },
       });
     });
