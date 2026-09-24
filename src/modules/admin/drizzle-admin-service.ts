@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt, notInArray, or, sql, count } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, lt, notInArray, or, sql } from 'drizzle-orm';
 
 import { evaluate } from '../workflow/policy.js';
 
@@ -7,6 +7,7 @@ import {
   adminAuditEvents,
   campaignLocalizations,
   campaignVersions,
+  caseEscalations,
   caseConsumers,
   caseEvents,
   caseResolutions,
@@ -1136,6 +1137,23 @@ export class DrizzleAdminService implements AdminService {
     //    available (the review row simply remains pending against a closed-lite
     //    case, which is visible in the compliance queue).
     //  - A case with no incident needs no review, so standard cases close freely.
+    // Escalation gate — outside the bypass for the same reason as the gate above.
+    // An open escalation means the case is with legal, a regulator or the media;
+    // closing it would take it back out of that conversation, and no role may do that
+    // by force any more than it may close over an open safety review.
+    if (nextStatus === 'closed') {
+      const openEscalations = await db
+        .select({ id: caseEscalations.id })
+        .from(caseEscalations)
+        .where(and(eq(caseEscalations.caseId, caseRow.id), isNull(caseEscalations.closedAt)))
+        .limit(1);
+      if (openEscalations.length > 0) {
+        throw new ClaimValidationError(
+          'This case cannot be closed while it has an open escalation. Close the escalation first, recording what closed it.',
+        );
+      }
+    }
+
     if (nextStatus === 'closed' && incident) {
       if (!incidentReview) {
         throw new ClaimValidationError(

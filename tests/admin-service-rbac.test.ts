@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Database } from '../src/db/client.js';
+import { caseEscalations } from '../src/db/schema/index.js';
 import { DrizzleAdminService } from '../src/modules/admin/drizzle-admin-service.js';
 import type { SensitiveDataCryptoPort } from '../src/platform/crypto/port.js';
 
@@ -397,15 +398,21 @@ function createTransitionFakeDb(
 ): Database {
   const fallback = openCaseRow('submitted');
   const nextRow = () => (selectRows.length > 0 ? selectRows.shift() : fallback);
-  const resolved = () => Promise.resolve([nextRow()]);
   return {
     select: () => ({
-      from: () => ({
-        where: () => ({
-          for: () => ({ limit: resolved }),
-          limit: resolved,
-        }),
-      }),
+      // The fake answers the case row to every query unless the table says otherwise.
+      // The closure gate asks a second question — open escalations for this case — and
+      // has to be answered with none of them, which is the state these tests mean to
+      // start from. Without this the gate sees the case row and refuses every closure.
+      from: (table?: unknown) => {
+        const resolved = () => Promise.resolve(table === caseEscalations ? [] : [nextRow()]);
+        return {
+          where: () => ({
+            for: () => ({ limit: resolved }),
+            limit: resolved,
+          }),
+        };
+      },
     }),
     update: () => ({
       set: () => ({ where: () => Promise.resolve() }),
