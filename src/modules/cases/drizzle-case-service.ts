@@ -128,6 +128,8 @@ export class DrizzleCaseService implements CaseService {
   private readonly beforeIdempotencyInsert: () => Promise<void>;
   private readonly malwareScanRequired: boolean;
   private readonly incidentStrictValidation: boolean;
+  /** Phase 2 of the escalation rollout; see INCIDENT_ESCALATED_STATUS. */
+  private readonly incidentEscalatedStatus: boolean;
   private readonly disposal: DisposalService | undefined;
   private readonly consumerWebBaseUrl: string;
   private readonly notifications: CommunicationQueueService | undefined;
@@ -141,12 +143,14 @@ export class DrizzleCaseService implements CaseService {
     malwareScanRequired = false,
     notifications?: CommunicationQueueService,
     incidentStrictValidation = false,
+    incidentEscalatedStatus = false,
     disposal?: DisposalService,
     consumerWebBaseUrl = DEFAULT_CONSUMER_WEB_BASE_URL,
   ) {
     this.handle = handle;
     this.crypto = crypto;
     this.notifications = notifications;
+    this.incidentEscalatedStatus = incidentEscalatedStatus;
     // The fallback resolution service must fire approval emails the same way
     // the injected one does, so build it on the same queue.
     const emailTrigger = notifications ? new EmailTriggerService(notifications) : undefined;
@@ -414,11 +418,19 @@ export class DrizzleCaseService implements CaseService {
       }
 
       const hasIncident = command.body.incidentAnswer !== 'no';
+      // Precedence matters here, and product verification outranks escalation: a case
+      // whose product is not verified yet cannot be worked by compliance, and an
+      // `unsure` answer is the consumer saying they cannot confirm the product — which
+      // is exactly triage's job. So an incident reaches `escalated` only when its
+      // products are already verified. With the phase-2 switch off this is byte for
+      // byte the previous rule.
       const caseStatus =
         command.body.incidentAnswer === 'unsure' ||
         productEvaluations.some(({ evaluation }) => evaluation.result !== 'potential_match')
           ? 'triage'
-          : 'submitted';
+          : this.incidentEscalatedStatus && hasIncident
+            ? 'escalated'
+            : 'submitted';
 
       const caseId = randomUUID();
       let caseReference: string | undefined;

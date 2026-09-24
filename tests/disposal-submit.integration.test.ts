@@ -89,6 +89,7 @@ describe.skipIf(!enabled)('disposal task creation on submission', { timeout: 120
       false,
       queue,
       false,
+      false, // INCIDENT_ESCALATED_STATUS: phase 2 is off in this suite.
       disposal,
     );
   });

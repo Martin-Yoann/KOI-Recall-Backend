@@ -32,6 +32,18 @@ const environmentSchema = z.object({
     .default('false')
     .transform((value) => value === 'true'),
   /**
+   * Phase 2 of the escalation rollout: when true, a submission that reports an
+   * incident starts in `escalated` instead of `submitted`. Off by default, because
+   * phase 1 — every read path understanding the new value — has to be deployed
+   * before anything writes it. Flipping this is the whole switch; flipping it back
+   * is a complete rollback, since the status is a parallel of `submitted` and the
+   * consumer-facing projection is identical.
+   */
+  INCIDENT_ESCALATED_STATUS: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((value) => value === 'true'),
+  /**
    * How long disposal evidence is retained after review. Unset (the default)
    * means no configured expiry: evidence an operator still has to look at is never
    * on the ordinary 48-hour upload clock. The business names this period; until

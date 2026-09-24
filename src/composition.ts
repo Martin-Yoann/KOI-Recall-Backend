@@ -180,6 +180,9 @@ export function createApplicationRegistry(
   // Stage 3 of the structured-incident rollout; off by default so a deployed
   // backend never starts rejecting payloads an older web app still sends.
   incidentStrictValidation = false,
+  // Phase 2 of the escalation rollout: off by default so a deployed backend never
+  // writes a status value older readers have not been taught yet.
+  incidentEscalatedStatus = false,
   /** Disposal evidence retention in days; null keeps evidence until released. */
   evidenceRetentionDays: number | null = null,
 ): ApplicationRegistry {
@@ -212,6 +215,7 @@ export function createApplicationRegistry(
               malwareScanRequired,
               communicationQueue,
               incidentStrictValidation,
+              incidentEscalatedStatus,
               disposalService,
               consumerWebBaseUrl,
             ),
@@ -359,6 +363,7 @@ export function createDefaultRegistry(config: AppConfig): ApplicationRegistry {
     config.CONSUMER_WEB_BASE_URL,
     createCacheInvalidator(config),
     config.INCIDENT_STRICT_VALIDATION,
+    config.INCIDENT_ESCALATED_STATUS,
     config.DISPOSAL_EVIDENCE_RETENTION_DAYS ?? null,
   );
 }

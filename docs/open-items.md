@@ -118,3 +118,31 @@ totalCases: 34            既有真实数据，未受影响
    `ALTER TABLE reportability_reviews VALIDATE CONSTRAINT reportability_reviews_filed_chk;`
    在那之前，历史行的状态是"已知不合规但被豁免"，不是"合规"。
 2. 回执写入后只能从数据库读，接口上不可见（原因见上）。
+
+---
+
+## 提交自动进入 `escalated`（P0-B 第二阶段 ・ 2026-09-24）
+
+第一阶段让所有读路径都认识 `escalated`；没有任何东西写它。第二阶段是这次写入，放在开关
+`INCIDENT_ESCALATED_STATUS` 之后，**默认关闭**——因为"读路径已部署"是它的前提，而在一个仓库
+一次 push 的结构里，把这个前提写成默认值比记在某人的脑子里可靠。打开是配置改动，关回去是
+完整回滚：`escalated` 是 `submitted` 的平行态，面向消费者的投影与它完全相同（都映射为
+Received）。开关关闭时，状态判定与改动前**逐字节相同**。
+
+**接线证据**（`tests/incident-escalation.integration.test.ts`，隔离库）：同一份受伤申报，
+开关开 → `escalated` + `injury_hazard` + 审查 pending；开关关 → `submitted` + 审查 pending；
+开关开但 `incidentAnswer='no'` → `submitted` + `standard` + 无事故、无审查。三条一起才证明
+是**开关**在起作用，而不是"受伤申报本来就这样"。
+
+### 两处与规格字面不一致，需要你确认（我没有替你决定）
+
+1. **`unsure` 仍进 `triage`，不进 `escalated`。** 规格 B1 写的是"Yes/Unsure 提交 → 新状态
+   escalated"。但状态只能存一个，而 `unsure` 在当前状态机里的含义是"消费者无法确认涉事产品"
+   ——产品未核验的案子合规无从下手（核验是 triage 的活）。所以我的实现是"产品优先级高于升级"：
+   只有 `yes` 且产品全部 potential_match 才进 `escalated`。若你要按规格字面走，需要先回答
+   `unsure` 的案子在产品核验之前交给合规，是否可接受。
+2. **受伤申报不会自动建 `case_escalations` 记录。** 规格 B1 说的是**状态**，B3/B4 说的是
+   **记录表**（分类为 legal / regulator / media 等，由人开启、关闭时必须写凭证）。二者名字相近
+   但含义不同：状态=合规正在看，记录=案件已在某个对外对话里（律师、监管、媒体）。因此结案门禁
+   （有未关闭升级记录则不得关案）**不适用于**仅仅状态为 `escalated` 的案子。如果规格的原意是
+   "受伤申报也应自动开一条记录并受门禁约束"，那是一处实质改动，请确认。

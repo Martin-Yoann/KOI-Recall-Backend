@@ -74,6 +74,7 @@ describe.skipIf(!enabled)(
         false,
         queue,
         false,
+        false, // INCIDENT_ESCALATED_STATUS: phase 2 is off in this suite.
         service,
         'http://localhost:3313',
       );
