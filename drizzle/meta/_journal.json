@@ -148,6 +148,13 @@
       "when": 1790131309286,
       "tag": "0021_red_hellion",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1790238969768,
+      "tag": "0022_dashing_the_stranger",
+      "breakpoints": true
     }
   ]
 }

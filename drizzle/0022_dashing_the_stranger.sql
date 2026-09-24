@@ -1,0 +1,1 @@
+ALTER TYPE "public"."recall_case_status" ADD VALUE 'escalated' BEFORE 'triage';

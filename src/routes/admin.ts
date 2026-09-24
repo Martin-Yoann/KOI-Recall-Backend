@@ -63,6 +63,7 @@ const asString = (value: unknown): string | undefined =>
 const STAFF_USER_STATUSES = ['active', 'disabled'] as const;
 const CASE_STATUSES = [
   'submitted',
+  'escalated',
   'triage',
   'under_review',
   'need_info',

@@ -31,6 +31,10 @@ export const claimDraftStatusEnum = pgEnum('claim_draft_status', [
 ]);
 export const recallCaseStatusEnum = pgEnum('recall_case_status', [
   'submitted',
+  // A case whose claim reported a safety incident. Distinct from 'submitted' so the
+  // routing to compliance is a state a reader can see, rather than something inferred
+  // from incident_flag plus a review row.
+  'escalated',
   'triage',
   'under_review',
   'need_info',

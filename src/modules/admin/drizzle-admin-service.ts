@@ -74,7 +74,11 @@ import {
  */
 type CaseStatus = (typeof recallCases.$inferSelect)['status'];
 const QUEUE_STATUS: Record<AdminQueue, readonly CaseStatus[]> = {
-  standard: ['submitted'],
+  // `escalated` is listed with `submitted` so that switching the write path later does
+  // not silently move incident cases out of the standard queue; the incident queue
+  // already carries every non-terminal incident-flagged case, so today they appear in
+  // both. Whether that is the right routing is a separate decision from this migration.
+  standard: ['submitted', 'escalated'],
   manual_review: ['triage', 'under_review'],
   need_info: ['need_info'],
   decision: ['under_review', 'approved'],

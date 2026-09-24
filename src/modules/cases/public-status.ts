@@ -54,6 +54,10 @@ export function mapToPublicCaseState(
   let publicStatus: PublicCaseStatus;
   switch (caseStatus) {
     case 'submitted':
+    case 'escalated':
+      // An escalated case reads to a consumer exactly as a submitted one does: the
+      // routing to compliance is internal, and inventing consumer-facing language for
+      // it would tell them something the platform does not mean to say.
       publicStatus = 'received';
       break;
     case 'triage':

@@ -14,6 +14,7 @@
 
 export type CaseStatus =
   | 'submitted'
+  | 'escalated'
   | 'triage'
   | 'under_review'
   | 'need_info'
@@ -79,6 +80,10 @@ export const PUBLIC_STATUSES = {
 /** Case status transitions, after ADR redesign §8.2 (approved→closed is removed). */
 const BASE_TRANSITIONS: Readonly<Record<CaseStatus, readonly CaseStatus[]>> = {
   submitted: ['triage', 'under_review', 'rejected', 'duplicate', 'withdrawn'],
+  // The same outgoing set as submitted: escalation changes where a case is looked at,
+  // not what may happen to it. A narrower set here would be a second opinion about the
+  // workflow, which is what this table exists to be the only one of.
+  escalated: ['triage', 'under_review', 'rejected', 'duplicate', 'withdrawn'],
   triage: ['under_review', 'need_info', 'approved', 'rejected', 'duplicate', 'withdrawn'],
   under_review: ['need_info', 'approved', 'rejected', 'closure_review', 'withdrawn'],
   need_info: ['under_review', 'approved', 'rejected', 'withdrawn'],
@@ -267,6 +272,8 @@ function resolutionActions(state: WorkflowCaseState): string[] {
 function publicStatus(state: WorkflowCaseState): string {
   switch (state.caseStatus) {
     case 'submitted':
+    case 'escalated':
+      // Escalation is internal routing: a consumer sees that their claim was received.
       return PUBLIC_STATUSES.RECEIVED;
     case 'triage':
     case 'under_review':
