@@ -744,6 +744,17 @@ describe.skipIf(!enabled)(
       const opened = await openTask({ authorizes: true, approved: true });
       const taskId = opened.created!.taskId;
 
+      // Instructions are shown only once the product is confirmed, so the assertion
+      // below is about the admin path honouring that rule, not about a second rule.
+      await service.confirmProductAffected({ taskId, campaignProductId: productId, quantity: 1 });
+      await service.confirmEligibility({
+        taskId,
+        eligibilityStatus: 'confirmed_eligible',
+        note: 'Confirmed so the admin read has instructions to return.',
+        actorStaffUserId: staffUserId,
+        expectedVersion: 1,
+      });
+
       const detail = await service.getTaskForAdmin(taskId);
       expect(detail?.task.id).toBe(taskId);
       expect(detail?.products).toHaveLength(1);

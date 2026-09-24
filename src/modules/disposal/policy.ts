@@ -134,6 +134,15 @@ export interface DisposalPolicySnapshot {
   mayReviewEvidence: boolean;
   /** Whether a new evidence batch may be submitted. */
   maySubmitEvidence: boolean;
+  /**
+   * Whether the approved instructions may be shown at all.
+   *
+   * This lived as a hand-written conjunction in the read path, which is how a
+   * consumer whose product was still unconfirmed — or whose task was on an incident
+   * hold — was shown disposal steps the policy would refuse to act on. Asking the
+   * policy is the only way that answer cannot drift from the gate.
+   */
+  maySeeInstructions: boolean;
 }
 
 /**
@@ -240,6 +249,7 @@ export function evaluateDisposal(state: DisposalPolicyState): DisposalPolicySnap
     allowedActions,
     blockingReasons,
     mayReviewEvidence: taskOpen && state.latestBatchReviewStatus === 'pending',
+    maySeeInstructions: taskOpen && eligibilityConfirmed && approvalAuthorizes && !state.holdActive,
     maySubmitEvidence:
       taskOpen &&
       eligibilityConfirmed &&

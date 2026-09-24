@@ -37,6 +37,7 @@ import {
   assertCanIssueAuthorization,
   authorizesConsumerDisposal,
   evaluateDisposal,
+  type DisposalPolicySnapshot,
   type DisposalPolicyState,
 } from './policy.js';
 import {
@@ -244,18 +245,13 @@ export class DrizzleDisposalService implements DisposalService {
   async getTaskForVisitor(taskId: string, taskToken: string): Promise<DisposalTaskDetail | null> {
     const record = await this.loadTaskRecord(this.handle.db, taskId, hashTaskToken(taskToken));
     if (!record) return null;
+    const snapshot = evaluateDisposal(record.policyState);
     const [products, instruction, expiresAt] = await Promise.all([
       this.loadProducts(this.handle.db, taskId),
-      this.loadInstructionView(this.handle.db, record),
+      this.loadInstructionView(this.handle.db, record, snapshot),
       this.loadTokenExpiry(this.handle.db, taskId),
     ]);
-    return {
-      task: record,
-      products,
-      snapshot: evaluateDisposal(record.policyState),
-      instruction,
-      expiresAt,
-    };
+    return { task: record, products, snapshot, instruction, expiresAt };
   }
 
   /**
@@ -269,8 +265,11 @@ export class DrizzleDisposalService implements DisposalService {
   private async loadInstructionView(
     db: DatabaseExecutor,
     record: DisposalTaskRecord,
+    snapshot: DisposalPolicySnapshot,
   ): Promise<DisposalInstructionView | null> {
-    if (record.instructionStatus !== 'approved' || !record.approvalAuthorizesDisposal) return null;
+    // The rule for showing instructions is the policy's, not this method's: a
+    // conjunction written here would be a second opinion about the same state.
+    if (!snapshot.maySeeInstructions) return null;
     const [row] = await db
       .select({
         id: disposalInstructionVersions.id,
@@ -315,18 +314,13 @@ export class DrizzleDisposalService implements DisposalService {
   async getTaskForAdmin(taskId: string): Promise<DisposalTaskDetail | null> {
     const record = await this.loadTaskRecord(this.handle.db, taskId);
     if (!record) return null;
+    const snapshot = evaluateDisposal(record.policyState);
     const [products, instruction, expiresAt] = await Promise.all([
       this.loadProducts(this.handle.db, taskId),
-      this.loadInstructionView(this.handle.db, record),
+      this.loadInstructionView(this.handle.db, record, snapshot),
       this.loadTokenExpiry(this.handle.db, taskId),
     ]);
-    return {
-      task: record,
-      products,
-      snapshot: evaluateDisposal(record.policyState),
-      instruction,
-      expiresAt,
-    };
+    return { task: record, products, snapshot, instruction, expiresAt };
   }
 
   /**
