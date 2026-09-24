@@ -38,6 +38,9 @@ import { DrizzleClaimDraftService } from '../src/modules/claim-drafts/drizzle-cl
 import { DrizzleCommunicationQueueService } from '../src/modules/communications/queue-service.js';
 import { DrizzleDisposalService } from '../src/modules/disposal/drizzle-disposal-service.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
+import { assertLocalIntegrationDatabase } from './helpers/db-guard.js';
+
+assertLocalIntegrationDatabase(process.env.DATABASE_URL);
 
 const enabled = process.env.RUN_DB_INTEGRATION === 'true' && Boolean(process.env.DATABASE_URL);
 const handle: DatabaseHandle | null = enabled

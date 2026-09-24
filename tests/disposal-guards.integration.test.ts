@@ -7,6 +7,8 @@ import { assertLocalIntegrationDatabase } from './helpers/db-guard.js';
 // unit test cannot prove a constraint fires — only a real Postgres can.
 import 'dotenv/config';
 
+import { randomUUID } from 'node:crypto';
+
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -18,6 +20,7 @@ import {
   disposalInstructionApprovals,
   disposalInstructionVersions,
   disposalTasks,
+  recallCampaigns,
   staffUsers,
 } from '../src/db/schema/index.js';
 
@@ -34,22 +37,43 @@ describe.skipIf(!enabled)('disposal domain guards (database integration)', () =>
   let instructionVersionId: string;
   let taskId: string;
   let staffUserId: string;
+  let campaignVersionId: string;
+  let draftId: string;
 
   beforeAll(async () => {
     const db = handle!.db;
-    const [campaignVersion] = await db
-      .select({ id: campaignVersions.id })
-      .from(campaignVersions)
-      .limit(1);
+    // Its own campaign version and draft, rather than whichever ones happen to be
+    // in the database. Borrowing an existing draft made this suite depend on
+    // residue: a fresh database has none, and a task with neither a draft nor a
+    // case violates disposal_tasks_owner_chk.
+    const [campaign] = await db.select({ id: recallCampaigns.id }).from(recallCampaigns).limit(1);
     const [staff] = await db.select({ id: staffUsers.id }).from(staffUsers).limit(1);
-    const [draft] = await db.select({ id: claimDrafts.id }).from(claimDrafts).limit(1);
-    if (!campaignVersion || !staff) throw new Error('Seed data is required.');
+    if (!campaign || !staff) throw new Error('Seed data is required.');
 
     staffUserId = staff.id;
+
+    const [campaignVersion] = await db
+      .insert(campaignVersions)
+      .values({
+        campaignId: campaign.id,
+        versionNumber: 400_000 + Math.floor(Math.random() * 90_000),
+        status: 'draft',
+      })
+      .returning({ id: campaignVersions.id });
+    campaignVersionId = campaignVersion!.id;
+
+    draftId = randomUUID();
+    await db.insert(claimDrafts).values({
+      id: draftId,
+      campaignId: campaign.id,
+      campaignVersionId,
+      tokenHash: randomUUID().replace(/-/g, '') + randomUUID().replace(/-/g, ''),
+      expiresAt: new Date(Date.now() + 3_600_000),
+    });
     const [version] = await db
       .insert(disposalInstructionVersions)
       .values({
-        campaignVersionId: campaignVersion.id,
+        campaignVersionId,
         versionNumber: VERSION_NUMBER,
         locale: 'en-US',
         title: 'Integration test instructions (temporary)',
@@ -66,9 +90,7 @@ describe.skipIf(!enabled)('disposal domain guards (database integration)', () =>
       .insert(disposalTasks)
       .values({
         instructionVersionId,
-        draftId: draft?.id ?? null,
-        // A task with only a caseId would also satisfy the owner check, but the
-        // seed always has drafts, so this keeps the fixture simple.
+        draftId,
         caseId: null,
         tokenHash: 'a'.repeat(64),
         tokenExpiresAt: new Date(Date.now() + 86_400_000),
@@ -88,6 +110,8 @@ describe.skipIf(!enabled)('disposal domain guards (database integration)', () =>
     await db
       .delete(disposalInstructionVersions)
       .where(eq(disposalInstructionVersions.id, instructionVersionId));
+    await db.delete(claimDrafts).where(eq(claimDrafts.id, draftId));
+    await db.delete(campaignVersions).where(eq(campaignVersions.id, campaignVersionId));
   });
 
   function recordApproval(

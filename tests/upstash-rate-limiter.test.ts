@@ -151,7 +151,7 @@ describe('UpstashRateLimiter', () => {
 });
 
 describe('createRateLimiter', () => {
-  it('uses Upstash when both credentials are configured', () => {
+  it('uses Upstash when both credentials are configured', async () => {
     const limiter = createRateLimiter(
       loadConfig({
         UPSTASH_REDIS_REST_URL: 'https://example.upstash.io',
@@ -159,10 +159,15 @@ describe('createRateLimiter', () => {
       }),
     );
 
-    expect(limiter).toBeInstanceOf(UpstashRateLimiter);
+    // The store client is loaded on first use, so identity is no longer observable
+    // at construction. What is observable: a request reaches the store adapter,
+    // whose fail-closed policy denies this category when the store is unreachable —
+    // a decision the in-memory limiter would never produce for a first request.
+    expect(limiter).not.toBeInstanceOf(InMemoryRateLimiter);
+    await expect(limiter.check('admin-login:probe')).resolves.toMatchObject({ allowed: false });
   });
 
-  it('accepts the legacy Vercel-KV names the marketplace integration provisions', () => {
+  it('accepts the legacy Vercel-KV names the marketplace integration provisions', async () => {
     // Vercel's Upstash integration injects KV_REST_API_* even though the endpoint
     // is an Upstash REST URL, so this pairing has to work.
     const limiter = createRateLimiter(
@@ -172,7 +177,9 @@ describe('createRateLimiter', () => {
       }),
     );
 
-    expect(limiter).toBeInstanceOf(UpstashRateLimiter);
+    // Same behavioural check as above: the legacy names must reach the store.
+    expect(limiter).not.toBeInstanceOf(InMemoryRateLimiter);
+    await expect(limiter.check('admin-login:probe')).resolves.toMatchObject({ allowed: false });
   });
 
   it('prefers the Upstash-native names when both pairings are present', () => {

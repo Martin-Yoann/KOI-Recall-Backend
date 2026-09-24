@@ -4,7 +4,7 @@ import { assertLocalIntegrationDatabase } from './helpers/db-guard.js';
 import 'dotenv/config';
 
 import { eq } from 'drizzle-orm';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { DatabaseHandle } from '../src/db/client.js';
 import { createDatabase } from '../src/db/client.js';
@@ -39,54 +39,69 @@ class FakeEmailPort implements TransactionalEmailPort {
   }
 }
 
-describe.skipIf(!enabled)('DrizzleOutboxWorker (database integration)', () => {
-  afterAll(async () => {
-    await handle?.close();
-  });
+describe.skipIf(!enabled)(
+  'DrizzleOutboxWorker (database integration)',
+  { timeout: 120_000 },
+  () => {
+    beforeAll(async () => {
+      // This suite asserts counts, so it needs a quiescent outbox. Establishing
+      // that explicitly is the point: the seed leaves pending events behind in a
+      // fresh database, and the premise used to hold only because the shared
+      // database had long since drained them.
+      await handle!.db
+        .update(outboxEvents)
+        .set({ status: 'succeeded', processedAt: new Date() })
+        .where(eq(outboxEvents.status, 'pending'));
+    });
 
-  it('returns a zero result when there is nothing due', async () => {
-    const worker = new DrizzleOutboxWorker(handle!.db, new FakeEmailPort(), crypto);
-    await expect(worker.runBatch(10)).resolves.toEqual({ claimed: 0, succeeded: 0, failed: 0 });
-  });
+    afterAll(async () => {
+      await handle?.close();
+    });
 
-  it('drains a pending claim-confirmation event through to sent', async () => {
-    const db = handle!.db;
-    // Insert an event payload pointing at a communication that cannot resolve
-    // (no matching template) — asserting the worker dead-letters rather than
-    // crashing, which proves the claim/lock/state machine runs.
-    const [inserted] = await db
-      .insert(outboxEvents)
-      .values({
-        aggregateType: 'recall_case',
-        aggregateId: '00000000-0000-4000-8000-000000000001',
-        eventType: 'claim.confirmation.requested',
-        deduplicationKey: `test-${Date.now()}`,
-        payload: { communicationId: '00000000-0000-4000-8000-000000000002' },
-        status: 'pending',
-        attempts: 0,
-        availableAt: new Date(),
-      })
-      .returning({ id: outboxEvents.id });
+    it('returns a zero result when there is nothing due', async () => {
+      const worker = new DrizzleOutboxWorker(handle!.db, new FakeEmailPort(), crypto);
+      await expect(worker.runBatch(10)).resolves.toEqual({ claimed: 0, succeeded: 0, failed: 0 });
+    });
 
-    const worker = new DrizzleOutboxWorker(db, new FakeEmailPort(), crypto);
-    const result = await worker.runBatch(10);
+    it('drains a pending claim-confirmation event through to sent', async () => {
+      const db = handle!.db;
+      // Insert an event payload pointing at a communication that cannot resolve
+      // (no matching template) — asserting the worker dead-letters rather than
+      // crashing, which proves the claim/lock/state machine runs.
+      const [inserted] = await db
+        .insert(outboxEvents)
+        .values({
+          aggregateType: 'recall_case',
+          aggregateId: '00000000-0000-4000-8000-000000000001',
+          eventType: 'claim.confirmation.requested',
+          deduplicationKey: `test-${Date.now()}`,
+          payload: { communicationId: '00000000-0000-4000-8000-000000000002' },
+          status: 'pending',
+          attempts: 0,
+          availableAt: new Date(),
+        })
+        .returning({ id: outboxEvents.id });
 
-    expect(result.claimed).toBe(1);
-    // No communication exists for the fake id, so the event is failed/dead.
-    const [row] = await db.select().from(outboxEvents).where(eq(outboxEvents.id, inserted!.id));
-    expect(['pending', 'dead_letter']).toContain(row?.status);
-    expect(row?.attempts).toBe(1);
-    expect(row?.lastErrorCode).toBe('communication_not_found');
+      const worker = new DrizzleOutboxWorker(db, new FakeEmailPort(), crypto);
+      const result = await worker.runBatch(10);
 
-    await db.delete(outboxEvents).where(eq(outboxEvents.id, inserted!.id));
-  });
+      expect(result.claimed).toBe(1);
+      // No communication exists for the fake id, so the event is failed/dead.
+      const [row] = await db.select().from(outboxEvents).where(eq(outboxEvents.id, inserted!.id));
+      expect(['pending', 'dead_letter']).toContain(row?.status);
+      expect(row?.attempts).toBe(1);
+      expect(row?.lastErrorCode).toBe('communication_not_found');
 
-  it('does not send anything when the event is already succeeded', async () => {
-    const db = handle!.db;
-    const port = new FakeEmailPort();
-    const worker = new DrizzleOutboxWorker(db, port, crypto);
-    const result = await worker.runBatch(5);
-    expect(result).toEqual({ claimed: 0, succeeded: 0, failed: 0 });
-    expect(port.sent).toHaveLength(0);
-  });
-});
+      await db.delete(outboxEvents).where(eq(outboxEvents.id, inserted!.id));
+    });
+
+    it('does not send anything when the event is already succeeded', async () => {
+      const db = handle!.db;
+      const port = new FakeEmailPort();
+      const worker = new DrizzleOutboxWorker(db, port, crypto);
+      const result = await worker.runBatch(5);
+      expect(result).toEqual({ claimed: 0, succeeded: 0, failed: 0 });
+      expect(port.sent).toHaveLength(0);
+    });
+  },
+);

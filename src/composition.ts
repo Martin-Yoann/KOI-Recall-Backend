@@ -49,7 +49,6 @@ import { ResendEmailAdapter } from './platform/email/resend.js';
 import { NotConfiguredCacheInvalidator } from './platform/cache-invalidation/not-configured.js';
 import type { CampaignCacheInvalidator } from './platform/cache-invalidation/port.js';
 import { WebRevalidateCacheInvalidator } from './platform/cache-invalidation/web-revalidate.js';
-import { UpstashRateLimiter } from './platform/rate-limit/upstash-rate-limiter.js';
 import { consoleSafeLogger } from './platform/observability/logger.js';
 import { InMemoryRateLimiter, type RateLimiter } from './middleware/rate-limit.js';
 import type { TransactionalEmailPort } from './platform/email/port.js';
@@ -412,5 +411,19 @@ export function createRateLimiter(config: AppConfig): RateLimiter {
     );
     return new InMemoryRateLimiter();
   }
-  return UpstashRateLimiter.fromCredentials(credentials.url, credentials.token, consoleSafeLogger);
+  // The Upstash client is loaded on first use rather than at module load. The
+  // packages are only needed when a store is actually configured, and importing
+  // them statically made their absence a startup crash for every deployment —
+  // including the ones that never configured a store and would use the in-memory
+  // limiter anyway.
+  let loaded: Promise<RateLimiter> | null = null;
+  const store = (): Promise<RateLimiter> => {
+    loaded ??= import('./platform/rate-limit/upstash-rate-limiter.js').then(
+      ({ UpstashRateLimiter }) =>
+        UpstashRateLimiter.fromCredentials(credentials.url, credentials.token, consoleSafeLogger),
+    );
+    return loaded;
+  };
+
+  return { check: (key) => store().then((limiter) => limiter.check(key)) };
 }

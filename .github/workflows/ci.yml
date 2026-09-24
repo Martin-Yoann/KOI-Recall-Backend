@@ -114,3 +114,5 @@ jobs:
           tests/disposal-service.integration.test.ts
           tests/disposal-submit.integration.test.ts
           tests/disposal-upload.integration.test.ts
+          tests/disposal-rollback.integration.test.ts
+          tests/admin-case-detail-pii.integration.test.ts
