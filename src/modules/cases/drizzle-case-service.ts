@@ -58,6 +58,9 @@ import type { DisposalService } from '../disposal/service.js';
 import { DEFAULT_CONSUMER_WEB_BASE_URL } from '../../config/env.js';
 import type { CaseService, ClaimSubmissionCommand } from './service.js';
 import { consoleSafeLogger } from '../../platform/observability/logger.js';
+import { assertDocumentsSubmittable, assertEvidenceRequirements } from './evidence-requirements.js';
+import { deriveSubmissionStatus } from './submission-status.js';
+import { claimConfirmationVariables } from './submission-notification.js';
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_UNIQUE_CONSTRAINT = 'idempotency_records_endpoint_key_uidx';
@@ -382,33 +385,12 @@ export class DrizzleCaseService implements CaseService {
         .from(documentUploads)
         .where(inArray(documentUploads.id, command.body.documentIds))
         .for('update');
-      // T5.5/O5 (D5): a claim may only attach documents that are verified AND
-      // scan-clean. `verified` proves media-type reconciliation, not safety —
-      // the malware gate is separate and mandatory.
-      const failingDocumentIds = new Set<string>();
-      for (const document of selectedDocuments) {
-        if (
-          document.draftId !== locked.draftId ||
-          document.uploadStatus !== 'verified' ||
-          (document.scanStatus !== 'clean' &&
-            (this.malwareScanRequired || document.scanStatus !== 'not_run'))
-        ) {
-          failingDocumentIds.add(document.id);
-        }
-      }
-      for (const documentId of command.body.documentIds) {
-        if (!selectedDocuments.some((document) => document.id === documentId)) {
-          // Unknown or already-claimed rows are equally un-submittable; naming
-          // them keeps the consumer-side fallback actionable either way.
-          failingDocumentIds.add(documentId);
-        }
-      }
-      if (failingDocumentIds.size > 0) {
-        throw new ClaimValidationError(
-          `Selected Documents [${[...failingDocumentIds].sort().join(', ')}] did not pass submission requirements: ` +
-            'every Document must be verified, satisfy the configured malware-scan policy, and be owned by the active Claim Draft.',
-        );
-      }
+      assertDocumentsSubmittable({
+        documents: selectedDocuments,
+        submittedDocumentIds: command.body.documentIds,
+        draftId: locked.draftId,
+        malwareScanRequired: this.malwareScanRequired,
+      });
 
       const evidenceRules = await tx
         .select({
@@ -419,38 +401,17 @@ export class DrizzleCaseService implements CaseService {
         })
         .from(campaignEvidenceRequirements)
         .where(eq(campaignEvidenceRequirements.campaignVersionId, locked.campaignVersionId));
-      for (const rule of evidenceRules) {
-        const count = selectedDocuments.filter(
-          (document) => document.category === rule.category,
-        ).length;
-        // T4.2/ADR-0003 M3: an exact order match (or credible order evidence)
-        // waives the proof-of-purchase minimum — the order itself is the
-        // purchase proof. Upper bounds still apply to every category.
-        const waivedByOrderMatch = waivesProofOfPurchase && rule.category === 'proof_of_purchase';
-        if (
-          count > rule.maximumFiles ||
-          (!waivedByOrderMatch && (count < rule.minimumFiles || (rule.required && count === 0)))
-        ) {
-          throw new ClaimValidationError(
-            'Selected Documents do not satisfy the pinned Campaign evidence requirements.',
-          );
-        }
-      }
+      assertEvidenceRequirements({
+        documents: selectedDocuments,
+        rules: evidenceRules,
+        waivesProofOfPurchase,
+      });
 
-      const hasIncident = command.body.incidentAnswer !== 'no';
-      // Precedence matters here, and product verification outranks escalation: a case
-      // whose product is not verified yet cannot be worked by compliance, and an
-      // `unsure` answer is the consumer saying they cannot confirm the product — which
-      // is exactly triage's job. So an incident reaches `escalated` only when its
-      // products are already verified. With the phase-2 switch off this is byte for
-      // byte the previous rule.
-      const caseStatus =
-        command.body.incidentAnswer === 'unsure' ||
-        productEvaluations.some(({ evaluation }) => evaluation.result !== 'potential_match')
-          ? 'triage'
-          : this.incidentEscalatedStatus && hasIncident
-            ? 'escalated'
-            : 'submitted';
+      const { hasIncident, caseStatus, subtype } = deriveSubmissionStatus({
+        incidentAnswer: command.body.incidentAnswer,
+        productResults: productEvaluations,
+        incidentEscalatedStatus: this.incidentEscalatedStatus,
+      });
 
       const caseId = randomUUID();
       let caseReference: string | undefined;
@@ -464,7 +425,7 @@ export class DrizzleCaseService implements CaseService {
             campaignId: locked.campaignId,
             campaignVersionId: locked.campaignVersionId,
             locale: command.body.locale,
-            subtype: hasIncident ? 'injury_hazard' : 'standard',
+            subtype,
             status: caseStatus,
             incidentFlag: hasIncident,
             submittedAt,
@@ -651,10 +612,6 @@ export class DrizzleCaseService implements CaseService {
         caseId,
         expiresAt: new Date(submittedAt.getTime() + IDEMPOTENCY_TTL_MS),
       });
-      const disposalResumeUrl = disposalTask
-        ? `${this.consumerWebBaseUrl}/recalls/${command.campaignSlug}/disposal/${disposalTask.taskId}#token=${disposalTask.token}`
-        : '';
-
       await this.notifications?.queue(tx, {
         caseId,
         templateVersionId,
@@ -662,19 +619,13 @@ export class DrizzleCaseService implements CaseService {
         recipientEncrypted: encrypted.recipientEmail.value,
         deduplicationKey: `claim-confirmation:${caseReference}`,
         eventType: 'claim.confirmation.requested',
-        variables: {
+        variables: claimConfirmationVariables({
           caseReference,
-          submittedAt: submittedAt.toISOString(),
-          // The URL on its own, for a template that can put it in an href.
-          disposalResumeUrl: disposalTask ? disposalResumeUrl : '',
-          // The same thing as a self-contained sentence, because the renderer has
-          // no conditionals and HTML-escapes every value: a link cannot be built
-          // from a variable, so the template drops this in as its own paragraph and
-          // both branches read correctly without an empty href ever being emitted.
-          disposalSection: disposalTask
-            ? `You can return to your product-disposal step at ${disposalResumeUrl}. Keep this email: the link is the only way back to it.`
-            : 'No product-disposal step applies to this claim.',
-        },
+          submittedAt,
+          campaignSlug: command.campaignSlug,
+          consumerWebBaseUrl: this.consumerWebBaseUrl,
+          disposal: disposalTask,
+        }),
       });
 
       return response;
