@@ -9,6 +9,7 @@ import {
 } from '../../db/schema/index.js';
 import type { SensitiveDataCryptoPort } from '../../platform/crypto/port.js';
 import type { EmailTriggerService } from '../communications/email-trigger-service.js';
+import type { AuditMetadata } from '../staff/audit-metadata.js';
 import {
   ClaimConflictError,
   ClaimValidationError,
@@ -449,7 +450,7 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
     action: string,
     caseId: string,
     resolutionId: string,
-    metadata: Record<string, unknown>,
+    metadata: AuditMetadata,
   ): Promise<void> {
     // Resolution actions share the case-scoped audit identity (resourceType
     // 'case', resourceId = public reference) so per-case audit queries — the

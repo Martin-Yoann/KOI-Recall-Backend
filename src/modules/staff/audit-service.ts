@@ -1,3 +1,4 @@
+import type { AuditMetadata } from './audit-metadata.js';
 import type { StaffRole } from './permissions.js';
 
 /**
@@ -15,7 +16,7 @@ export interface AuditEventInput {
   resourceId?: string | undefined;
   outcome: AuditOutcome;
   reasonCode?: string | undefined;
-  metadata?: Record<string, unknown> | undefined;
+  metadata?: AuditMetadata | undefined;
   ipAddressHash?: string | undefined;
   userAgentHash?: string | undefined;
 }

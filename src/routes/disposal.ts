@@ -472,7 +472,7 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       resourceType: 'disposal_instruction',
       resourceId: created.instructionVersionId,
       outcome: 'success',
-      metadata: { versionNumber: created.versionNumber, campaignVersionId: body.campaignVersionId },
+      metadata: { versionNumber: created.versionNumber, campaignVersionId },
     });
     return context.json(created, 201);
   });
@@ -508,9 +508,12 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       // The computed result belongs in the trail: it is what shows that a
       // non-authorizing material was recorded as exactly that.
       metadata: {
-        materialType: body.materialType,
-        scope: body.scope,
-        measure: body.measure,
+        // Read as strings for the trail. The service takes the same three fields as
+        // database enums, so the values are checked when they are written to the
+        // approval row; the trail records what was submitted, not the cast form.
+        materialType: asString(body.materialType),
+        scope: asString(body.scope),
+        measure: asString(body.measure),
         authorizesConsumerDisposal: recorded.authorizesConsumerDisposal,
       },
     });

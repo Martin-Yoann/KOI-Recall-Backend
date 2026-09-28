@@ -817,7 +817,10 @@ export function registerAdminRoutes(
         resourceId: caseRef,
         outcome: 'success',
         metadata: {
-          nextStatus: body.status,
+          // The validated value, not the raw body field: `body.status` is `unknown`
+          // until the whitelist above has accepted it, and the audit trail should say
+          // what the case actually moved to.
+          nextStatus,
           ...(guard.role === 'ADMIN' ? { forced: true } : {}),
           // The note itself is not repeated here. It is stored on the transition
           // record and appears in the consumer's email; `admin_audit_events` is
