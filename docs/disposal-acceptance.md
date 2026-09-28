@@ -278,6 +278,36 @@ review:  [{"status":"pending"}]
 也就是说：受伤申报**确实**落了 `escalated` 状态、派生阶段**确实**是合规、审查**确实** pending、
 界面把这三件事都显示出来了 —— 这正是这一轮改动的验收目标。
 
+### 合规后续：关审查 + 对外投影（已跑通）
+
+在**事故队列**里对该案件点 Review → 对话框里正是这一轮加的那组字段：CPSC 参考号、**实报日期**
+（`type=date`，默认值就是当天 `2026-09-28` —— 惰性初始化那个默认值在界面上的可见证据）、回执材料、
+以及理由。填完点 **Close Review**：
+
+- 队列行从 `PENDING` 变为 **`FILED  Completed`**，计数器 `FILED (CPSC)` 随之从 0 变 1。
+- 数据库回读：`status: "filed"`、`cpscReference: "CPSC-2026-A4"`、
+  **`filedAt: 2026-09-28T00:00:00.000Z`**、`decidedAt: 2026-09-28T06:52:00.620Z`、
+  `filingEvidenceEncrypted` 是 `enc.v1.aes-256-gcm.` 开头（130 字符信封）。
+  **实报日期与记录时刻在同一行里是两个不同的值** —— 这正是这一轮要修的那件事。
+- 消费者侧状态查询（同一份案件）：
+
+```
+{"caseReference":"KOI-ZVUT-CYTTZALP","publicStatus":"received","publicStatusLabel":"Claim received",
+ "requestedResolution":"Replacement","approvedResolution":null}
+```
+
+案件内部是 `escalated`，消费者读到的是 **received** —— 内部升级对外不可见，与设计一致。
+
+### 一处**走不到**的门禁，以及原因（不是"跳过"，是"到不了"）
+
+方案里 A4 还要求"开一条升级记录后结案被拦"。这一步在当前状态下**无法从界面走到**：案件处于
+`escalated`，而该状态的合法迁移只有 triage / under review / rejected / duplicate / withdrawn ——
+**`closed` 本来就不在里面**，界面也如实只给了这几个按钮。也就是说先拒绝的是状态机，不是升级记录
+门禁。要真正把那条门禁走一遍，需要一个处于 `closure_review` 的案件（要走完
+under_review → approved → 处置完成 → closure_review 一整条链）。门禁本身已有集成测试
+（`tests/case-escalation-gate.integration.test.ts`，含强制结案），所以这里是"界面演练缺失"，
+不是"行为未验证" —— 两者不一样，据实记录。
+
 ### 待续
 
 清掉残留的 `uploading` 条目（Reset Draft 或直接改会话状态）→ 提交拿到案件编号 → 管理端：
