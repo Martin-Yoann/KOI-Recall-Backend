@@ -176,8 +176,15 @@ type StageKey = keyof typeof STAGE_RULES;
  * reason a clean "yes" submission (status `submitted`) sat with customer service
  * while its reportability review was already pending.
  */
+// Every status a case can be in while its reportability review is still open. The
+// override this set drives is the second axis of the workflow: it says "with
+// compliance" without taking the status field away from the pipeline. `escalated`
+// belongs here for the same reason `triage` does — an incident reported by a consumer
+// who could not confirm the product is `triage` for the product and with compliance
+// for the safety question at the same time.
 const PENDING_REVIEW_OVERRIDE_STATUSES: ReadonlySet<CaseStatus> = new Set([
   'submitted',
+  'escalated',
   'triage',
   'under_review',
 ]);
@@ -200,23 +207,48 @@ function stageKey(state: WorkflowCaseState): StageKey {
   if (isIncidentPending(state) && PENDING_REVIEW_OVERRIDE_STATUSES.has(state.caseStatus)) {
     return 'compliance_review';
   }
-  if (state.caseStatus === 'submitted') return 'submitted';
-  if (state.caseStatus === 'triage') return 'triage';
-  if (state.caseStatus === 'under_review') return 'under_review';
-  if (state.caseStatus === 'need_info') return 'need_info';
-  if (state.caseStatus === 'approved') {
-    const resolutionStatus = state.resolution?.status ?? null;
-    if (resolutionStatus === 'approved') {
-      return state.resolution?.approvedType === 'refund'
-        ? 'refund_processing'
-        : 'replacement_processing';
+  switch (state.caseStatus) {
+    case 'submitted':
+    case 'escalated':
+      // `escalated` is the parallel of `submitted`. While its review is open the
+      // override above already sent it to compliance; once the review is closed the
+      // case is an ordinary submitted one and its stage says so. It is named here
+      // rather than left to the tail, because the tail means "nothing more will
+      // happen" — which is exactly what an escalated case is not.
+      return 'submitted';
+    case 'triage':
+      return 'triage';
+    case 'under_review':
+      return 'under_review';
+    case 'need_info':
+      return 'need_info';
+    case 'approved': {
+      const resolutionStatus = state.resolution?.status ?? null;
+      if (resolutionStatus === 'approved') {
+        return state.resolution?.approvedType === 'refund'
+          ? 'refund_processing'
+          : 'replacement_processing';
+      }
+      if (resolutionStatus === 'externally_completed') return 'closure_review';
+      return 'resolution_approval';
     }
-    if (resolutionStatus === 'externally_completed') return 'closure_review';
-    return 'resolution_approval';
+    case 'closure_review':
+      return 'closure_review';
+    case 'closed':
+      return 'completed';
+    case 'rejected':
+    case 'duplicate':
+    case 'withdrawn':
+      return 'final';
+    default: {
+      // Exhaustive by type: adding a status without deciding its stage is a compile
+      // error, not a case that quietly reads as finished. That is how an escalated
+      // case used to look — `final`, i.e. nothing left to do — the moment its review
+      // was not pending, and nothing in the code said so.
+      const unhandled: never = state.caseStatus;
+      throw new Error(`No stage is defined for case status "${String(unhandled)}".`);
+    }
   }
-  if (state.caseStatus === 'closure_review') return 'closure_review';
-  if (state.caseStatus === 'closed') return 'completed';
-  return 'final'; // rejected / duplicate / withdrawn
 }
 
 /** Case status transitions after the ADR §8.2 closure gates are applied. */

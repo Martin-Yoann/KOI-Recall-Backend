@@ -341,3 +341,57 @@ describe('CaseWorkflowPolicy — purity', () => {
     expect(first).toEqual(second);
   });
 });
+
+describe('CaseWorkflowPolicy — escalation is a second axis, not a rival status', () => {
+  // The rule these four cases encode: `status` is the pipeline, and the compliance
+  // override is a *second* axis derived from the incident. So a case does not have to
+  // choose between "the product is unverified" and "this is with compliance" — and an
+  // escalated case is never finished merely because its review is not pending.
+
+  it('puts an unsure injury submission with compliance while it stays triage for the product', () => {
+    const snap = evaluate(
+      state({
+        caseStatus: 'triage',
+        subtype: 'injury_hazard',
+        incidentFlag: true,
+        reportabilityStatus: 'pending',
+      }),
+    );
+    expect(snap.currentStage).toBe('compliance_review');
+    expect(snap.responsibleDepartment).toBe('compliance');
+  });
+
+  it('puts an escalated case with a pending review with compliance', () => {
+    const snap = evaluate(
+      state({
+        caseStatus: 'escalated',
+        subtype: 'injury_hazard',
+        incidentFlag: true,
+        reportabilityStatus: 'pending',
+      }),
+    );
+    expect(snap.currentStage).toBe('compliance_review');
+    expect(snap.responsibleDepartment).toBe('compliance');
+  });
+
+  it('treats an escalated case whose review is closed as submitted, not as finished', () => {
+    // The defect this pins: `escalated` used to reach the tail of the stage table, so
+    // a case that was still being worked read as `final` — nothing left to do.
+    const snap = evaluate(
+      state({
+        caseStatus: 'escalated',
+        subtype: 'injury_hazard',
+        incidentFlag: true,
+        reportabilityStatus: 'documented_non_reportable',
+      }),
+    );
+    expect(snap.currentStage).toBe('intake_review');
+    expect(snap.responsibleDepartment).toBe('customer_service');
+  });
+
+  it('still reports the terminal statuses as final', () => {
+    for (const caseStatus of ['rejected', 'duplicate', 'withdrawn'] as const) {
+      expect(evaluate(state({ caseStatus })).currentStage).toBe('final');
+    }
+  });
+});

@@ -134,18 +134,47 @@ Received）。开关关闭时，状态判定与改动前**逐字节相同**。
 开关开但 `incidentAnswer='no'` → `submitted` + `standard` + 无事故、无审查。三条一起才证明
 是**开关**在起作用，而不是"受伤申报本来就这样"。
 
-### 两处与规格字面不一致，需要你确认（我没有替你决定）
+### 两处与规格字面不一致 —— 已按"两个轴各归其位"处理（2026-09-28）
 
-1. **`unsure` 仍进 `triage`，不进 `escalated`。** 规格 B1 写的是"Yes/Unsure 提交 → 新状态
-   escalated"。但状态只能存一个，而 `unsure` 在当前状态机里的含义是"消费者无法确认涉事产品"
-   ——产品未核验的案子合规无从下手（核验是 triage 的活）。所以我的实现是"产品优先级高于升级"：
-   只有 `yes` 且产品全部 potential_match 才进 `escalated`。若你要按规格字面走，需要先回答
-   `unsure` 的案子在产品核验之前交给合规，是否可接受。
-2. **受伤申报不会自动建 `case_escalations` 记录。** 规格 B1 说的是**状态**，B3/B4 说的是
-   **记录表**（分类为 legal / regulator / media 等，由人开启、关闭时必须写凭证）。二者名字相近
-   但含义不同：状态=合规正在看，记录=案件已在某个对外对话里（律师、监管、媒体）。因此结案门禁
-   （有未关闭升级记录则不得关案）**不适用于**仅仅状态为 `escalated` 的案子。如果规格的原意是
-   "受伤申报也应自动开一条记录并受门禁约束"，那是一处实质改动，请确认。
+结论先说：**不需要在"产品核验"和"交给合规"之间二选一。** 这个仓库本来就有两个轴——
+
+- `status`：案件走到了流水线的哪一步（triage / submitted / under_review / ...）
+- **派生阶段**（`workflow/policy.ts` 的 `stageKey` → `STAGE_RULES`）：谁在处理它
+
+而"派生阶段"里已经有一条合规覆盖规则：**只要事故审查还是 pending，案件就派生成
+`compliance_review`（责任部门 = compliance）**，与 status 无关。规格 B1 说的"派生阶段为
+compliance"就是这一条。所以：
+
+1. **`unsure` 不需要进 `escalated`。** 它的 status 是 `triage`（产品待核验），派生阶段是
+   `compliance_review`（安全待审）——同一时刻两个事实都在，任何一个都没被挤掉。测试里
+   `puts an unsure injury submission with compliance while it stays triage for the product`
+   钉的就是这一点。
+2. **受伤申报不自动开 `case_escalations` 记录，这是对的。** 因为"关不了案"的自动保护**已经
+   存在且覆盖所有状态**：`policy.ts` 的 `closure_review → closed` 要求审查不再是 pending
+   （`BLOCKING_REASONS.REPORTABILITY_PENDING`），而每一起事故申报都会自动建一条审查。再自动
+   开一条升级记录，等于要求操作人把同一个问题关两次（一次审查、一次升级凭证），不增加安全性。
+   记录因此保留它真正的用途：**由人开启的、超出报告性问题的对外对话**（律师、监管、媒体），
+   以及伤情本身升级成这类事情的时候 —— 这也是 `injury` / `battery_ingestion` 两个分类的含义。
+   记录可以挂在审查上（`case_escalations.review_id` 已在表里）。
+
+#### 顺带修掉一个真缺陷（这是这次最有价值的部分）
+
+`escalated` **不在**上面那条覆盖集合里，而 `stageKey` 的末尾是 `return 'final'`。于是：
+
+- 一个 `escalated` 且审查 pending 的案件 → 派生阶段 **`final`**（"没什么可做的了"），
+  而它其实是**正在合规手里**；
+- 审查关掉之后的 `escalated` 案件 → 同样是 `final`。
+
+这正是规格自己警告的那类问题（"未知值不得当作 standard"）：新状态加进了枚举，读取方没有全部
+认识它，而失败方向恰好是"看起来已完成"。修法：
+
+- 覆盖集合补上 `escalated`（与 `triage` 同理）；
+- `stageKey` 由 if 链改成 `switch`，`escalated` 显式落到 `submitted` 阶段（它的平行态），
+  并且**穷尽性由类型保证**：末尾是 `const unhandled: never = state.caseStatus`，新增状态而没
+  决定它的阶段就是编译错误，而不是一个悄悄读成"已终结"的案件。
+- 这条守卫做了**变异检验**：往 `CaseStatus` 里塞一个 `quarantined_mutation_probe`，编译器立刻
+  报 `Type '"quarantined_mutation_probe"' is not assignable to type 'never'`（同时
+  `BASE_TRANSITIONS` 缺键也报错），恢复后干净。守卫是有效的，不是装饰。
 
 ---
 
