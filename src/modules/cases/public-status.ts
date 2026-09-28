@@ -68,7 +68,15 @@ export function mapToPublicCaseState(
       publicStatus = 'action_required';
       break;
     case 'approved':
-      publicStatus = 'resolution_approved';
+      // Once the remedy has completed externally the consumer is not waiting on a decision
+      // any more — it is on its way. The vocabulary has a label for exactly that, and this
+      // mapping used to ignore the resolution status here, so a consumer whose replacement
+      // had already arrived was still being told "Resolution approved" until an operator
+      // remembered to move the case to `closure_review`.
+      publicStatus =
+        resolution.status === 'externally_completed'
+          ? 'resolution_in_progress'
+          : 'resolution_approved';
       break;
     case 'closure_review':
       publicStatus = 'resolution_in_progress';

@@ -296,13 +296,10 @@ describe('CaseWorkflowPolicy — public status (§9.9)', () => {
     ).toBe('resolution_approved');
   });
 
-  it('approved + resolution externally_completed → resolution_approved, for now', () => {
-    // This is a gap in the consumer mapping, not a decision, and the snapshot now reports it
-    // faithfully instead of holding a second opinion. An approved case whose remedy has
-    // already completed externally keeps reading "Resolution approved" until an operator
-    // moves the case to `closure_review` — the label for "the remedy is moving" exists and
-    // the mapping this replaced used it here. Changing it changes what consumers see, so it
-    // is recorded in docs/open-items.md rather than folded into a refactor.
+  it('approved + resolution externally_completed → resolution_in_progress', () => {
+    // The gap recorded in docs/open-items.md is closed: a completed remedy is reported as
+    // in progress rather than as awaiting a decision, which is what consumers were being
+    // told until an operator moved the case on.
     expect(
       evaluate(
         state({
@@ -310,7 +307,7 @@ describe('CaseWorkflowPolicy — public status (§9.9)', () => {
           resolution: resolution({ status: 'externally_completed' }),
         }),
       ).publicStatus,
-    ).toBe('resolution_approved');
+    ).toBe('resolution_in_progress');
   });
 
   it('closes without a remedy as a neutral closure, not as completed', () => {

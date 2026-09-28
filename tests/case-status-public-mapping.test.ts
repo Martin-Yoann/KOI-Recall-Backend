@@ -50,6 +50,12 @@ describe('mapToPublicCaseState', () => {
       publicStatus: 'resolution_in_progress',
       approvedVisible: true,
     });
+    // A remedy that has completed externally is no longer awaiting a decision, so the
+    // consumer is told it is in progress rather than approved.
+    expect(
+      mapToPublicCaseState('approved', { ...approved, status: 'externally_completed' })
+        .publicStatus,
+    ).toBe('resolution_in_progress');
   });
 
   it('keeps negative outcomes sticky and non-positive across resolutions', () => {
