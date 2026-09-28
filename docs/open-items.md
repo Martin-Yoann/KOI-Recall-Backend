@@ -283,3 +283,36 @@ npx vercel env ls production      # 只读；项目 genkiyancub-8961s-projects/k
 - 附带代价：集成套件跑在这个远程隔离库上，每次提交十几秒，一次完整回归因此很慢。方案 0.2 原本
   要的是**本地** Postgres（docker-compose），正是为了避免这个；这台机器上**没有 docker**，所以
   隔离库落在 Neon 上 —— 这是有代价的折中，不是等价选择。
+
+---
+
+## 提交路径有了分段计时（优化 4 ・ 2026-09-28）
+
+这一项的目的一开始就写清楚了：不是"优化慢代码"，而是**先能看见**。仓库里 `SafeLogFields` 早就声明了
+`elapsedMs`，但**没有任何地方写过它** —— 也就是说在这之前，这个平台完全没有请求计时。
+
+现在每次提交打一行结构化日志，三段：
+
+```
+{"level":"info","message":"Claim submission timed","caseReference":"KOI-...","prepareMs":1,"transactionMs":8466,"elapsedMs":8467}
+```
+
+- `prepareMs`：事务之前的本地工作 —— 校验、规范化哈希、幂等 HMAC、整份载荷的 AES 加密。
+- `transactionMs`：那一个交互事务（里面 17 条语句）。
+- `elapsedMs`：整个调用。三者同一时钟，所以 `elapsedMs === prepareMs + transactionMs` 精确成立，
+  测试就钉这一条不变量（数字本身是输出，不是断言对象）。
+- `errorCode` 出现即表示这次尝试**失败**；级别仍是 `info`，因为被驳回的提交是常态，而真正异常的
+  东西已经由应用的错误处理器记了。
+- `replayed: true` 只覆盖**第三条**重放路径（唯一键冲突在提交时才浮现的那条）。另外两条更常见的
+  重放是在事务内部直接 `return` 已存响应，所以它们记成成功 —— 测试里写明了这一点，免得以后有人
+  以为"重放会被标出来"。
+
+**第一份数据（跨区，因此仍然不是生产数字）**：`prepareMs` **0–1ms**，`transactionMs` **7.7–10.6s**。
+这有两点价值：一是确认了**本地工作（含加密）可以忽略**，应用层没有可优化的东西；二是把成本完整地
+落在事务的往返上，与前面那次归因一致。**同区的真实数字要等部署后从日志里读** —— 这份计时的意义
+就是让那时有人能读。
+
+**顺带记录一个不稳定的测试**：`opens both real PostgreSQL transactions before releasing concurrent work`
+在一次全量运行里以 `Concurrent test gate timed out waiting for participants` 失败（另一次通过）。它的
+等待预算（7 秒）是按本地库定的，而这个隔离库在另一洲（每条语句 ~250ms）。这不是本次改动引起的，
+但会让完整回归偶发变红，值得单独处理。

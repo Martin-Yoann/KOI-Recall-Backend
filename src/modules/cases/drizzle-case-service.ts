@@ -57,6 +57,7 @@ import {
 import type { DisposalService } from '../disposal/service.js';
 import { DEFAULT_CONSUMER_WEB_BASE_URL } from '../../config/env.js';
 import type { CaseService, ClaimSubmissionCommand } from './service.js';
+import { consoleSafeLogger } from '../../platform/observability/logger.js';
 
 const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 const IDEMPOTENCY_UNIQUE_CONSTRAINT = 'idempotency_records_endpoint_key_uidx';
@@ -192,6 +193,12 @@ export class DrizzleCaseService implements CaseService {
   }
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {
+    // Timed from here, because the number this exists to produce is the one nobody had:
+    // what a submission costs in the region it runs in. The same path measured at ~15s
+    // from a development machine turned out to be seventeen round trips at a 250ms
+    // round-trip cost, which says nothing about production; a phase breakdown says where
+    // the time goes in the environment that matters.
+    const startedAt = Date.now();
     // Checked before the transaction opens: a rejected payload should not take a
     // row lock or allocate a case reference.
     assertIncidentDetailsCompleteness(command.body, this.incidentStrictValidation);
@@ -202,6 +209,12 @@ export class DrizzleCaseService implements CaseService {
 
     const encrypted = await this.encryptSubmission(command.body);
 
+    // Everything above this line is local work: validation, canonical hashing, the
+    // idempotency HMAC and the payload encryption. If this number ever dominates, the next
+    // step is to split it rather than guess which part is slow.
+    const preparedAt = Date.now();
+    // The transaction body starts running as soon as it is created, so this is its start
+    // rather than the `await` below.
     const transaction = this.handle.transaction(async (tx) => {
       const [locked] = await tx
         .select({
@@ -667,18 +680,51 @@ export class DrizzleCaseService implements CaseService {
       return response;
     });
 
+    /**
+     * One line per attempt, at `info` even when it failed: a rejected submission is
+     * routine, and what is not routine is already logged by the application's error
+     * handler. `errorCode` present is what marks an attempt as failed.
+     */
+    const logTiming = (
+      caseReference: string | undefined,
+      extra: { errorCode?: string; replayed?: boolean } = {},
+    ): void => {
+      const now = Date.now();
+      consoleSafeLogger.info('Claim submission timed', {
+        caseReference,
+        prepareMs: preparedAt - startedAt,
+        transactionMs: now - preparedAt,
+        elapsedMs: now - startedAt,
+        ...extra,
+      });
+    };
+
     try {
-      return await transaction;
+      const response = await transaction;
+      logTiming(response.caseReference);
+      return response;
     } catch (error) {
-      if (!isUniqueViolationWithConstraint(error, IDEMPOTENCY_UNIQUE_CONSTRAINT)) throw error;
+      if (!isUniqueViolationWithConstraint(error, IDEMPOTENCY_UNIQUE_CONSTRAINT)) {
+        logTiming(undefined, { errorCode: error instanceof Error ? error.name : 'UnknownError' });
+        throw error;
+      }
       const concurrentWinner = await this.findIdempotency(
         endpoint,
         keyHash,
         this.handle.db,
         submittedAt,
       );
-      if (!concurrentWinner) throw error;
-      return this.replay(concurrentWinner, requestHash);
+      if (!concurrentWinner) {
+        logTiming(undefined, { errorCode: 'ConcurrentSubmissionWithoutRecord' });
+        throw error;
+      }
+      const replayed = this.replay(concurrentWinner, requestHash);
+      // A replay is not a failure, so it is not marked with `errorCode`; the two common
+      // replay paths — a repeated key, and a concurrent one that lost the insert race —
+      // return from inside the transaction, so they are logged as ordinary successes.
+      // Only this third path, where the unique violation surfaced at commit, gets here.
+      logTiming(replayed.caseReference, { replayed: true });
+      return replayed;
     }
   }
 

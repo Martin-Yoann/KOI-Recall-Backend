@@ -5,7 +5,7 @@ import 'dotenv/config';
 import { randomUUID } from 'node:crypto';
 
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDatabase, type DatabaseHandle } from '../src/db/client.js';
 import {
@@ -485,6 +485,37 @@ const validationCases: Array<{
 
 // A submission is many round trips; the default 5s budget is sized for a local
 // database and this suite is also run against a remote one.
+/**
+ * Runs `work` while capturing what the safe logger writes. `consoleSafeLogger` calls
+ * `console.info`, so this is exactly what a log collector receives.
+ */
+async function captureTimingLines(
+  work: () => Promise<unknown>,
+): Promise<Record<string, unknown>[]> {
+  const lines: string[] = [];
+  const spy = vi.spyOn(console, 'info').mockImplementation((...args: unknown[]) => {
+    lines.push(String(args[0]));
+  });
+  try {
+    await work();
+  } finally {
+    spy.mockRestore();
+  }
+  return lines
+    .map((line) => JSON.parse(line) as Record<string, unknown>)
+    .filter((entry) => entry.message === 'Claim submission timed');
+}
+
+/** The construction every case in this suite uses, so the timings are the same shape. */
+function buildService(): DrizzleCaseService {
+  return new DrizzleCaseService({
+    handle: handle!,
+    crypto,
+    malwareScanRequired: false,
+    notifications: communicationQueue,
+  });
+}
+
 describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout: 180_000 }, () => {
   let fixture: ClaimFixture | undefined;
 
@@ -1526,5 +1557,48 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     expect(documents.every((document) => document.draftId === fixture!.draftId)).toBe(true);
     expect(documents.every((document) => document.caseId === null)).toBe(true);
     expect(documents.every((document) => document.uploadStatus === 'verified')).toBe(true);
+  });
+
+  it('reports where a submission spent its time', async () => {
+    const cases = buildService();
+    let caseReference = '';
+
+    const timed = await captureTimingLines(async () => {
+      caseReference = (await cases.submit(fixture!.command())).caseReference;
+    });
+
+    expect(timed).toHaveLength(1);
+    const entry = timed[0]!;
+    expect(entry.caseReference).toBe(caseReference);
+    // The phases are measured end to end, so together they are the whole call — exactly,
+    // because all three come from the same clock. That invariant is what is worth pinning;
+    // the numbers themselves are the output, and they are whatever the environment costs.
+    expect(entry.elapsedMs).toBe((entry.prepareMs as number) + (entry.transactionMs as number));
+    expect(entry.prepareMs).toBeGreaterThanOrEqual(0);
+    expect(entry.transactionMs).toBeGreaterThanOrEqual(0);
+    // A successful attempt carries no failure marker.
+    expect(entry).not.toHaveProperty('errorCode');
+  });
+
+  it('logs a repeated key as a success, because that is what the caller gets', async () => {
+    const cases = buildService();
+    const idempotencyKey = randomUUID();
+    const command = fixture!.command({ idempotencyKey });
+
+    const timed = await captureTimingLines(async () => {
+      await cases.submit(command);
+      // Same key, canonically identical request. This replay is served *inside* the
+      // transaction — the body finds the earlier record and returns the stored response —
+      // so the caller sees a success and the log says so. `replayed: true` covers only the
+      // third path, where the unique violation surfaced at commit.
+      await cases.submit({
+        ...command,
+        body: { ...command.body, consumer: { ...command.body.consumer } },
+      });
+    });
+
+    expect(timed).toHaveLength(2);
+    expect(timed[1]!.caseReference).toBe(timed[0]!.caseReference);
+    expect(timed[1]).not.toHaveProperty('errorCode');
   });
 });

@@ -5,7 +5,15 @@ export interface SafeLogFields {
   method?: string;
   path?: string;
   status?: number;
+  /** Total wall time of the operation being reported. */
   elapsedMs?: number;
+  /** Submission phase timings; see the claim-submission log line. */
+  prepareMs?: number;
+  transactionMs?: number;
+  /** The public case reference; the id the consumer sees, not a database id. */
+  caseReference?: string | undefined;
+  /** True when the work was served from an earlier result rather than done again. */
+  replayed?: boolean;
   errorCode?: string;
   errorMessage?: string;
   stack?: string | undefined;
