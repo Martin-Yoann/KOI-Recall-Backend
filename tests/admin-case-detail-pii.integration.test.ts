@@ -66,15 +66,12 @@ describe.skipIf(!enabled)(
     const submitClaim = async (
       bodyOverrides: Partial<ClaimSubmissionRequest> = {},
     ): Promise<string> => {
-      const service = new DrizzleCaseService(
-        handle!,
-        writerCrypto,
-        undefined,
-        undefined,
-        undefined,
-        false,
-        communicationQueue,
-      );
+      const service = new DrizzleCaseService({
+        handle: handle!,
+        crypto: writerCrypto,
+        malwareScanRequired: false,
+        notifications: communicationQueue,
+      });
       const result = await service.submit(fixture!.command({ body: fixture!.body(bodyOverrides) }));
       return result.caseReference;
     };

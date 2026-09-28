@@ -206,19 +206,17 @@ export function createApplicationRegistry(
       ...(crypto instanceof NotImplementedCryptoAdapter
         ? {}
         : {
-            cases: new DrizzleCaseService(
+            cases: new DrizzleCaseService({
               handle,
               crypto,
-              new DrizzleCaseResolutionService(handle, crypto, emailTrigger),
-              undefined,
-              undefined,
+              resolutions: new DrizzleCaseResolutionService(handle, crypto, emailTrigger),
               malwareScanRequired,
-              communicationQueue,
+              notifications: communicationQueue,
               incidentStrictValidation,
               incidentEscalatedStatus,
-              disposalService,
+              disposal: disposalService,
               consumerWebBaseUrl,
-            ),
+            }),
             caseStatusLookups: new DrizzleCaseStatusLookupService(handle.db, crypto),
             admin: new DrizzleAdminService({
               db: handle.db,

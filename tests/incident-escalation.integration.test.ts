@@ -63,17 +63,13 @@ describe.skipIf(!enabled)(
 
     /** The same construction the registry uses, with the phase-2 switch placed. */
     function serviceWith(incidentEscalatedStatus: boolean) {
-      return new DrizzleCaseService(
-        handle!,
+      return new DrizzleCaseService({
+        handle: handle!,
         crypto,
-        undefined,
-        undefined,
-        undefined,
-        false,
-        new DrizzleCommunicationQueueService(),
-        false,
+        malwareScanRequired: false,
+        notifications: new DrizzleCommunicationQueueService(),
         incidentEscalatedStatus,
-      );
+      });
     }
 
     it('starts a reported injury in escalated when the switch is on', async () => {

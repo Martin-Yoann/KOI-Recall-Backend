@@ -120,6 +120,43 @@ interface EncryptedSubmission {
   injuryDescription?: Ciphertext;
 }
 
+/**
+ * Constructor dependencies for {@link DrizzleCaseService}.
+ *
+ * This was eleven positional parameters, and three of them could hold one of two
+ * different things — a resolution service *or* a case-reference generator, a reference
+ * generator *or* a before-hook, a before-hook *or* a boolean — told apart by counting
+ * arguments. One of those counts (`arguments.length === 3`) could never be true beside the
+ * check next to it, which is a fair sign the form had stopped being readable. Across the
+ * call sites it left 72 `undefined` placeholders, and a value in the wrong slot changed
+ * behaviour silently unless the types happened to disagree.
+ *
+ * Named fields instead: each call site says what it is passing, and the optional
+ * capabilities are visible at the point of use rather than inferred from arity.
+ */
+export interface DrizzleCaseServiceDeps {
+  handle: DatabaseHandle;
+  crypto: SensitiveDataCryptoPort;
+  /** Resolution lifecycle operations. Absent → one built on the same notification queue. */
+  resolutions?: CaseResolutionService | undefined;
+  /** Case-reference generator; tests pin it to force a retry. Absent → the production one. */
+  referenceGenerator?: (() => string) | undefined;
+  /** Test seam: runs inside the transaction, before the idempotency row is written. */
+  beforeIdempotencyInsert?: (() => Promise<void>) | undefined;
+  /** When true, a submission whose documents were not scanned is refused. */
+  malwareScanRequired?: boolean | undefined;
+  /** Consumer email queue. Absent → transitions enqueue no notification. */
+  notifications?: CommunicationQueueService | undefined;
+  /** Stage 3 of the structured-incident rollout; see INCIDENT_STRICT_VALIDATION. */
+  incidentStrictValidation?: boolean | undefined;
+  /** Phase 2 of the escalation rollout; see INCIDENT_ESCALATED_STATUS. */
+  incidentEscalatedStatus?: boolean | undefined;
+  /** Disposal lifecycle operations. Absent → those endpoints answer 501. */
+  disposal?: DisposalService | undefined;
+  /** Base URL for consumer email links. */
+  consumerWebBaseUrl?: string | undefined;
+}
+
 export class DrizzleCaseService implements CaseService {
   private readonly handle: DatabaseHandle;
   private readonly crypto: SensitiveDataCryptoPort;
@@ -134,54 +171,24 @@ export class DrizzleCaseService implements CaseService {
   private readonly consumerWebBaseUrl: string;
   private readonly notifications: CommunicationQueueService | undefined;
 
-  constructor(
-    handle: DatabaseHandle,
-    crypto: SensitiveDataCryptoPort,
-    resolutionsOrReference?: CaseResolutionService | (() => string),
-    referenceOrBefore?: (() => string) | (() => Promise<void>),
-    beforeOrMalware?: (() => Promise<void>) | boolean,
-    malwareScanRequired = false,
-    notifications?: CommunicationQueueService,
-    incidentStrictValidation = false,
-    incidentEscalatedStatus = false,
-    disposal?: DisposalService,
-    consumerWebBaseUrl = DEFAULT_CONSUMER_WEB_BASE_URL,
-  ) {
-    this.handle = handle;
-    this.crypto = crypto;
-    this.notifications = notifications;
-    this.incidentEscalatedStatus = incidentEscalatedStatus;
+  constructor(deps: DrizzleCaseServiceDeps) {
+    this.handle = deps.handle;
+    this.crypto = deps.crypto;
+    this.notifications = deps.notifications;
+    this.incidentEscalatedStatus = deps.incidentEscalatedStatus ?? false;
     // The fallback resolution service must fire approval emails the same way
     // the injected one does, so build it on the same queue.
-    const emailTrigger = notifications ? new EmailTriggerService(notifications) : undefined;
-    const defaultResolution = new DrizzleCaseResolutionService(handle, crypto, emailTrigger);
-    const legacyReference =
-      typeof resolutionsOrReference === 'function' ? resolutionsOrReference : undefined;
+    const emailTrigger = deps.notifications
+      ? new EmailTriggerService(deps.notifications)
+      : undefined;
     this.resolutions =
-      legacyReference || typeof resolutionsOrReference === 'undefined'
-        ? defaultResolution
-        : (resolutionsOrReference as CaseResolutionService);
-    const legacyReferenceGenerator =
-      legacyReference ??
-      (resolutionsOrReference === undefined &&
-      typeof referenceOrBefore === 'function' &&
-      arguments.length === 3
-        ? (referenceOrBefore as () => string)
-        : undefined);
-    this.referenceGenerator = legacyReferenceGenerator ?? generateCaseReference;
-    this.beforeIdempotencyInsert =
-      resolutionsOrReference === undefined &&
-      typeof referenceOrBefore === 'function' &&
-      arguments.length >= 4
-        ? (referenceOrBefore as () => Promise<void>)
-        : typeof beforeOrMalware === 'function'
-          ? beforeOrMalware
-          : () => Promise.resolve();
-    this.malwareScanRequired =
-      typeof beforeOrMalware === 'boolean' ? beforeOrMalware : malwareScanRequired;
-    this.incidentStrictValidation = incidentStrictValidation;
-    this.disposal = disposal;
-    this.consumerWebBaseUrl = consumerWebBaseUrl;
+      deps.resolutions ?? new DrizzleCaseResolutionService(deps.handle, deps.crypto, emailTrigger);
+    this.referenceGenerator = deps.referenceGenerator ?? generateCaseReference;
+    this.beforeIdempotencyInsert = deps.beforeIdempotencyInsert ?? (() => Promise.resolve());
+    this.malwareScanRequired = deps.malwareScanRequired ?? false;
+    this.incidentStrictValidation = deps.incidentStrictValidation ?? false;
+    this.disposal = deps.disposal;
+    this.consumerWebBaseUrl = deps.consumerWebBaseUrl ?? DEFAULT_CONSUMER_WEB_BASE_URL;
   }
 
   async submit(command: ClaimSubmissionCommand): Promise<ClaimSubmissionResponse> {

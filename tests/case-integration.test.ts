@@ -502,15 +502,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
   });
 
   it('atomically persists a standard claim without plaintext sensitive data', async () => {
-    const service = new DrizzleCaseService(
-      handle!,
+    const service = new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
     const normalizedEmail = 'taylor@example.com';
     const baseBody = fixture!.body({ incidentAnswer: 'no' });
     const sensitivePurchaseOrder = 'PRIVATE-PURCHASE-9001';
@@ -613,15 +610,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
   });
 
   it('replays the original response for the same key and canonical request', async () => {
-    const service = new DrizzleCaseService(
-      handle!,
+    const service = new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
     const idempotencyKey = randomUUID();
     const command = fixture!.command({ idempotencyKey });
 
@@ -652,15 +646,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
   });
 
   it('atomically recycles an expired Idempotency-Key for a new Draft', async () => {
-    const service = new DrizzleCaseService(
-      handle!,
+    const service = new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
     const idempotencyKey = randomUUID();
     const keyHash = await crypto.lookupHash(idempotencyKey);
     const first = await service.submit(fixture!.command({ idempotencyKey }));
@@ -701,15 +692,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
   it('allows exactly one concurrent winner when recycling an expired Idempotency-Key', async () => {
     const idempotencyKey = randomUUID();
     const keyHash = await crypto.lookupHash(idempotencyKey);
-    await new DrizzleCaseService(
-      handle!,
+    await new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    ).submit(fixture!.command({ idempotencyKey }));
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    }).submit(fixture!.command({ idempotencyKey }));
     await handle!.db
       .update(idempotencyRecords)
       .set({ expiresAt: new Date(Date.now() - 1000) })
@@ -722,15 +710,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     const secondFixture = await createClaimFixture(handle!);
     const thirdFixture = await createClaimFixture(handle!);
     const transactionGate = createFailSafeGate(2);
-    const service = new DrizzleCaseService(
-      withTransactionBarrier(handle!, transactionGate),
+    const service = new DrizzleCaseService({
+      handle: withTransactionBarrier(handle!, transactionGate),
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
 
     try {
       const results = await Promise.allSettled([
@@ -772,15 +757,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
   });
 
   it('returns 409 when a key is reused with a different request', async () => {
-    const service = new DrizzleCaseService(
-      handle!,
+    const service = new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
     const command = fixture!.command({ idempotencyKey: randomUUID() });
     await service.submit(command);
 
@@ -800,15 +782,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
       productId: temporaryCampaign.productId,
     });
     const idempotencyKey = randomUUID();
-    const service = new DrizzleCaseService(
-      handle!,
+    const service = new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
 
     try {
       const first = await service.submit(fixture!.command({ idempotencyKey }));
@@ -835,15 +814,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
   });
 
   it('returns a Claim conflict when a submitted Draft is retried with a new key', async () => {
-    const service = new DrizzleCaseService(
-      handle!,
+    const service = new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
     await service.submit(fixture!.command({ idempotencyKey: randomUUID() }));
 
     await expect(
@@ -879,7 +855,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
       new NotImplementedPrivateBlobAdapter(),
       observedTransaction,
     );
-    const claimService = new DrizzleCaseService(handle!, crypto, undefined, claimPause.wait);
+    const claimService = new DrizzleCaseService({
+      handle: handle!,
+      crypto,
+      beforeIdempotencyInsert: claimPause.wait,
+    });
 
     await new DrizzleClaimDraftService(handle!.db).assertActive(
       fixture!.draftId,
@@ -987,12 +967,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     const waitingEmail = `gate-rollback-${randomUUID()}@example.com`;
     const transactionGate = createFailSafeGate(2);
     const idempotencyInsertGate = createFailSafeGate(2);
-    const service = new DrizzleCaseService(
-      withTransactionBarrier(handle!, transactionGate),
+    const service = new DrizzleCaseService({
+      handle: withTransactionBarrier(handle!, transactionGate),
       crypto,
-      undefined,
-      idempotencyInsertGate.wait,
-    );
+      beforeIdempotencyInsert: idempotencyInsertGate.wait,
+    });
     const gates = [transactionGate, idempotencyInsertGate];
     const waiting = runGateParticipant(
       () =>
@@ -1041,15 +1020,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
       consumer: { ...fixture!.body().consumer, email },
     });
     const transactionGate = createFailSafeGate(2);
-    const service = new DrizzleCaseService(
-      withTransactionBarrier(handle!, transactionGate),
+    const service = new DrizzleCaseService({
+      handle: withTransactionBarrier(handle!, transactionGate),
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
 
     const results = await Promise.allSettled([
       runGateParticipant(
@@ -1094,15 +1070,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
       body: fixture!.body({ consumer: { ...fixture!.body().consumer, email } }),
     });
     const transactionGate = createFailSafeGate(2);
-    const service = new DrizzleCaseService(
-      withTransactionBarrier(handle!, transactionGate),
+    const service = new DrizzleCaseService({
+      handle: withTransactionBarrier(handle!, transactionGate),
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    );
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    });
 
     const [first, second] = await Promise.all([
       runGateParticipant(() => service.submit(command), [transactionGate]),
@@ -1124,12 +1097,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     const secondEmail = `second-${randomUUID()}@example.com`;
     const transactionGate = createFailSafeGate(2);
     const idempotencyInsertGate = createFailSafeGate(2);
-    const service = new DrizzleCaseService(
-      withTransactionBarrier(handle!, transactionGate),
+    const service = new DrizzleCaseService({
+      handle: withTransactionBarrier(handle!, transactionGate),
       crypto,
-      undefined,
-      idempotencyInsertGate.wait,
-    );
+      beforeIdempotencyInsert: idempotencyInsertGate.wait,
+    });
     const gates = [transactionGate, idempotencyInsertGate];
 
     try {
@@ -1181,7 +1153,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
       collisionReference,
     ]);
     const generated = [collisionReference, freshReference];
-    const service = new DrizzleCaseService(handle!, crypto, () => generated.shift()!);
+    const service = new DrizzleCaseService({
+      handle: handle!,
+      crypto,
+      referenceGenerator: () => generated.shift()!,
+    });
 
     try {
       const result = await service.submit(fixture!.command());
@@ -1204,7 +1180,11 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     ];
     const collisionCaseIds = await insertReferenceCollisions(fixture!.draftId, collisionReferences);
     const generated = [...collisionReferences];
-    const service = new DrizzleCaseService(handle!, crypto, () => generated.shift()!);
+    const service = new DrizzleCaseService({
+      handle: handle!,
+      crypto,
+      referenceGenerator: () => generated.shift()!,
+    });
 
     try {
       await expect(service.submit(fixture!.command())).rejects.toThrow(
@@ -1220,15 +1200,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
 
   it('persists yes as an encrypted incident with pending review', async () => {
     const narrative = 'A fictional minor injury occurred during use.';
-    const result = await new DrizzleCaseService(
-      handle!,
+    const result = await new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    ).submit({
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    }).submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
       body: fixture!.body({
@@ -1267,15 +1244,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
 
   it('normalizes unsure without event type or date and routes to triage', async () => {
     const narrative = 'The consumer is unsure whether a safety incident occurred.';
-    const result = await new DrizzleCaseService(
-      handle!,
+    const result = await new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    ).submit({
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    }).submit({
       campaignSlug: 'music-lollipop-demo-2026',
       idempotencyKey: randomUUID(),
       body: fixture!.body({
@@ -1312,15 +1286,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     const prepared = await setup(fixture!);
     try {
       await expect(
-        new DrizzleCaseService(
-          handle!,
+        new DrizzleCaseService({
+          handle: handle!,
           crypto,
-          undefined,
-          undefined,
-          undefined,
-          false,
-          communicationQueue,
-        ).submit(prepared.command),
+          malwareScanRequired: false,
+          notifications: communicationQueue,
+        }).submit(prepared.command),
       ).rejects.toBeInstanceOf(error);
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
@@ -1331,15 +1302,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
 
   it('persists a not-matched Product for triage instead of rejecting the Claim', async () => {
     const body = fixture!.body();
-    const result = await new DrizzleCaseService(
-      handle!,
+    const result = await new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    ).submit(
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    }).submit(
       fixture!.command({
         body: {
           ...body,
@@ -1372,15 +1340,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     });
 
     try {
-      const result = await new DrizzleCaseService(
-        handle!,
+      const result = await new DrizzleCaseService({
+        handle: handle!,
         crypto,
-        undefined,
-        undefined,
-        undefined,
-        false,
-        communicationQueue,
-      ).submit(
+        malwareScanRequired: false,
+        notifications: communicationQueue,
+      }).submit(
         fixture!.command({
           body: {
             ...body,
@@ -1424,15 +1389,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
       expiresAt: new Date(Date.now() + 60 * 60 * 1000),
     });
 
-    await new DrizzleCaseService(
-      handle!,
+    await new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      undefined,
-      undefined,
-      undefined,
-      false,
-      communicationQueue,
-    ).submit(
+      malwareScanRequired: false,
+      notifications: communicationQueue,
+    }).submit(
       fixture!.command({
         body: fixture!.body({ documentIds: fixture!.documentIds.slice(0, 2) }),
       }),
@@ -1472,15 +1434,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
 
     try {
       await expect(
-        new DrizzleCaseService(
-          handle!,
+        new DrizzleCaseService({
+          handle: handle!,
           crypto,
-          undefined,
-          undefined,
-          undefined,
-          false,
-          communicationQueue,
-        ).submit(fixture!.command()),
+          malwareScanRequired: false,
+          notifications: communicationQueue,
+        }).submit(fixture!.command()),
       ).rejects.toThrow('No template version for claim_confirmation');
       await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
       await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');
@@ -1523,15 +1482,12 @@ describe.skipIf(!enabled)('DrizzleCaseService (database integration)', { timeout
     };
 
     await expect(
-      new DrizzleCaseService(
-        handle!,
+      new DrizzleCaseService({
+        handle: handle!,
         crypto,
-        undefined,
-        undefined,
-        undefined,
-        false,
-        failingQueue,
-      ).submit(command),
+        malwareScanRequired: false,
+        notifications: failingQueue,
+      }).submit(command),
     ).rejects.toThrow('outbox write failed');
     await expect(countCasesForDraft(handle!, fixture!.draftId)).resolves.toBe(0);
     await expect(loadDraftStatus(handle!, fixture!.draftId)).resolves.toBe('active');

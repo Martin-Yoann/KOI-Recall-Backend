@@ -65,19 +65,16 @@ describe.skipIf(!enabled)(
 
     beforeAll(async () => {
       service = new DrizzleDisposalService({ handle: handle!, notifications: queue });
-      casesService = new DrizzleCaseService(
-        handle!,
+      casesService = new DrizzleCaseService({
+        handle: handle!,
         crypto,
-        undefined,
-        undefined,
-        undefined,
-        false,
-        queue,
-        false,
-        false, // INCIDENT_ESCALATED_STATUS: phase 2 is off in this suite.
-        service,
-        'http://localhost:3313',
-      );
+        malwareScanRequired: false,
+        notifications: queue,
+        // INCIDENT_ESCALATED_STATUS: phase 2 is off in this suite.
+        incidentEscalatedStatus: false,
+        disposal: service,
+        consumerWebBaseUrl: 'http://localhost:3313',
+      });
       const [staff] = await handle!.db.select({ id: staffUsers.id }).from(staffUsers).limit(1);
       const draft = await new DrizzleClaimDraftService(handle!.db).create(SLUG);
       const [draftRow] = await handle!.db

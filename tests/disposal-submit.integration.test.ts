@@ -80,18 +80,16 @@ describe.skipIf(!enabled)('disposal task creation on submission', { timeout: 120
     await cleanupClaimFixture(handle!, probe);
 
     disposal = new DrizzleDisposalService({ handle: handle! });
-    service = new DrizzleCaseService(
-      handle!,
+    service = new DrizzleCaseService({
+      handle: handle!,
       crypto,
-      new DrizzleCaseResolutionService(handle!, crypto),
-      undefined,
-      undefined,
-      false,
-      queue,
-      false,
-      false, // INCIDENT_ESCALATED_STATUS: phase 2 is off in this suite.
+      resolutions: new DrizzleCaseResolutionService(handle!, crypto),
+      malwareScanRequired: false,
+      notifications: queue,
+      // INCIDENT_ESCALATED_STATUS: phase 2 is off in this suite.
+      incidentEscalatedStatus: false,
       disposal,
-    );
+    });
   });
 
   afterAll(async () => {

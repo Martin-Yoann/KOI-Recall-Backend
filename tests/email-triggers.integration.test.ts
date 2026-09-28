@@ -95,15 +95,13 @@ describe.skipIf(!enabled)(
       fixture = await createClaimFixture(handle!);
       const communicationQueue = new DrizzleCommunicationQueueService();
       const emailTrigger = new EmailTriggerService(communicationQueue);
-      const submitted = await new DrizzleCaseService(
-        handle!,
+      const submitted = await new DrizzleCaseService({
+        handle: handle!,
         crypto,
-        new DrizzleCaseResolutionService(handle!, crypto, emailTrigger),
-        undefined,
-        undefined,
-        false,
-        communicationQueue,
-      ).submit(fixture.command());
+        resolutions: new DrizzleCaseResolutionService(handle!, crypto, emailTrigger),
+        malwareScanRequired: false,
+        notifications: communicationQueue,
+      }).submit(fixture.command());
       caseReference = submitted.caseReference;
       caseId = (await loadAggregate(handle!, caseReference)).case.id;
 
