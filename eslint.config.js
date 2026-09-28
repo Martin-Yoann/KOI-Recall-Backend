@@ -12,6 +12,12 @@ export default tseslint.config(
       'openapi/**',
       'eslint.config.js',
       'scripts/**',
+      // One-off scratch scripts written during a session and deleted after: they are
+      // outside the type-checked project on purpose (the parser needs each file in the
+      // tsconfig, or in `allowDefaultProject`), and ignoring them here is what keeps a
+      // throwaway script from failing the lint gate the way it did once.
+      '_*.ts',
+      '_*.py',
       // Vercel serverless entry shim; not part of the type-checked tsconfig project.
       'api/**',
     ],
