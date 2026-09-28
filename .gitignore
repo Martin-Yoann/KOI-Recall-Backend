@@ -15,3 +15,10 @@ src/generated/
 # vendor documentation, not part of this project's source.
 .agents/
 skills-lock.json
+
+# Scratch scripts written during a session: run once, then deleted. A failure part-way
+# through one has three times left it behind for `git add -A` to sweep into a commit, which
+# then took an `--amend` to undo. Ignoring them at the root makes that accident harmless
+# instead of depending on remembering to check `git status` for a file I just wrote.
+/_*.py
+/_*.ts
