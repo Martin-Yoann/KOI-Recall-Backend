@@ -1,3 +1,6 @@
+import type { PublicCaseStatus } from '../../contracts/toc.js';
+import { mapToPublicCaseState } from '../cases/public-status.js';
+
 /**
  * CaseWorkflowPolicy — the single source of truth for workflow state mapping
  * (ADR redesign §5.2 / §7). Pure, database-free, unit-testable.
@@ -55,8 +58,8 @@ export interface WorkflowSnapshot {
   allowedActions: string[];
   /** Stable reason codes explaining which transitions are currently blocked. */
   blockingReasons: string[];
-  /** Consumer-facing status (ADR redesign §9.9). */
-  publicStatus: string;
+  /** Consumer-facing status (ADR redesign §9.9); see `publicStatus` below. */
+  publicStatus: PublicCaseStatus;
 }
 
 /** Stable blocking-reason codes. */
@@ -66,17 +69,6 @@ export const BLOCKING_REASONS = {
 } as const;
 
 /** Stable consumer-facing statuses (ADR redesign §9.9). */
-export const PUBLIC_STATUSES = {
-  RECEIVED: 'received',
-  IN_REVIEW: 'in_review',
-  ACTION_REQUIRED: 'action_required',
-  RESOLUTION_APPROVED: 'resolution_approved',
-  RESOLUTION_IN_PROGRESS: 'resolution_in_progress',
-  COMPLETED: 'completed',
-  NOT_APPROVED: 'not_approved',
-  CLOSED: 'closed',
-} as const;
-
 /** Case status transitions, after ADR redesign §8.2 (approved→closed is removed). */
 const BASE_TRANSITIONS: Readonly<Record<CaseStatus, readonly CaseStatus[]>> = {
   submitted: ['triage', 'under_review', 'rejected', 'duplicate', 'withdrawn'],
@@ -301,34 +293,23 @@ function resolutionActions(state: WorkflowCaseState): string[] {
 }
 
 /** Consumer-facing status (ADR redesign §9.9). */
-function publicStatus(state: WorkflowCaseState): string {
-  switch (state.caseStatus) {
-    case 'submitted':
-    case 'escalated':
-      // Escalation is internal routing: a consumer sees that their claim was received.
-      return PUBLIC_STATUSES.RECEIVED;
-    case 'triage':
-    case 'under_review':
-      return PUBLIC_STATUSES.IN_REVIEW;
-    case 'need_info':
-      return PUBLIC_STATUSES.ACTION_REQUIRED;
-    case 'approved': {
-      const resolutionStatus = state.resolution?.status ?? null;
-      if (resolutionStatus === 'approved') return PUBLIC_STATUSES.RESOLUTION_APPROVED;
-      if (resolutionStatus === 'externally_completed')
-        return PUBLIC_STATUSES.RESOLUTION_IN_PROGRESS;
-      return PUBLIC_STATUSES.IN_REVIEW;
-    }
-    case 'closure_review':
-      return PUBLIC_STATUSES.RESOLUTION_IN_PROGRESS;
-    case 'closed':
-      return PUBLIC_STATUSES.COMPLETED;
-    case 'rejected':
-      return PUBLIC_STATUSES.NOT_APPROVED;
-    case 'duplicate':
-    case 'withdrawn':
-      return PUBLIC_STATUSES.CLOSED;
-  }
+/**
+ * What the consumer is being told, which is not this module's vocabulary to decide.
+ *
+ * This used to be a second switch over the same statuses, and it had drifted from the one
+ * that actually serves the consumer API: it called a closed case `completed` even with no
+ * remedy approved, an `approved` case `in_review` while its resolution was still being
+ * decided, and — worst of the three — it told an operator that a duplicate claim was
+ * `closed` while the consumer was being told `not_approved`. Two mappings of one fact is
+ * how that happens; the fix is one mapping, owned by the module that publishes the
+ * vocabulary to consumers.
+ */
+function publicStatus(state: WorkflowCaseState): PublicCaseStatus {
+  return mapToPublicCaseState(state.caseStatus, {
+    status: state.resolution?.status ?? null,
+    requestedType: state.resolution?.requestedType ?? null,
+    approvedType: state.resolution?.approvedType ?? null,
+  }).publicStatus;
 }
 
 /**

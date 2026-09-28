@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   evaluate,
   BLOCKING_REASONS,
-  PUBLIC_STATUSES,
   type WorkflowCaseState,
 } from '../src/modules/workflow/policy.js';
 
@@ -274,33 +273,36 @@ describe('CaseWorkflowPolicy — resolution actions', () => {
 });
 
 describe('CaseWorkflowPolicy — public status (§9.9)', () => {
+  // These assertions used to name a local vocabulary constant. They now state the strings
+  // the consumer API returns, because the snapshot reports that mapping instead of keeping
+  // a second copy of it — see `publicStatus` in the module.
   it('submitted → received', () => {
-    expect(evaluate(state({ caseStatus: 'submitted' })).publicStatus).toBe(
-      PUBLIC_STATUSES.RECEIVED,
-    );
+    expect(evaluate(state({ caseStatus: 'submitted' })).publicStatus).toBe('received');
   });
 
   it('triage / under_review → in_review', () => {
-    expect(evaluate(state({ caseStatus: 'triage' })).publicStatus).toBe(PUBLIC_STATUSES.IN_REVIEW);
-    expect(evaluate(state({ caseStatus: 'under_review' })).publicStatus).toBe(
-      PUBLIC_STATUSES.IN_REVIEW,
-    );
+    expect(evaluate(state({ caseStatus: 'triage' })).publicStatus).toBe('in_review');
+    expect(evaluate(state({ caseStatus: 'under_review' })).publicStatus).toBe('in_review');
   });
 
   it('need_info → action_required', () => {
-    expect(evaluate(state({ caseStatus: 'need_info' })).publicStatus).toBe(
-      PUBLIC_STATUSES.ACTION_REQUIRED,
-    );
+    expect(evaluate(state({ caseStatus: 'need_info' })).publicStatus).toBe('action_required');
   });
 
   it('approved + resolution approved → resolution_approved', () => {
     expect(
       evaluate(state({ caseStatus: 'approved', resolution: resolution({ status: 'approved' }) }))
         .publicStatus,
-    ).toBe(PUBLIC_STATUSES.RESOLUTION_APPROVED);
+    ).toBe('resolution_approved');
   });
 
-  it('approved + resolution externally_completed → resolution_in_progress', () => {
+  it('approved + resolution externally_completed → resolution_approved, for now', () => {
+    // This is a gap in the consumer mapping, not a decision, and the snapshot now reports it
+    // faithfully instead of holding a second opinion. An approved case whose remedy has
+    // already completed externally keeps reading "Resolution approved" until an operator
+    // moves the case to `closure_review` — the label for "the remedy is moving" exists and
+    // the mapping this replaced used it here. Changing it changes what consumers see, so it
+    // is recorded in docs/open-items.md rather than folded into a refactor.
     expect(
       evaluate(
         state({
@@ -308,22 +310,30 @@ describe('CaseWorkflowPolicy — public status (§9.9)', () => {
           resolution: resolution({ status: 'externally_completed' }),
         }),
       ).publicStatus,
-    ).toBe(PUBLIC_STATUSES.RESOLUTION_IN_PROGRESS);
+    ).toBe('resolution_approved');
   });
 
-  it('closed → completed', () => {
-    expect(evaluate(state({ caseStatus: 'closed' })).publicStatus).toBe(PUBLIC_STATUSES.COMPLETED);
+  it('closes without a remedy as a neutral closure, not as completed', () => {
+    // The snapshot used to call every closed case `completed`. A case closed with nothing
+    // approved is not a completed remedy, and the consumer API has always said `closed` —
+    // so the same case read differently to the operator and to the consumer.
+    expect(evaluate(state({ caseStatus: 'closed' })).publicStatus).toBe('closed');
+    expect(
+      evaluate(
+        state({
+          caseStatus: 'closed',
+          resolution: resolution({ status: 'approved', approvedType: 'refund' }),
+        }),
+      ).publicStatus,
+    ).toBe('completed');
   });
 
-  it('rejected → not_approved', () => {
-    expect(evaluate(state({ caseStatus: 'rejected' })).publicStatus).toBe(
-      PUBLIC_STATUSES.NOT_APPROVED,
-    );
-  });
-
-  it('duplicate / withdrawn → closed', () => {
-    expect(evaluate(state({ caseStatus: 'duplicate' })).publicStatus).toBe(PUBLIC_STATUSES.CLOSED);
-    expect(evaluate(state({ caseStatus: 'withdrawn' })).publicStatus).toBe(PUBLIC_STATUSES.CLOSED);
+  it('tells a duplicate apart from a withdrawal', () => {
+    // Both read `closed` in the snapshot, while the consumer was told `not_approved` for the
+    // duplicate — the distinction an operator most needs to read correctly.
+    expect(evaluate(state({ caseStatus: 'rejected' })).publicStatus).toBe('not_approved');
+    expect(evaluate(state({ caseStatus: 'duplicate' })).publicStatus).toBe('not_approved');
+    expect(evaluate(state({ caseStatus: 'withdrawn' })).publicStatus).toBe('closed');
   });
 });
 

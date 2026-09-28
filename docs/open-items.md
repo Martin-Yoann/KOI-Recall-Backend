@@ -338,3 +338,30 @@ npx vercel env ls production      # 只读；项目 genkiyancub-8961s-projects/k
 顺带一处类型选择值得记：`claimConfirmationVariables` 返回**类型别名**而不是 `interface` —— 别名带隐式索引
 签名，所以既满足邮件队列的 `Record<string, string>`，调用方与测试又能按名字取字段（`interface` 不带隐式索引
 签名，会逼出 `!` 或下标访问）。
+
+---
+
+## 两份公开状态映射合成一份（优化 3 ・ 2026-09-28）
+
+`workflow/policy.ts` 的 `publicStatus` 与 `cases/public-status.ts` 的 `mapToPublicCaseState` 是**同一个
+事实的两份实现**：前者挂在 admin 的 workflow 快照（`evaluate()`）上，后者是消费者 API（状态查询与
+consumer-auth）真正在用的那套，且有专测。逐项比对后，两份**已经在三处分叉**：
+
+| 状态                          | 快照（旧）               | 消费者 API            |
+| ----------------------------- | ------------------------ | --------------------- |
+| `approved` + 处置已外部完成   | `resolution_in_progress` | `resolution_approved` |
+| `closed`（无已批/已完成处置） | `completed`              | `closed`              |
+| `duplicate`                   | `closed`                 | `not_approved`        |
+
+`duplicate` 那条最值得说：操作员看到"已关闭"，而消费者被告诉"未通过"。
+
+**做法**：删掉快照里那套 switch，让它调用唯一的实现，字段类型也随之收紧为契约类型 `PublicCaseStatus`。
+不构成运行时环 —— `cases/submission-status.ts` 对 policy 只有 type-only 导入，运行时被擦除。
+`PUBLIC_STATUSES` 常量随之无人引用，已删除；测试改为直接断言消费者 API 返回的字面量。
+
+**这次合并本身发现的缺口（已记录，未擅自改）**：`approved` 且处置已 `externally_completed` 时，消费者
+映射一律给"已批准"，要等操作员把案件推进到 `closure_review` 才变成"进行中"—— 也就是消费者在"补发已经
+在路上"的窗口里看到的仍是"已批准"。这**不是被测试钉住的决定**（权威实现只为 `status: 'approved'` 写过
+断言），而旧快照在这里用的正是"进行中"，词汇表里也确实有更贴切的标签。但它**改变消费者可见输出**，
+所以没有顺手在重构里改：要么确认是缺口、单独改（含消费者文案核对），要么确认现状可接受。快照现在忠实
+反映消费者视图，而不是持有第二种意见 —— 那才是这个字段的承诺。
