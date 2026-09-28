@@ -246,6 +246,38 @@ dark by construction rather than by configuration.
   必须用坐标点击。
 - 补救选项卡的可见名称重复（"Replacement Replacement"），读屏会念两遍。
 
+### 事故半段：已跑通，证据如下
+
+消费者 UI 的提交被上面缺陷 2 挡住，所以改用它**已经建好的那份草稿**经 API 提交（浏览器 + API
+双证据的分工写在这里）。契约在这一步逐条纠正了我：先要求 `medicalTreatment`
+（"required for injury or illness events" —— 这正是一条待核实的字段规则），补上后 **201**：
+
+```
+POST /v1/recall-campaigns/music-lollipop-demo-2026/claims
+→ 201 {"caseReference":"KOI-ZVUT-CYTTZALP","emailStatus":"queued"}
+```
+
+数据库回读（与界面互相印证）：
+
+```
+case:    {"ref":"KOI-ZVUT-CYTTZALP","status":"escalated","subtype":"injury_hazard","incidentFlag":true}
+incident:{"answer":"yes","eventTypes":["injury"],"severity":"minor"}
+review:  [{"status":"pending"}]
+```
+
+界面（合规账号 `compliance@koi.test` 登录后）：
+
+- 事故队列：`1 incidents · 1 pending reportability review`，行内 `KOI-ZVUT-CYTTZALP`、**INJURY**、**PENDING**。
+- 案件详情：`Injury Hazard` + `Safety incident` 徽标；**CURRENT STAGE = Compliance Review**，
+  NEXT ACTION = "Complete the safety incident reportability review."；Safety gate = **Review Pending**；
+  红条："This case is flagged with a safety incident (subtype: injury hazard). Review reportability
+  obligations before closing."；事故区块（Consumer answer Yes / Minor / First Aid）；
+  证据 2 份（`receipt.png`、`product.png`，均 LINKED，`SCAN: NOT RUN` —— 正是
+  `MALWARE_SCAN_REQUIRED=false` 下"未扫描也接受"的那条）；产品行 **POTENTIAL MATCH**。
+
+也就是说：受伤申报**确实**落了 `escalated` 状态、派生阶段**确实**是合规、审查**确实** pending、
+界面把这三件事都显示出来了 —— 这正是这一轮改动的验收目标。
+
 ### 待续
 
 清掉残留的 `uploading` 条目（Reset Draft 或直接改会话状态）→ 提交拿到案件编号 → 管理端：
