@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { CORS_ALLOW_HEADERS } from '../src/app.js';
+import { DEV_BLOB_UPLOAD_TOKEN_HEADER } from '../src/routes/dev-blobs.js';
 import { loadConfig } from '../src/config/env.js';
 import { createDefaultRegistry } from '../src/composition.js';
 import { createApp } from '../src/app.js';
@@ -82,5 +83,15 @@ describe('CORS allowed headers', () => {
       expect(header.trim()).toBe(header);
       expect(header.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('the development upload header', () => {
+  it('is allowed, though the contract cannot say so', () => {
+    // `/dev/blobs/upload` is deliberately absent from the published document, so the
+    // check above cannot see the header it requires. This is the case that shipped
+    // broken once: curl sent it happily, the browser refused to, and the client reported
+    // a network error rather than a configuration mistake.
+    expect(CORS_ALLOW_HEADERS).toContain(DEV_BLOB_UPLOAD_TOKEN_HEADER);
   });
 });

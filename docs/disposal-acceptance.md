@@ -202,3 +202,52 @@ permits consumer disposal, the content pack (approved steps, example photos, saf
 warnings, declaration text), the evidence retention period, and the answer to who may
 confirm a product as affected. No campaign has approved instructions, so the feature is
 dark by construction rather than by configuration.
+
+---
+
+## A4：以用户身份走一遍（进行中 ・ 2026-09-28）
+
+### 环境（都在本机，共享隔离测试库 `koi_recall_test`）
+
+| 服务     | 地址                  | 关键配置                                                                                                          |
+| -------- | --------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| API      | http://localhost:3002 | `INCIDENT_ESCALATED_STATUS=true`、`LOCAL_BLOB_DIR` 指到本地目录、`RESEND_API_KEY=` 置空（邮件为 no-op，不发一封） |
+| 管理端   | http://localhost:3010 | `NEXT_PUBLIC_API_URL=http://localhost:3002`                                                                       |
+| 消费者端 | http://localhost:3003 | 同上 + `NEXT_PUBLIC_LOCAL_UPLOAD_URL`                                                                             |
+
+两个账号（脚本创建，非交互）：`compliance@koi.test`（COMPLIANCE）、`admin@koi.test`（ADMIN）。
+
+### 已走到哪一步
+
+消费者端：活动页 → 选 Replacement → 填联系与地址 → 产品/购买信息（lot `ML-2406-A`、日期码 `06/2024`、订单 `ORDER-10001`）→ **事故回答选 Yes** → 填伤情叙述、勾选 `Date unknown` 与 `Injury`（其余五个可选下拉**故意留空**，验证"可选即可不填"）→ 勾选两项同意 → 上传产品照与购买凭证（各 1 份，均已到 `verified`）。
+
+### 这一步暴露的两个真缺陷
+
+**1. 本地上传链从浏览器里根本走不通（已修）。** `CORS_ALLOW_HEADERS` 里没有
+`X-Blob-Token`，而客户端的上传请求是 multipart **且带这个自定义头** → 触发预检 → 预检被拒 →
+浏览器报 `Failed to fetch`。上一轮我用 curl 验过这条链"服务端可用"，而 curl 不产生预检，所以
+**测试全绿、页面不可用** —— 与这个仓库 `tests/cors-headers.test.ts` 注释里记的
+`X-Disposal-Token` 是同一种失败。修法：头部名做成 `DEV_BLOB_UPLOAD_TOKEN_HEADER` 常量、
+加入允许列表，并给那条"从契约推导允许头"的守卫补一条显式断言（该路由有意不进公开契约，推导式
+检查看不见它）。修后预检返回
+`access-control-allow-headers: …,X-Blob-Token` ✓，上传随即到达 `verified` ✓。
+
+**2. 上传失败会把草稿永久卡死（已记录，未改）。** 失败/中断的上传在草稿里留下
+`status: "uploading"` 的条目，界面上**既不能重试也不能删除**；提交时客户端自己拦下：
+"One or more files are still being verified by the recall team. Please wait a moment and try again."
+于是本次走查的草稿再也提交不了，只能 Reset Draft 重来。真实消费者遇到一次网络抖动就会卡在这里。
+
+### 其他观察（记下，未判定）
+
+- 消费者申请页目前是**开发桥接表单**：页面上直接显示 "Draft ID / Expires / Form Version"、
+  "Submitted Through API"、以及 "persists claim data into session storage and submits using the
+  real API contract" 这类实现说明。作为 Phase-1 骨架可以理解，但它不是消费者该看到的东西。
+- 事故问题与五个可选下拉是自定义下拉，只响应**真实指针事件**：派发的 `click()` 无效，
+  必须用坐标点击。
+- 补救选项卡的可见名称重复（"Replacement Replacement"），读屏会念两遍。
+
+### 待续
+
+清掉残留的 `uploading` 条目（Reset Draft 或直接改会话状态）→ 提交拿到案件编号 → 管理端：
+事故队列、案件详情（`escalated` 与派生阶段 `compliance_review`）、关审查（需填实报日期与回执）、
+结案门禁被拦 → 用 API 开一条升级记录再试结案 → 消费者状态查询的对外投影。

@@ -24,7 +24,7 @@ import { registerCampaignRoutes } from './routes/campaigns.js';
 import { registerCaseStatusLookupRoutes } from './routes/case-status-lookups.js';
 import { registerClaimRoutes } from './routes/claims.js';
 import { registerConsumerAuthRoutes } from './routes/consumer-auth.js';
-import { registerDevBlobRoutes } from './routes/dev-blobs.js';
+import { DEV_BLOB_UPLOAD_TOKEN_HEADER, registerDevBlobRoutes } from './routes/dev-blobs.js';
 import { registerDisposalRoutes } from './routes/disposal.js';
 import { registerDocumentRoutes } from './routes/documents.js';
 import { notImplementedJobHandler, registerInternalJobRoutes } from './routes/internal-jobs.js';
@@ -69,6 +69,12 @@ export const CORS_ALLOW_HEADERS: readonly string[] = [
   'X-Draft-Token',
   'X-Disposal-Token',
   'X-Request-Id',
+  // The development upload endpoint is a browser POST with this custom header, so the
+  // browser's preflight asks for it before sending anything. Without the entry the
+  // preflight fails and the client reports a network error — which is what happened:
+  // the path worked from curl and could not work from a page. It is listed here rather
+  // than derived from the contract, because this route is intentionally not published.
+  DEV_BLOB_UPLOAD_TOKEN_HEADER,
 ];
 export function createApp(dependencies: AppDependencies = {}) {
   const config = dependencies.config ?? loadConfig();

@@ -6,6 +6,16 @@ import { LocalFilesystemBlobAdapter } from '../platform/blob/local-filesystem.js
 import { NotImplementedServiceError } from '../shared/errors.js';
 
 /**
+ * The header the development upload carries its blob token in.
+ *
+ * Exported so the CORS allow-list can name the same string instead of repeating it, and so
+ * the guard that checks "every header a browser is asked to send is allowed" can see it:
+ * this route is deliberately not in the published contract, so a check derived from that
+ * document cannot notice it.
+ */
+export const DEV_BLOB_UPLOAD_TOKEN_HEADER = 'X-Blob-Token';
+
+/**
  * The development upload endpoint.
  *
  * The real flow hands the browser a token and lets it transfer the file to the
@@ -27,9 +37,12 @@ export function registerDevBlobRoutes(
 
   app.post('/dev/blobs/upload', async (context) => {
     const pathname = context.req.query('pathname');
-    const clientToken = context.req.header('X-Blob-Token');
+    const clientToken = context.req.header(DEV_BLOB_UPLOAD_TOKEN_HEADER);
     if (!pathname || !clientToken) {
-      return context.json({ detail: 'pathname and X-Blob-Token are required.' }, 422);
+      return context.json(
+        { detail: `pathname and ${DEV_BLOB_UPLOAD_TOKEN_HEADER} are required.` },
+        422,
+      );
     }
 
     const body = await context.req.parseBody();
