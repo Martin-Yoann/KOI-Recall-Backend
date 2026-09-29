@@ -555,7 +555,11 @@ describe('openCaseEscalation opens the review a report-gated category owes', () 
     const reviewInserts: Record<string, unknown>[] = [];
     const escalationInserts: Record<string, unknown>[] = [];
     const service = new DrizzleAdminService({
-      db: createOpenEscalationFakeDb([openCaseRow('submitted'), undefined, undefined], reviewInserts, escalationInserts),
+      db: createOpenEscalationFakeDb(
+        [openCaseRow('submitted'), undefined, undefined],
+        reviewInserts,
+        escalationInserts,
+      ),
       crypto: cryptoFake,
       consumerWebBaseUrl: WEB_BASE_URL,
     });
@@ -583,7 +587,11 @@ describe('openCaseEscalation opens the review a report-gated category owes', () 
     const reviewInserts: Record<string, unknown>[] = [];
     const escalationInserts: Record<string, unknown>[] = [];
     const service = new DrizzleAdminService({
-      db: createOpenEscalationFakeDb([openCaseRow('submitted'), { id: 'review-9' }], reviewInserts, escalationInserts),
+      db: createOpenEscalationFakeDb(
+        [openCaseRow('submitted'), { id: 'review-9' }],
+        reviewInserts,
+        escalationInserts,
+      ),
       crypto: cryptoFake,
       consumerWebBaseUrl: WEB_BASE_URL,
     });
@@ -619,7 +627,9 @@ describe('openCaseEscalation opens the review a report-gated category owes', () 
       actorStaffUserId: STAFF_ID,
     });
 
-    expect(reviewInserts).toEqual([{ caseId: CASE_ID, incidentId: INCIDENT_ID, status: 'pending' }]);
+    expect(reviewInserts).toEqual([
+      { caseId: CASE_ID, incidentId: INCIDENT_ID, status: 'pending' },
+    ]);
   });
 
   it('opens no review for a category that owes none', async () => {

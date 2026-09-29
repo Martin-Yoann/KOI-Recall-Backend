@@ -582,12 +582,15 @@ describe.skipIf(!enabled)(
       ]);
       expect(racing.every((result) => result.status === 'fulfilled')).toBe(true);
       await service.recordDeclaration(input);
+      // toThrow matches the message, not the error class: the service rejects a
+      // changed retry with "This disposal task already has a different
+      // declaration." (ClaimConflictError's text), so grep the words it says.
       await expect(
         service.recordDeclaration({
           ...input,
           exceptionNote: 'A different account of the disposal.',
         }),
-      ).rejects.toThrow(/conflict/i);
+      ).rejects.toThrow(/different declaration/i);
 
       const declarations = await handle!.db
         .select({ id: disposalDeclarations.id })
@@ -1342,10 +1345,7 @@ describe.skipIf(!enabled)(
         })
         .returning({ id: documentUploads.id });
 
-      let documents = await service.listEvidenceDocuments(
-        opened.taskId,
-        opened.created!.token,
-      );
+      let documents = await service.listEvidenceDocuments(opened.taskId, opened.created!.token);
       expect(documents.map((document) => document.status)).toContain('rejected');
 
       await service.removeEvidenceDocument(opened.taskId, opened.created!.token, rejected!.id);
@@ -1363,10 +1363,7 @@ describe.skipIf(!enabled)(
       ).rejects.toThrow(/cannot be removed/i);
 
       // The photo is intact and still listed for the reviewer.
-      const documents = await service.listEvidenceDocuments(
-        opened.taskId,
-        opened.created!.token,
-      );
+      const documents = await service.listEvidenceDocuments(opened.taskId, opened.created!.token);
       expect(documents.map((document) => document.documentId)).toContain(opened.documentId);
 
       await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
@@ -1376,11 +1373,7 @@ describe.skipIf(!enabled)(
       const opened = await openForFirstSubmission();
       const documentId = await verifiedEvidence(opened.draftId);
       await expect(
-        service.removeEvidenceDocument(
-          opened.taskId,
-          'a'.repeat(64),
-          documentId,
-        ),
+        service.removeEvidenceDocument(opened.taskId, 'a'.repeat(64), documentId),
       ).rejects.toThrow(/not found/i);
 
       await cleanup(opened, { taskId: opened.taskId, documentIds: [documentId] });

@@ -562,7 +562,8 @@ export class DrizzleCaseService implements CaseService {
             // Written as a pair: the CHECK on incidents requires both or neither.
             injuryDescriptionKeyVersion: encrypted.injuryDescription?.keyVersion,
             injuryDescriptionEncrypted: encrypted.injuryDescription?.value,
-            failureModeOtherDescriptionKeyVersion: encrypted.failureModeOtherDescription?.keyVersion,
+            failureModeOtherDescriptionKeyVersion:
+              encrypted.failureModeOtherDescription?.keyVersion,
             failureModeOtherDescriptionEncrypted: encrypted.failureModeOtherDescription?.value,
             medicalTreatmentReceived: details.medicalTreatmentReceived,
             unitType: details.unitType,

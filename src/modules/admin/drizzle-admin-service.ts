@@ -877,10 +877,7 @@ export class DrizzleAdminService implements AdminService {
 
       // What `other` means is the same kind of testimonial free text, so it
       // rides along with the injury description's tier and failure handling.
-      if (
-        row.failureModeOtherDescriptionEncrypted &&
-        row.failureModeOtherDescriptionKeyVersion
-      ) {
+      if (row.failureModeOtherDescriptionEncrypted && row.failureModeOtherDescriptionKeyVersion) {
         try {
           failureModeOtherDescription = await this.crypto.decrypt({
             value: row.failureModeOtherDescriptionEncrypted,
@@ -956,7 +953,7 @@ export class DrizzleAdminService implements AdminService {
   /**
    * `reportabilityStatus` may be passed in by callers that already loaded the
    * incident (getCaseDetail); when omitted it is queried (listCases path).
-   */  private async workflowFor(
+   */ private async workflowFor(
     caseRow: {
       id: string;
       status: CaseStatus;

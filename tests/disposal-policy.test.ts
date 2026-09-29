@@ -320,7 +320,8 @@ describe('disposal policy', () => {
 
   // The service must fail closed with a reason, so a missed gate surfaces as an
   // actionable message rather than a bare 500.
-  describe('assertCanIssueAuthorization', () => {    it('names the specific unmet precondition', () => {
+  describe('assertCanIssueAuthorization', () => {
+    it('names the specific unmet precondition', () => {
       const cases = [
         [{ ...satisfiable, holdActive: true }, DISPOSAL_BLOCKING_REASONS.DISPOSAL_ON_HOLD],
         [
@@ -354,9 +355,9 @@ describe('disposal policy', () => {
   // happened — the same shape as a task that never had one.
   describe('revocation', () => {
     it('offers the revoke action only while a permission is live', () => {
-      expect(evaluateDisposal({ ...satisfiable, authorizationStatus: 'active' }).allowedActions).toContain(
-        'disposal.authorization.revoke',
-      );
+      expect(
+        evaluateDisposal({ ...satisfiable, authorizationStatus: 'active' }).allowedActions,
+      ).toContain('disposal.authorization.revoke');
       for (const authorizationStatus of [null, 'suspended', 'revoked'] as const) {
         expect(
           evaluateDisposal({ ...satisfiable, authorizationStatus }).allowedActions,

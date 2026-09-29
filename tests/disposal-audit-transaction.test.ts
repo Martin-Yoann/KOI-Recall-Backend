@@ -147,11 +147,14 @@ describe('disposal decision audit boundary', () => {
     registerDisposalRoutes(app, registry);
 
     const revoke = () =>
-      app.request('/admin/disposal-tasks/21326c9a-5dc2-430f-98a6-546729a1065f/authorization/revoke', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ reason: 'Issued against the wrong instruction version.' }),
-      });
+      app.request(
+        '/admin/disposal-tasks/21326c9a-5dc2-430f-98a6-546729a1065f/authorization/revoke',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: 'Issued against the wrong instruction version.' }),
+        },
+      );
 
     const first = await revoke();
     expect(first.status).toBe(204);
