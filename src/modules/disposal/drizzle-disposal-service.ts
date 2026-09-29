@@ -1299,13 +1299,19 @@ export class DrizzleDisposalService implements DisposalService {
 
   async listInstructionVersions(campaignVersionId?: string): Promise<InstructionVersionSummary[]> {
     const now = new Date();
+    // Correlated subqueries must qualify their columns explicitly. Drizzle's
+    // column interpolation renders bare names here, and a bare `"id"` binds to
+    // the subquery's OWN table (`disposal_instruction_approvals.id`), turning
+    // the correlation into a always-false self-comparison — production showed
+    // approvalCount 0 with approvals committed. Table names are stable across
+    // the feature's migrations, so the qualification is written out.
     const authorizingCount = sql<number>`(
-      select count(*)::int from ${disposalInstructionApprovals}
-      where ${disposalInstructionApprovals.instructionVersionId} = ${disposalInstructionVersions.id}
-        and ${disposalInstructionApprovals.authorizesConsumerDisposal} = true
-        and ${disposalInstructionApprovals.withdrawnAt} is null
-        and (${disposalInstructionApprovals.effectiveFrom} is null or ${disposalInstructionApprovals.effectiveFrom} <= ${now})
-        and (${disposalInstructionApprovals.effectiveUntil} is null or ${disposalInstructionApprovals.effectiveUntil} > ${now})
+      select count(*)::int from disposal_instruction_approvals
+      where disposal_instruction_approvals.instruction_version_id = disposal_instruction_versions.id
+        and disposal_instruction_approvals.authorizes_consumer_disposal = true
+        and disposal_instruction_approvals.withdrawn_at is null
+        and (disposal_instruction_approvals.effective_from is null or disposal_instruction_approvals.effective_from <= ${now})
+        and (disposal_instruction_approvals.effective_until is null or disposal_instruction_approvals.effective_until > ${now})
     )`;
     const rows = await this.handle.db
       .select({
@@ -1317,8 +1323,8 @@ export class DrizzleDisposalService implements DisposalService {
         title: disposalInstructionVersions.title,
         authorizingCount,
         approvalCount: sql<number>`(
-          select count(*)::int from ${disposalInstructionApprovals}
-          where ${disposalInstructionApprovals.instructionVersionId} = ${disposalInstructionVersions.id}
+          select count(*)::int from disposal_instruction_approvals
+          where disposal_instruction_approvals.instruction_version_id = disposal_instruction_versions.id
         )`,
       })
       .from(disposalInstructionVersions)
@@ -1361,12 +1367,12 @@ export class DrizzleDisposalService implements DisposalService {
         exceptionType: disposalDeclarations.exceptionType,
         exceptionNote: disposalDeclarations.exceptionNote,
         authorizingCount: sql<number>`(
-          select count(*)::int from ${disposalInstructionApprovals}
-          where ${disposalInstructionApprovals.instructionVersionId} = ${disposalTasks.instructionVersionId}
-            and ${disposalInstructionApprovals.authorizesConsumerDisposal} = true
-            and ${disposalInstructionApprovals.withdrawnAt} is null
-            and (${disposalInstructionApprovals.effectiveFrom} is null or ${disposalInstructionApprovals.effectiveFrom} <= ${now})
-            and (${disposalInstructionApprovals.effectiveUntil} is null or ${disposalInstructionApprovals.effectiveUntil} > ${now})
+          select count(*)::int from disposal_instruction_approvals
+          where disposal_instruction_approvals.instruction_version_id = disposal_tasks.instruction_version_id
+            and disposal_instruction_approvals.authorizes_consumer_disposal = true
+            and disposal_instruction_approvals.withdrawn_at is null
+            and (disposal_instruction_approvals.effective_from is null or disposal_instruction_approvals.effective_from <= ${now})
+            and (disposal_instruction_approvals.effective_until is null or disposal_instruction_approvals.effective_until > ${now})
         )`,
       })
       .from(disposalTasks)
