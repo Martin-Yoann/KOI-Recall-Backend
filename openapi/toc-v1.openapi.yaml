@@ -1806,6 +1806,82 @@ paths:
       summary: List a task's evidence photos with their technical status
       tags:
         - Disposal
+  /v1/disposal-tasks/{taskId}/documents/{documentId}:
+    delete:
+      description: "Gated on the same policy as uploading evidence, and on the evidence-retention rule: a photo that is part of a submitted batch cannot be removed. Removing a photo is a technical act only and never affects a review decision already made."
+      parameters:
+        - in: path
+          name: taskId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: path
+          name: documentId
+          required: true
+          schema:
+            format: uuid
+            type: string
+        - in: header
+          name: X-Disposal-Token
+          required: true
+          schema:
+            minLength: 32
+            type: string
+      responses:
+        "204":
+          description: The photo was scheduled for deletion.
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Invalid request.
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The disposal token is missing, wrong, or expired.
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Campaign or resource not found.
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: The request is refused by the disposal gates.
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Rate limit exceeded.
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: Unexpected server error.
+        "501":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: This capability is not enabled in this environment because a required service or adapter is not configured.
+        "503":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+          description: A required dependency is unavailable.
+      summary: Remove one evidence photo that has not entered review
+      tags:
+        - Disposal
   /v1/disposal-tasks/{taskId}/evidence:
     post:
       description: "Only technically verified documents of the disposal-evidence category, owned by this task, are accepted. Submitting evidence is not permission to dispose: a person still has to review it."

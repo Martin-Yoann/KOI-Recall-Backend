@@ -1320,5 +1320,160 @@ describe.skipIf(!enabled)(
       // Cleanup last: it removes the campaign version the case referenced.
       await cleanup(opened, { taskId: opened.taskId });
     });
+
+    // ---- evidence removal (the recovery path for a dead upload) ------------
+
+    it('removes an unsubmitted rejected photo so a batch can become submittable', async () => {
+      const opened = await openForFirstSubmission();
+      const [rejected] = await handle!.db
+        .insert(documentUploads)
+        .values({
+          draftId: opened.draftId,
+          caseId: null,
+          category: 'disposal_evidence',
+          storagePathname: `tests/disposal/${Date.now()}/${randomUUID()}.jpg`,
+          originalFileName: 'unreadable.jpg',
+          declaredMimeType: 'image/jpeg',
+          detectedMimeType: 'application/octet-stream',
+          sizeBytes: 1024,
+          uploadStatus: 'rejected',
+          scanStatus: 'clean',
+          expiresAt: new Date(Date.now() + 86_400_000),
+        })
+        .returning({ id: documentUploads.id });
+
+      let documents = await service.listEvidenceDocuments(
+        opened.taskId,
+        opened.created!.token,
+      );
+      expect(documents.map((document) => document.status)).toContain('rejected');
+
+      await service.removeEvidenceDocument(opened.taskId, opened.created!.token, rejected!.id);
+
+      documents = await service.listEvidenceDocuments(opened.taskId, opened.created!.token);
+      expect(documents.map((document) => document.documentId)).not.toContain(rejected!.id);
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [rejected!.id] });
+    });
+
+    it('refuses to remove a photo that has entered a review batch', async () => {
+      const opened = await readyForAuthorization();
+      await expect(
+        service.removeEvidenceDocument(opened.taskId, opened.created!.token, opened.documentId),
+      ).rejects.toThrow(/cannot be removed/i);
+
+      // The photo is intact and still listed for the reviewer.
+      const documents = await service.listEvidenceDocuments(
+        opened.taskId,
+        opened.created!.token,
+      );
+      expect(documents.map((document) => document.documentId)).toContain(opened.documentId);
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
+
+    it('refuses evidence removal for a wrong credential, like every other visitor path', async () => {
+      const opened = await openForFirstSubmission();
+      const documentId = await verifiedEvidence(opened.draftId);
+      await expect(
+        service.removeEvidenceDocument(
+          opened.taskId,
+          'a'.repeat(64),
+          documentId,
+        ),
+      ).rejects.toThrow(/not found/i);
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [documentId] });
+    });
+
+    // ---- revocation ---------------------------------------------------------
+
+    it('revokes a live permission terminally and idempotently', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'accepted',
+        rationale: 'The label and product are legible in the evidence.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+      const issued = await service.issueAuthorization({
+        taskId: opened.taskId,
+        actorStaffUserId: staffUserId,
+      });
+
+      const first = await service.revokeAuthorization({
+        taskId: opened.taskId,
+        reason: 'The approving letter was withdrawn this morning.',
+        actorStaffUserId: staffUserId,
+      });
+      expect(first).toMatchObject({ authorizationId: issued.authorizationId, changed: true });
+
+      const [row] = await handle!.db
+        .select({
+          status: disposalAuthorizations.status,
+          revokeReason: disposalAuthorizations.revokeReason,
+        })
+        .from(disposalAuthorizations)
+        .where(eq(disposalAuthorizations.id, issued.authorizationId));
+      expect(row).toMatchObject({
+        status: 'revoked',
+        revokeReason: 'The approving letter was withdrawn this morning.',
+      });
+
+      // The retry is the same business fact, not a second revocation.
+      const retry = await service.revokeAuthorization({
+        taskId: opened.taskId,
+        reason: 'The approving letter was withdrawn this morning.',
+        actorStaffUserId: staffUserId,
+      });
+      expect(retry.changed).toBe(false);
+
+      // A retired permission no longer supports a completion declaration; the
+      // exception path stays open so the consumer can report what happened.
+      const visitor = await service.getTaskForVisitor(opened.taskId, opened.created!.token);
+      expect(visitor!.task.authorizationStatus).toBe('revoked');
+      expect(visitor!.snapshot.allowedActions).not.toContain('disposal.declare_completion');
+      expect(visitor!.snapshot.allowedActions).toContain('disposal.declare_exception');
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
+
+    it('refuses to revoke a task that never had a permission', async () => {
+      const opened = await openForFirstSubmission();
+      await expect(
+        service.revokeAuthorization({
+          taskId: opened.taskId,
+          reason: 'There is nothing to revoke here.',
+          actorStaffUserId: staffUserId,
+        }),
+      ).rejects.toThrow(/no permission to revoke/i);
+
+      await cleanup(opened, { taskId: opened.taskId });
+    });
+
+    // The migration's own guarantee: one declaration per task is a property of
+    // the table, not only of the service's conflict check.
+    it('refuses a second declaration row for one task at the database level', async () => {
+      const opened = await readyForAuthorization();
+      const base = {
+        taskId: opened.taskId,
+        declarationTextVersion: 'integration-v1',
+      };
+      await handle!.db.insert(disposalDeclarations).values({
+        ...base,
+        exceptionType: 'other',
+        exceptionNote: 'First row written directly to probe the constraint.',
+      });
+      await expect(
+        handle!.db.insert(disposalDeclarations).values({
+          ...base,
+          exceptionType: 'evidence_unavailable',
+          exceptionNote: 'A second row for the same task must not be storable.',
+        }),
+      ).rejects.toThrow();
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
   },
 );

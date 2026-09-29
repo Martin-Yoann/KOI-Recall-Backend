@@ -89,6 +89,38 @@ export interface DisposalTaskDetail {
   expiresAt: string;
 }
 
+/**
+ * The reviewer's checklist for a task's pinned instruction version.
+ *
+ * Deliberately not the full {@link DisposalInstructionView}: a reviewer needs
+ * to check photos against what they were required to show, and needs to know
+ * which version they are checking against — not the consumer-executable steps.
+ * Unlike the consumer view this is loaded regardless of the policy gates: a
+ * task on hold, or one whose version was withdrawn, is exactly a task whose
+ * photos still need deciding, and the reviewer cannot check a photo against a
+ * checklist they cannot see.
+ */
+export interface DisposalInstructionChecklistView {
+  versionId: string;
+  versionNumber: number;
+  locale: string;
+  title: string;
+  status: DisposalInstructionStatus;
+  recognitionRequirements: string[];
+}
+
+/** The hold currently in force, as the review surface needs to see it. */
+export interface DisposalHoldView {
+  reason: 'incident_evidence_retention' | 'compliance_investigation' | 'other';
+  placedAt: string;
+}
+
+/** Admin read: the policy evaluation plus the review-only context above. */
+export interface DisposalTaskAdminDetail extends DisposalTaskDetail {
+  instructionChecklist: DisposalInstructionChecklistView | null;
+  activeHold: DisposalHoldView | null;
+}
+
 export interface ConfirmEligibilityInput {
   taskId: string;
   eligibilityStatus: Exclude<DisposalEligibilityStatus, 'pending_confirmation'>;
@@ -200,6 +232,8 @@ export interface DisposalQueueRowView {
   evidenceReviewStatus: DisposalBatchReviewStatus | null;
   authorizationStatus: DisposalAuthorizationStatus | null;
   holdActive: boolean;
+  /** Why the hold is in force, so the queue answers "paused for what?". */
+  holdReason: 'incident_evidence_retention' | 'compliance_investigation' | 'other' | null;
   blockingReasons: string[];
   productCount: number;
   /**
@@ -282,9 +316,9 @@ export interface DisposalService {
   /**
    * Admin read. Staff never hold the visitor token, so this path is authorised
    * by permission alone and returns the same policy evaluation the consumer
-   * surface sees.
+   * surface sees, plus the reviewer's checklist and the hold in force.
    */
-  getTaskForAdmin(taskId: string): Promise<DisposalTaskDetail | null>;
+  getTaskForAdmin(taskId: string): Promise<DisposalTaskAdminDetail | null>;
 
   confirmEligibility(input: ConfirmEligibilityInput): Promise<void>;
 
@@ -322,6 +356,17 @@ export interface DisposalService {
 
   listEvidenceDocuments(taskId: string, taskToken: string): Promise<EvidenceDocumentSummary[]>;
 
+  /**
+   * Schedules one of the task's evidence photos for deletion.
+   *
+   * The recovery path for a photo that can never be submitted — technically
+   * rejected, or an upload that never reconciled — so one dead row cannot block
+   * the batch forever. Gated on the same policy as uploading (removing is part
+   * of preparing evidence) and on the reaper's retention rule: once a photo has
+   * entered a review batch it is evidence, not the consumer's to discard.
+   */
+  removeEvidenceDocument(taskId: string, taskToken: string, documentId: string): Promise<void>;
+
   submitEvidenceBatch(
     input: SubmitEvidenceBatchInput,
   ): Promise<{ batchId: string; reviewStatus: DisposalBatchReviewStatus }>;
@@ -339,6 +384,19 @@ export interface DisposalService {
     taskId: string;
     actorStaffUserId: string;
   }): Promise<{ authorizationId: string }>;
+
+  /**
+   * Retires the task's live permission. The reason is the operator's prose and
+   * lives on the authorization row (`revoke_reason`), not in the audit trail.
+   *
+   * `changed` is false when the permission was already revoked — the caller
+   * audits a revocation once, not once per retry.
+   */
+  revokeAuthorization(input: {
+    taskId: string;
+    reason: string;
+    actorStaffUserId: string;
+  }): Promise<{ authorizationId: string; changed: boolean }>;
 
   recordDeclaration(input: RecordDeclarationInput): Promise<void>;
 

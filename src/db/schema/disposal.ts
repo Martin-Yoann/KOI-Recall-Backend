@@ -548,6 +548,12 @@ export const disposalDeclarations = pgTable(
   },
   (table) => [
     uniqueIndex('disposal_declarations_authorization_uidx').on(table.authorizationId),
+    // One declaration per task, held by the database rather than by the
+    // service's conflict check alone. A second row — direct SQL, a future code
+    // path — would mean two records of what one consumer said happened, and
+    // must fail the insert, not silently coexist. The service already refuses
+    // a different-content retry; this is the same rule for every other writer.
+    uniqueIndex('disposal_declarations_task_uidx').on(table.taskId),
     index('disposal_declarations_task_idx').on(table.taskId),
     check(
       'disposal_declarations_basis_chk',

@@ -138,6 +138,32 @@ export const listDisposalDocumentsRoute = createRoute({
   },
 });
 
+/**
+ * The recovery path for a dead upload. A photo that was technically rejected,
+ * or an upload that never reconciled, would otherwise block every later batch:
+ * submission requires every listed photo to be verified. Removal is refused
+ * once a photo has entered a review batch — from that moment it is evidence,
+ * not the consumer's to discard.
+ */
+export const deleteDisposalDocumentRoute = createRoute({
+  method: 'delete',
+  path: '/v1/disposal-tasks/{taskId}/documents/{documentId}',
+  tags: ['Disposal'],
+  summary: 'Remove one evidence photo that has not entered review',
+  description:
+    'Gated on the same policy as uploading evidence, and on the evidence-retention rule: a photo that is part of a submitted batch cannot be removed. Removing a photo is a technical act only and never affects a review decision already made.',
+  request: {
+    params: taskPathSchema.extend({ documentId: uuid }),
+    headers: disposalTokenHeaderSchema,
+  },
+  responses: {
+    204: { description: 'The photo was scheduled for deletion.' },
+    401: unauthorizedResponse,
+    422: unprocessableResponse,
+    ...commonProblemResponses,
+  },
+});
+
 export const recordDisposalDeclarationRoute = createRoute({
   method: 'post',
   path: '/v1/disposal-tasks/{taskId}/declaration',

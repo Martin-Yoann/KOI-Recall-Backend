@@ -4,6 +4,7 @@ import type { Context } from 'hono';
 import type { ApplicationRegistry } from '../composition.js';
 import { disposalReviewReasonCodeSchema } from '../contracts/disposal.js';
 import {
+  deleteDisposalDocumentRoute,
   getDisposalTaskRoute,
   listDisposalDocumentsRoute,
   recordDisposalDeclarationRoute,
@@ -166,6 +167,15 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     return context.json({ documents }, 200);
   });
 
+  app.openapi(deleteDisposalDocumentRoute, async (context) => {
+    const { taskId, documentId } = context.req.valid('param');
+    const token = disposalToken(context);
+    if (!token) return notFound(context, 'Disposal task');
+
+    await requireDisposalService(registry).removeEvidenceDocument(taskId, token, documentId);
+    return context.body(null, 204);
+  });
+
   // ---- admin: queue and review --------------------------------------------
 
   app.get('/admin/disposal-tasks', async (context) => {
@@ -190,12 +200,16 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     const detail = await service.getTaskForAdmin(taskId);
     if (!detail) return notFound(context, 'Disposal task');
     // The batch comes along because a review decision needs the photos: the task
-    // alone says something is waiting, not what to look at. Access URLs stay out —
-    // the per-document endpoint mints and audits those.
+    // alone says something is waiting, not what to look at. The checklist serves
+    // the same decision — a photo is checked against what it was required to
+    // show — and is loaded even when the consumer view withholds the content.
+    // Access URLs stay out; the per-document endpoint mints and audits those.
     const latestBatch = await service.getLatestBatchForAdmin(taskId);
     return context.json(
       {
         latestBatch,
+        instructionChecklist: detail.instructionChecklist,
+        activeHold: detail.activeHold,
         task: {
           ...detail.task,
           policyState: undefined,
@@ -343,6 +357,39 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
       return issued;
     });
     return context.json({ authorizationId: issued.authorizationId, status: 'active' }, 201);
+  });
+
+  app.post('/admin/disposal-tasks/:taskId/authorization/revoke', async (context) => {
+    const guard = await requirePermission(context, registry, 'disposal.review');
+    if (guard instanceof Response) return guard;
+    const taskId = context.req.param('taskId');
+    const body = await bodyRecord(context);
+    const reason = asString(body.reason)?.trim();
+    if (!reason || reason.length < 10) {
+      return validationError(context, 'A revocation reason of at least 10 characters is required.');
+    }
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      const revoked = await disposal.revokeAuthorization({
+        taskId,
+        reason,
+        actorStaffUserId: guard.userId,
+      });
+      // An idempotent retry is the same business fact as the first call; the
+      // trail records a revocation once, not once per click.
+      if (!revoked.changed) return;
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.authorization.revoke',
+        resourceType: 'disposal',
+        resourceId: taskId,
+        outcome: 'success',
+        // The reason is the operator's prose and lives on the authorization row
+        // (`revoke_reason`), not in the trail every internal role can read.
+        metadata: { authorizationId: revoked.authorizationId },
+      });
+    });
+    return context.body(null, 204);
   });
 
   // ---- admin: holds --------------------------------------------------------

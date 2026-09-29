@@ -183,6 +183,13 @@
       "when": 1790660808484,
       "tag": "0026_icy_liz_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790663004438,
+      "tag": "0027_misty_wolverine",
+      "breakpoints": true
     }
   ]
 }

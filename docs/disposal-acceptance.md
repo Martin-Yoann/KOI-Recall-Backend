@@ -2,6 +2,7 @@
 
 > **2026-09-29 整改状态：本页下方表格是先前运行记录，不能作为本次改动的已通过验收。**
 > 当前已实现批准有效期门禁、声明幂等与真实例外、退回原因码的消费者提示、管理端处置决定与成功审计的同事务写入；本地单元/契约测试已运行。数据库集成测试因没有隔离数据库而跳过，浏览器和真实 Blob 路径未重跑，均不得标为本轮通过。
+> 同日第二轮补齐了此前核查出的缺口：消费者可删除未进入审核的证据照片（Front 行内 Remove + `DELETE /v1/disposal-tasks/{taskId}/documents/{documentId}`）；管理端任务详情返回审核人的照片识别清单（`instructionChecklist`，不受消费者展示门禁约束）与在 force 的 hold 原因（`activeHold`、队列 `holdReason`）；单任务撤销许可（`POST …/authorization/revoke`，`disposal.review` 权限，幂等重试不重复审计，消费者收到"许可不再适用"通知）；`disposal.issue_authorization` 的展示条件从"无许可记录"改为"无在 force 许可"，与硬门禁对齐——被暂停/撤销的许可不再意外封死重新授权路径；`disposal_declarations` 增加每任务唯一索引（迁移 0027）。以上均有单元/契约层测试；对应数据库集成用例已写入 `tests/disposal-service.integration.test.ts`，待隔离库执行。迁移 0027 未在目标库做先期只读审计（本机无生产凭据）——若目标库存在同任务多条声明，该迁移会**创建失败而非删数据**，届时须人工核对后再处理。
 > D09 原要求是“已接受照片被替换时重新审核并撤销旧许可”；当前仍禁止替换，属于**需求未决**，下方将其列入 Proven 的旧结论不成立。D18 当前实际时序是“先提交案件，再从确认邮件续填处置”，并非“最终提交前审核照片”；需产品、合规确认后修订原要求。
 > 证据和待决事项以 [2026-09-28 继续整改计划](superpowers/plans/2026-09-28-disposal-instructions-remediation-continuation.zh-CN.md)及本段为准。本轮整改尚未推送或部署；已部署服务的验收状态没有因此变化。
 

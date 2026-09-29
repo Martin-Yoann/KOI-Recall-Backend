@@ -1337,6 +1337,7 @@ describe('B-end RBAC (ADR-0004)', () => {
       ['POST', `/admin/disposal-tasks/${taskId}/eligibility`],
       ['POST', `/admin/disposal-batches/${batchId}/review`],
       ['POST', `/admin/disposal-tasks/${taskId}/authorization`],
+      ['POST', `/admin/disposal-tasks/${taskId}/authorization/revoke`],
       ['POST', `/admin/disposal-tasks/${taskId}/hold`],
       ['POST', `/admin/disposal-tasks/${taskId}/hold/release`],
       ['GET', '/admin/disposal-instructions'],

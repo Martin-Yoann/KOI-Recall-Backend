@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "disposal_declarations_task_uidx" ON "disposal_declarations" USING btree ("task_id");

@@ -267,9 +267,22 @@ export function evaluateDisposal(
   if (taskOpen && state.holdActive) {
     allowedActions.push('disposal.hold.release');
   }
-  if (state.authorizationStatus === null && blockingReasons.length === 0) {
+  // `!== 'active'`, not `=== null`: a suspended permission (its evidence was
+  // replaced) or a revoked one is not a live permission, and the hard gate
+  // (`canIssueAuthorization`) does not look at this field at all. Requiring
+  // `null` here would hide the only honest re-issue path behind a state the
+  // gate itself allows — an action list that disagrees with the gate it
+  // mirrors. An active permission is the one state where issuing again must
+  // not be offered.
+  if (state.authorizationStatus !== 'active' && blockingReasons.length === 0) {
     // The button and the server's hard gate use the same complete decision.
     allowedActions.push('disposal.issue_authorization');
+  }
+  // Revoking is the operator's way of ending a live permission — a hold pauses
+  // the task, but only a revocation retires the permission itself, with a
+  // reason and a record. Offered only while one is actually live.
+  if (state.authorizationStatus === 'active') {
+    allowedActions.push('disposal.authorization.revoke');
   }
 
   return {

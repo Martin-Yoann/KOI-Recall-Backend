@@ -38,6 +38,7 @@ import {
   LISTED_UPLOAD_STATUSES,
   type ListedUploadStatus,
 } from '../documents/document-status.js';
+import { notUnderEvidenceRetention } from './retention.js';
 import {
   assertCanIssueAuthorization,
   approvalWindowIncludes,
@@ -54,6 +55,9 @@ import {
   type DisposalQueueRowView,
   type DisposalService,
   type DisposalBatchForAdmin,
+  type DisposalHoldView,
+  type DisposalInstructionChecklistView,
+  type DisposalTaskAdminDetail,
   type EvidenceDocumentSummary,
   type InstructionVersionSummary,
   type RecordInstructionApprovalInput,
@@ -67,6 +71,18 @@ import {
   type SubmitEvidenceBatchInput,
   type WithdrawInstructionInput,
 } from './service.js';
+
+/**
+ * Upload statuses a consumer may clear off their disposal step. Every
+ * listed status except a decided one: a photo that entered review is held by
+ * the retention rule instead, so it is correctly absent here.
+ */
+const DISPOSAL_REMOVABLE_UPLOAD_STATUSES = [
+  'authorized',
+  'uploaded',
+  'verified',
+  'rejected',
+] as const;
 
 export interface DrizzleDisposalServiceOptions {
   handle: DatabaseHandle;
@@ -320,16 +336,81 @@ export class DrizzleDisposalService implements DisposalService {
   }
 
   /** Admin read: permission-authorised, no visitor token. */
-  async getTaskForAdmin(taskId: string): Promise<DisposalTaskDetail | null> {
+  async getTaskForAdmin(taskId: string): Promise<DisposalTaskAdminDetail | null> {
     const record = await this.loadTaskRecord(this.handle.db, taskId);
     if (!record) return null;
     const snapshot = evaluateDisposal(record.policyState);
-    const [products, instruction, expiresAt] = await Promise.all([
+    const [products, instruction, expiresAt, instructionChecklist, activeHold] = await Promise.all([
       this.loadProducts(this.handle.db, taskId),
       this.loadInstructionView(this.handle.db, record, snapshot),
       this.loadTokenExpiry(this.handle.db, taskId),
+      this.loadInstructionChecklistForAdmin(this.handle.db, record),
+      this.loadActiveHold(this.handle.db, taskId),
     ]);
-    return { task: record, products, snapshot, instruction, expiresAt };
+    return {
+      task: record,
+      products,
+      snapshot,
+      instruction,
+      expiresAt,
+      instructionChecklist,
+      activeHold,
+    };
+  }
+
+  /**
+   * The reviewer's checklist, loaded unconditionally for the pinned version.
+   *
+   * The consumer view withholds content on purpose — showing steps a consumer
+   * must not act on is the failure mode `maySeeInstructions` exists to prevent.
+   * A reviewer is in the opposite position: photos still have to be decided
+   * while a hold is in force or after a version was withdrawn, and a photo
+   * cannot be checked against a checklist that is hidden. Only the checklist
+   * and the version's identity are returned, never the consumer-executable
+   * steps.
+   */
+  private async loadInstructionChecklistForAdmin(
+    db: DatabaseExecutor,
+    record: DisposalTaskRecord,
+  ): Promise<DisposalInstructionChecklistView | null> {
+    const [row] = await db
+      .select({
+        id: disposalInstructionVersions.id,
+        versionNumber: disposalInstructionVersions.versionNumber,
+        locale: disposalInstructionVersions.locale,
+        title: disposalInstructionVersions.title,
+        status: disposalInstructionVersions.status,
+        recognitionRequirements: disposalInstructionVersions.recognitionRequirements,
+      })
+      .from(disposalInstructionVersions)
+      .where(eq(disposalInstructionVersions.id, record.instructionVersionId))
+      .limit(1);
+    if (!row) return null;
+    return {
+      versionId: row.id,
+      versionNumber: row.versionNumber,
+      locale: row.locale,
+      title: row.title,
+      status: row.status,
+      recognitionRequirements: row.recognitionRequirements,
+    };
+  }
+
+  private async loadActiveHold(
+    db: DatabaseExecutor,
+    taskId: string,
+  ): Promise<DisposalHoldView | null> {
+    const [hold] = await db
+      .select({
+        reason: disposalHolds.reason,
+        placedAt: disposalHolds.placedAt,
+      })
+      .from(disposalHolds)
+      .where(and(eq(disposalHolds.taskId, taskId), isNull(disposalHolds.releasedAt)))
+      .orderBy(desc(disposalHolds.placedAt))
+      .limit(1);
+    if (!hold) return null;
+    return { reason: hold.reason, placedAt: hold.placedAt.toISOString() };
   }
 
   /**
@@ -456,6 +537,60 @@ export class DrizzleDisposalService implements DisposalService {
         uploadedAt: row.uploadedAt ? row.uploadedAt.toISOString() : null,
         lastStatusChangedAt: row.updatedAt.toISOString(),
       };
+    });
+  }
+
+  /**
+   * Schedules one evidence photo for deletion.
+   *
+   * The draft-scoped delete cannot serve this surface: it requires an *active*
+   * draft and a document that never linked to a case, while a disposal task's
+   * photos are uploaded after the claim was submitted. The guard is the same
+   * rule the reaper honours — a photo that has entered a review batch is
+   * evidence and stays. Unlike the draft path, a technically `rejected` photo
+   * is removable here: that is precisely the row a consumer must be able to
+   * clear for a new batch to become submittable.
+   */
+  async removeEvidenceDocument(
+    taskId: string,
+    taskToken: string,
+    documentId: string,
+  ): Promise<void> {
+    await this.handle.transaction(async (tx) => {
+      const record = await this.loadTaskRecord(tx, taskId, hashTaskToken(taskToken));
+      if (!record) throw new ResourceNotFoundError('Disposal task was not found.');
+      if (!record.draftId) {
+        throw new ClaimValidationError('This disposal task is not bound to a claim draft.');
+      }
+      const snapshot = evaluateDisposal(record.policyState);
+      if (!snapshot.maySubmitEvidence) {
+        throw new ClaimValidationError(
+          `Evidence cannot be removed for this task right now: ${snapshot.blockingReasons.join(', ') || 'the task is closed'}.`,
+        );
+      }
+
+      // Both ownership and retention are conditions of the UPDATE itself: a
+      // batch submitted concurrently with this delete either lands first (the
+      // retention condition then refuses) or lands after (its usability check
+      // then sees a photo no longer `verified`). No separate lock is needed.
+      const updated = await tx
+        .update(documentUploads)
+        .set({ uploadStatus: 'deletion_pending', categorySlot: null, updatedAt: sql`now()` })
+        .where(
+          and(
+            eq(documentUploads.id, documentId),
+            eq(documentUploads.draftId, record.draftId),
+            eq(documentUploads.category, 'disposal_evidence'),
+            inArray(documentUploads.uploadStatus, DISPOSAL_REMOVABLE_UPLOAD_STATUSES),
+            notUnderEvidenceRetention(tx, documentUploads.id),
+          ),
+        )
+        .returning({ id: documentUploads.id });
+      if (updated.length === 0) {
+        throw new ClaimValidationError(
+          'This photo cannot be removed: it either belongs to a review that is open, or it is not part of this disposal step.',
+        );
+      }
     });
   }
 
@@ -817,6 +952,65 @@ export class DrizzleDisposalService implements DisposalService {
       );
 
       return { authorizationId: authorization!.id };
+    });
+  }
+
+  /**
+   * Retires the task's live permission.
+   *
+   * A revocation is terminal for the permission, not for the history: the
+   * row, its coverage snapshot and any declaration already made all stay. The
+   * consumer is told the permission no longer applies, because the worst state
+   * is one where they act on a permission the operator believes was withdrawn.
+   */
+  async revokeAuthorization(input: {
+    taskId: string;
+    reason: string;
+    actorStaffUserId: string;
+  }): Promise<{ authorizationId: string; changed: boolean }> {
+    return this.handle.transaction(async (tx) => {
+      const task = await this.lockTask(tx, input.taskId);
+      const record = await this.loadTaskRecord(tx, input.taskId, undefined, task);
+      if (!record) throw new ResourceNotFoundError('Disposal task was not found.');
+      if (!record.authorizationId) {
+        throw new ClaimValidationError('This task has no permission to revoke.');
+      }
+      if (record.authorizationStatus === 'revoked') {
+        // Idempotent: the retry of an already-performed revocation is the same
+        // business fact, so it reports unchanged and the caller audits once.
+        return { authorizationId: record.authorizationId, changed: false };
+      }
+
+      const now = new Date();
+      const revoked = await tx
+        .update(disposalAuthorizations)
+        .set({
+          status: 'revoked',
+          revokedAt: now,
+          revokedByStaffUserId: input.actorStaffUserId,
+          revokeReason: input.reason,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(disposalAuthorizations.id, record.authorizationId),
+            ne(disposalAuthorizations.status, 'revoked'),
+          ),
+        )
+        .returning({ id: disposalAuthorizations.id });
+      if (revoked.length === 0) {
+        return { authorizationId: record.authorizationId, changed: false };
+      }
+
+      await this.notifyConsumer(
+        tx,
+        input.taskId,
+        'disposal.permission.revoked',
+        `disposal-permission-revoked:${record.authorizationId}`,
+        'The permission for this disposal step no longer applies. Please do not dispose of the product; our team will follow up with what to do next.',
+      );
+
+      return { authorizationId: record.authorizationId, changed: true };
     });
   }
 
@@ -1203,7 +1397,7 @@ export class DrizzleDisposalService implements DisposalService {
         .where(inArray(disposalEvidenceBatches.taskId, taskIds))
         .orderBy(asc(disposalEvidenceBatches.batchNumber)),
       db
-        .select({ taskId: disposalHolds.taskId })
+        .select({ taskId: disposalHolds.taskId, reason: disposalHolds.reason })
         .from(disposalHolds)
         .where(and(inArray(disposalHolds.taskId, taskIds), isNull(disposalHolds.releasedAt))),
       db
@@ -1220,13 +1414,14 @@ export class DrizzleDisposalService implements DisposalService {
     const productCountByTask = new Map(productCounts.map((r) => [r.taskId, Number(r.count)]));
     const latestBatchByTask = new Map<string, (typeof batchRows)[number]>();
     for (const batch of batchRows) latestBatchByTask.set(batch.taskId, batch);
-    const heldTasks = new Set(holdRows.map((r) => r.taskId));
+    const holdReasonByTask = new Map(holdRows.map((r) => [r.taskId, r.reason]));
     const latestAuthByTask = new Map<string, (typeof authRows)[number]>();
     for (const auth of authRows) latestAuthByTask.set(auth.taskId, auth);
 
     return rows.map((row) => {
       const latestBatch = latestBatchByTask.get(row.taskId) ?? null;
-      const holdActive = heldTasks.has(row.taskId);
+      const holdReason = holdReasonByTask.get(row.taskId) ?? null;
+      const holdActive = holdReason !== null;
       const authorizationStatus = latestAuthByTask.get(row.taskId)?.status ?? null;
       const policyState: DisposalPolicyState = {
         taskStatus: row.status,
@@ -1245,6 +1440,7 @@ export class DrizzleDisposalService implements DisposalService {
         evidenceReviewStatus: latestBatch?.reviewStatus ?? null,
         authorizationStatus,
         holdActive,
+        holdReason,
         blockingReasons: evaluateDisposal(policyState).blockingReasons,
         productCount: productCountByTask.get(row.taskId) ?? 0,
         exceptionType: row.exceptionType ?? null,

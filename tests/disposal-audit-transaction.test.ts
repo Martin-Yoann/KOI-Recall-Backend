@@ -91,4 +91,81 @@ describe('disposal decision audit boundary', () => {
     expect(stagedMutation).toBe(false);
     expect(response.status).toBe(500);
   });
+
+  it('uses one transaction runner for a revocation and its success audit', async () => {
+    let enteredTransaction = false;
+    let stagedMutation = false;
+    let auditCalls = 0;
+    let changed = true;
+    const disposal: DisposalService = {
+      ...makeDisposalFake(),
+      revokeAuthorization() {
+        stagedMutation = true;
+        return Promise.resolve({
+          authorizationId: '6f2a41d2-63b6-4b0e-8f6f-3f9a1c41d0e7',
+          changed,
+        });
+      },
+    };
+    const audit: AuditService = {
+      record() {
+        auditCalls += 1;
+        return Promise.resolve();
+      },
+      query() {
+        return Promise.resolve({ events: [], total: 0, nextCursor: null });
+      },
+    };
+    const transactions: AdminTransactionRunner = {
+      async run(work) {
+        enteredTransaction = true;
+        try {
+          return await work({ admin: {} as never, staff: {} as never, audit, disposal });
+        } catch (error) {
+          stagedMutation = false;
+          throw error;
+        }
+      },
+    };
+    const registry = {
+      services: { disposal, audit, adminTransactions: transactions },
+      platform: {},
+    } as unknown as ApplicationRegistry;
+    const app = new OpenAPIHono<AppEnv>();
+    app.use('/admin/*', async (context, next) => {
+      context.set('requestId', 'test-request');
+      context.set('principal', {
+        userId: '21326c9a-5dc2-430f-98a6-546729a1065f',
+        sessionId: 'test-session',
+        role: 'COMPLIANCE',
+        displayName: 'Reviewer',
+        email: 'reviewer@example.test',
+      });
+      await next();
+    });
+    app.onError((_error, context) => context.json({ error: 'operation failed' }, 500));
+    registerDisposalRoutes(app, registry);
+
+    const revoke = () =>
+      app.request('/admin/disposal-tasks/21326c9a-5dc2-430f-98a6-546729a1065f/authorization/revoke', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: 'Issued against the wrong instruction version.' }),
+      });
+
+    const first = await revoke();
+    expect(first.status).toBe(204);
+    expect(enteredTransaction).toBe(true);
+    expect(stagedMutation).toBe(true);
+    expect(auditCalls).toBe(1);
+
+    // The idempotent retry reports the same business fact; the trail records a
+    // revocation once, not once per click.
+    stagedMutation = false;
+    changed = false;
+    const retry = await revoke();
+    expect(retry.status).toBe(204);
+    expect(stagedMutation).toBe(true);
+    expect(auditCalls).toBe(1);
+  });
 });

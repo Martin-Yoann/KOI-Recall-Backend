@@ -320,8 +320,7 @@ describe('disposal policy', () => {
 
   // The service must fail closed with a reason, so a missed gate surfaces as an
   // actionable message rather than a bare 500.
-  describe('assertCanIssueAuthorization', () => {
-    it('names the specific unmet precondition', () => {
+  describe('assertCanIssueAuthorization', () => {    it('names the specific unmet precondition', () => {
       const cases = [
         [{ ...satisfiable, holdActive: true }, DISPOSAL_BLOCKING_REASONS.DISPOSAL_ON_HOLD],
         [
@@ -347,6 +346,48 @@ describe('disposal policy', () => {
           expect((error as DisposalGateViolationError).reason).toBe(expected);
         }
       }
+    });
+  });
+
+  // A revoked permission is terminal, and the honest declaration left to a
+  // consumer whose permission was retired is the one about what already
+  // happened — the same shape as a task that never had one.
+  describe('revocation', () => {
+    it('offers the revoke action only while a permission is live', () => {
+      expect(evaluateDisposal({ ...satisfiable, authorizationStatus: 'active' }).allowedActions).toContain(
+        'disposal.authorization.revoke',
+      );
+      for (const authorizationStatus of [null, 'suspended', 'revoked'] as const) {
+        expect(
+          evaluateDisposal({ ...satisfiable, authorizationStatus }).allowedActions,
+        ).not.toContain('disposal.authorization.revoke');
+      }
+    });
+
+    it('does not offer issuing again while the permission is active', () => {
+      expect(
+        evaluateDisposal({ ...satisfiable, authorizationStatus: 'active' }).allowedActions,
+      ).not.toContain('disposal.issue_authorization');
+    });
+
+    it('offers re-issue after a permission was suspended or revoked', () => {
+      // The hard gate (`canIssueAuthorization`) does not look at
+      // authorizationStatus at all; the action list must not disagree with it.
+      // A suspended permission rests on replaced evidence and a revoked one was
+      // retired by an operator — neither is live, and a fresh authorization on
+      // a newly accepted batch is the legitimate path in both states.
+      for (const authorizationStatus of [null, 'suspended', 'revoked'] as const) {
+        const state = { ...satisfiable, authorizationStatus };
+        const snapshot = evaluateDisposal(state);
+        expect(canIssueAuthorization(state)).toBe(true);
+        expect(snapshot.allowedActions).toContain('disposal.issue_authorization');
+      }
+    });
+
+    it('leaves only the exception declaration after a revocation', () => {
+      const snapshot = evaluateDisposal({ ...satisfiable, authorizationStatus: 'revoked' });
+      expect(snapshot.allowedActions).not.toContain('disposal.declare_completion');
+      expect(snapshot.allowedActions).toContain('disposal.declare_exception');
     });
   });
 });

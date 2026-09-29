@@ -32,6 +32,7 @@ describe('OpenAPI contract', () => {
       '/v1/disposal-tasks/{taskId}/evidence',
       '/v1/disposal-tasks/{taskId}/declaration',
       '/v1/disposal-tasks/{taskId}/documents',
+      '/v1/disposal-tasks/{taskId}/documents/{documentId}',
     ]);
     expect(
       paths.every((path) => !path.startsWith('/internal') && !path.startsWith('/webhooks')),
