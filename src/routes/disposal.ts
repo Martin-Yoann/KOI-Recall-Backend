@@ -2,6 +2,7 @@ import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 
 import type { ApplicationRegistry } from '../composition.js';
+import { disposalReviewReasonCodeSchema } from '../contracts/disposal.js';
 import {
   getDisposalTaskRoute,
   listDisposalDocumentsRoute,
@@ -11,7 +12,7 @@ import {
 import type { AppEnv } from '../middleware/request-context.js';
 import type { DisposalService } from '../modules/disposal/service.js';
 import { NotImplementedServiceError, problemType } from '../shared/errors.js';
-import { requireAuditService, requirePermission } from './admin-guard.js';
+import { requireAdminTransactions, requirePermission } from './admin-guard.js';
 import { dependencyUnavailable, notFound } from './shared.js';
 
 /**
@@ -98,6 +99,7 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
         allowedActions: detail.snapshot.allowedActions,
         blockingReasons: detail.snapshot.blockingReasons,
         evidenceReviewStatus: record.latestBatchReviewStatus,
+        evidenceReviewReasonCode: record.latestBatchReviewReasonCode,
         authorizationStatus: record.authorizationStatus,
         holdActive: record.holdActive,
         version: record.version,
@@ -216,21 +218,17 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (!quantity || !Number.isInteger(quantity) || quantity < 1) {
       return validationError(context, 'quantity must be a positive integer.');
     }
-    const audit = requireAuditService(registry);
-
-    await requireDisposalService(registry).confirmProductAffected({
-      taskId,
-      campaignProductId,
-      quantity,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.product.confirm',
-      resourceType: 'disposal',
-      resourceId: taskId,
-      outcome: 'success',
-      metadata: { campaignProductId, quantity },
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      await disposal.confirmProductAffected({ taskId, campaignProductId, quantity });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.product.confirm',
+        resourceType: 'disposal',
+        resourceId: taskId,
+        outcome: 'success',
+        metadata: { campaignProductId, quantity },
+      });
     });
     return context.body(null, 204);
   });
@@ -254,25 +252,25 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (!expectedVersion || !Number.isInteger(expectedVersion)) {
       return validationError(context, 'expectedVersion is required.');
     }
-    const audit = requireAuditService(registry);
-
-    await requireDisposalService(registry).confirmEligibility({
-      taskId,
-      eligibilityStatus: eligibilityStatus as (typeof allowed)[number],
-      note,
-      actorStaffUserId: guard.userId,
-      expectedVersion,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.eligibility.confirm',
-      resourceType: 'disposal',
-      resourceId: taskId,
-      outcome: 'success',
-      // `note` is on the task row (`eligibility_note`); the audit trail is readable
-      // by every internal role, so the operator's words are not copied into it.
-      metadata: { eligibilityStatus },
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      await disposal.confirmEligibility({
+        taskId,
+        eligibilityStatus: eligibilityStatus as (typeof allowed)[number],
+        note,
+        actorStaffUserId: guard.userId,
+        expectedVersion,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.eligibility.confirm',
+        resourceType: 'disposal',
+        resourceId: taskId,
+        outcome: 'success',
+        // `note` is on the task row (`eligibility_note`); the audit trail is readable
+        // by every internal role, so the operator's words are not copied into it.
+        metadata: { eligibilityStatus },
+      });
     });
     return context.body(null, 204);
   });
@@ -298,26 +296,29 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
         'A resubmission request must give the consumer a reason code.',
       );
     }
-    const audit = requireAuditService(registry);
-
-    await requireDisposalService(registry).reviewBatch({
-      batchId,
-      decision,
-      rationale,
-      ...(reasonCode ? { reasonCode } : {}),
-      actorStaffUserId: guard.userId,
-      actorRole: guard.role,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.batch.review',
-      resourceType: 'disposal',
-      resourceId: batchId,
-      outcome: 'success',
-      // The rationale is on the review row, encrypted like every other decision
-      // reason; copying it here would have stored it in the clear.
-      metadata: { decision, ...(reasonCode ? { reasonCode } : {}) },
+    if (reasonCode && !disposalReviewReasonCodeSchema.safeParse(reasonCode).success) {
+      return validationError(context, 'The review reason code is not supported.');
+    }
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      await disposal.reviewBatch({
+        batchId,
+        decision,
+        rationale,
+        ...(reasonCode ? { reasonCode } : {}),
+        actorStaffUserId: guard.userId,
+        actorRole: guard.role,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.batch.review',
+        resourceType: 'disposal',
+        resourceId: batchId,
+        outcome: 'success',
+        // The rationale is on the review row, encrypted like every other decision
+        // reason; copying it here would have stored it in the clear.
+        metadata: { decision, ...(reasonCode ? { reasonCode } : {}) },
+      });
     });
     return context.body(null, 204);
   });
@@ -326,22 +327,20 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     const guard = await requirePermission(context, registry, 'disposal.review');
     if (guard instanceof Response) return guard;
     const taskId = context.req.param('taskId');
-    const audit = requireAuditService(registry);
-
     // No force option exists: the service re-reads state and refuses unless
     // every precondition holds at this moment.
-    const issued = await requireDisposalService(registry).issueAuthorization({
-      taskId,
-      actorStaffUserId: guard.userId,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.authorization.issue',
-      resourceType: 'disposal',
-      resourceId: taskId,
-      outcome: 'success',
-      metadata: { authorizationId: issued.authorizationId },
+    const issued = await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      const issued = await disposal.issueAuthorization({ taskId, actorStaffUserId: guard.userId });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.authorization.issue',
+        resourceType: 'disposal',
+        resourceId: taskId,
+        outcome: 'success',
+        metadata: { authorizationId: issued.authorizationId },
+      });
+      return issued;
     });
     return context.json({ authorizationId: issued.authorizationId, status: 'active' }, 201);
   });
@@ -362,24 +361,24 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (!note || note.length < 10) {
       return validationError(context, 'A note of at least 10 characters is required.');
     }
-    const audit = requireAuditService(registry);
-
-    await requireDisposalService(registry).placeHold({
-      taskId,
-      reason: reason as (typeof allowed)[number],
-      note,
-      actorStaffUserId: guard.userId,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.hold.place',
-      resourceType: 'disposal',
-      resourceId: taskId,
-      outcome: 'success',
-      // `reason` is an enum and stays; `note` is the operator's prose and lives on
-      // the hold row.
-      metadata: { reason },
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      await disposal.placeHold({
+        taskId,
+        reason: reason as (typeof allowed)[number],
+        note,
+        actorStaffUserId: guard.userId,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.hold.place',
+        resourceType: 'disposal',
+        resourceId: taskId,
+        outcome: 'success',
+        // `reason` is an enum and stays; `note` is the operator's prose and lives on
+        // the hold row.
+        metadata: { reason },
+      });
     });
     return context.body(null, 204);
   });
@@ -393,22 +392,22 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (!note || note.length < 10) {
       return validationError(context, 'A note of at least 10 characters is required.');
     }
-    const audit = requireAuditService(registry);
-
-    await requireDisposalService(registry).releaseHold({
-      taskId,
-      note,
-      actorStaffUserId: guard.userId,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.hold.release',
-      resourceType: 'disposal',
-      resourceId: taskId,
-      outcome: 'success',
-      // The release note lives on the hold row (`release_note`).
-      metadata: {},
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      await disposal.releaseHold({
+        taskId,
+        note,
+        actorStaffUserId: guard.userId,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.hold.release',
+        resourceType: 'disposal',
+        resourceId: taskId,
+        outcome: 'success',
+        // The release note lives on the hold row (`release_note`).
+        metadata: {},
+      });
     });
     return context.body(null, 204);
   });
@@ -428,7 +427,6 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     const guard = await requirePermission(context, registry, 'disposal.instructions.publish');
     if (guard instanceof Response) return guard;
     const body = await bodyRecord(context);
-    const audit = requireAuditService(registry);
 
     // Read each field with the typed reader: coercing an unknown with String()
     // would turn a malformed body into '[object Object]' and store it.
@@ -452,27 +450,30 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     }
     const videoUrl = asString(body.videoUrl);
 
-    const created = await requireDisposalService(registry).createInstructionVersion({
-      campaignVersionId,
-      locale: locale ?? 'en-US',
-      title,
-      steps: steps as never,
-      referenceImages: (Array.isArray(body.referenceImages) ? body.referenceImages : []) as never,
-      ...(videoUrl ? { videoUrl } : {}),
-      safetyWarnings: safetyWarnings as never,
-      recognitionRequirements: (Array.isArray(body.recognitionRequirements)
-        ? body.recognitionRequirements
-        : []) as never,
-      declarationTextVersion,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.instructions.create',
-      resourceType: 'disposal_instruction',
-      resourceId: created.instructionVersionId,
-      outcome: 'success',
-      metadata: { versionNumber: created.versionNumber, campaignVersionId },
+    const created = await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      const created = await disposal.createInstructionVersion({
+        campaignVersionId,
+        locale: locale ?? 'en-US',
+        title,
+        steps: steps as never,
+        referenceImages: (Array.isArray(body.referenceImages) ? body.referenceImages : []) as never,
+        ...(videoUrl ? { videoUrl } : {}),
+        safetyWarnings: safetyWarnings as never,
+        recognitionRequirements: (Array.isArray(body.recognitionRequirements)
+          ? body.recognitionRequirements
+          : []) as never,
+        declarationTextVersion,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.instructions.create',
+        resourceType: 'disposal_instruction',
+        resourceId: created.instructionVersionId,
+        outcome: 'success',
+        metadata: { versionNumber: created.versionNumber, campaignVersionId },
+      });
+      return created;
     });
     return context.json(created, 201);
   });
@@ -482,40 +483,41 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (guard instanceof Response) return guard;
     const versionId = context.req.param('versionId');
     const body = await bodyRecord(context);
-    const audit = requireAuditService(registry);
-
-    const recorded = await requireDisposalService(registry).recordInstructionApproval({
-      instructionVersionId: versionId,
-      materialType: body.materialType as never,
-      scope: body.scope as never,
-      measure: body.measure as never,
-      ...(asString(body.referenceText) ? { referenceText: asString(body.referenceText) } : {}),
-      ...(asString(body.effectiveFrom)
-        ? { effectiveFrom: new Date(asString(body.effectiveFrom) as string) }
-        : {}),
-      ...(asString(body.effectiveUntil)
-        ? { effectiveUntil: new Date(asString(body.effectiveUntil) as string) }
-        : {}),
-      actorStaffUserId: guard.userId,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.instructions.approval.record',
-      resourceType: 'disposal_instruction',
-      resourceId: versionId,
-      outcome: 'success',
-      // The computed result belongs in the trail: it is what shows that a
-      // non-authorizing material was recorded as exactly that.
-      metadata: {
-        // Read as strings for the trail. The service takes the same three fields as
-        // database enums, so the values are checked when they are written to the
-        // approval row; the trail records what was submitted, not the cast form.
-        materialType: asString(body.materialType),
-        scope: asString(body.scope),
-        measure: asString(body.measure),
-        authorizesConsumerDisposal: recorded.authorizesConsumerDisposal,
-      },
+    const recorded = await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      const recorded = await disposal.recordInstructionApproval({
+        instructionVersionId: versionId,
+        materialType: body.materialType as never,
+        scope: body.scope as never,
+        measure: body.measure as never,
+        ...(asString(body.referenceText) ? { referenceText: asString(body.referenceText) } : {}),
+        ...(asString(body.effectiveFrom)
+          ? { effectiveFrom: new Date(asString(body.effectiveFrom) as string) }
+          : {}),
+        ...(asString(body.effectiveUntil)
+          ? { effectiveUntil: new Date(asString(body.effectiveUntil) as string) }
+          : {}),
+        actorStaffUserId: guard.userId,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.instructions.approval.record',
+        resourceType: 'disposal_instruction',
+        resourceId: versionId,
+        outcome: 'success',
+        // The computed result belongs in the trail: it is what shows that a
+        // non-authorizing material was recorded as exactly that.
+        metadata: {
+          // Read as strings for the trail. The service takes the same three fields as
+          // database enums, so the values are checked when they are written to the
+          // approval row; the trail records what was submitted, not the cast form.
+          materialType: asString(body.materialType),
+          scope: asString(body.scope),
+          measure: asString(body.measure),
+          authorizesConsumerDisposal: recorded.authorizesConsumerDisposal,
+        },
+      });
+      return recorded;
     });
     return context.json(
       {
@@ -530,19 +532,19 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     const guard = await requirePermission(context, registry, 'disposal.instructions.publish');
     if (guard instanceof Response) return guard;
     const versionId = context.req.param('versionId');
-    const audit = requireAuditService(registry);
-
-    await requireDisposalService(registry).publishInstructionVersion({
-      instructionVersionId: versionId,
-      actorStaffUserId: guard.userId,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.instructions.publish',
-      resourceType: 'disposal_instruction',
-      resourceId: versionId,
-      outcome: 'success',
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      await disposal.publishInstructionVersion({
+        instructionVersionId: versionId,
+        actorStaffUserId: guard.userId,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.instructions.publish',
+        resourceType: 'disposal_instruction',
+        resourceId: versionId,
+        outcome: 'success',
+      });
     });
     return context.body(null, 204);
   });
@@ -556,23 +558,24 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (!reason || reason.length < 10) {
       return validationError(context, 'A withdrawal reason of at least 10 characters is required.');
     }
-    const audit = requireAuditService(registry);
-
-    const suspended = await requireDisposalService(registry).withdrawInstruction({
-      instructionVersionId: versionId,
-      reason,
-      actorStaffUserId: guard.userId,
-    });
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.instructions.withdraw',
-      resourceType: 'disposal_instruction',
-      resourceId: versionId,
-      outcome: 'success',
-      // The withdrawal reason is on the instruction version; only the count of
-      // suspended authorizations is a fact of the audit trail itself.
-      metadata: { suspendedAuthorizations: suspended },
+    const suspended = await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      const suspended = await disposal.withdrawInstruction({
+        instructionVersionId: versionId,
+        reason,
+        actorStaffUserId: guard.userId,
+      });
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.instructions.withdraw',
+        resourceType: 'disposal_instruction',
+        resourceId: versionId,
+        outcome: 'success',
+        // The withdrawal reason is on the instruction version; only the count of
+        // suspended authorizations is a fact of the audit trail itself.
+        metadata: { suspendedAuthorizations: suspended },
+      });
+      return suspended;
     });
     return context.json({ suspendedAuthorizations: suspended }, 200);
   });
@@ -595,17 +598,17 @@ export function registerDisposalRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     if (days !== null && (days === undefined || days < 0)) {
       return validationError(context, 'retentionDays must be a non-negative integer or null.');
     }
-    const audit = requireAuditService(registry);
-    const service = requireDisposalService(registry);
-    await service.setRetentionDays(days ?? null);
-    await audit.record({
-      actorUserId: guard.userId,
-      actorRole: guard.role,
-      action: 'disposal.retention.update',
-      resourceType: 'disposal',
-      resourceId: 'retention-config',
-      outcome: 'success',
-      metadata: { retentionDays: days ?? null },
+    await requireAdminTransactions(registry).run(async ({ disposal, audit }) => {
+      await disposal.setRetentionDays(days ?? null);
+      await audit.record({
+        actorUserId: guard.userId,
+        actorRole: guard.role,
+        action: 'disposal.retention.update',
+        resourceType: 'disposal',
+        resourceId: 'retention-config',
+        outcome: 'success',
+        metadata: { retentionDays: days ?? null },
+      });
     });
     return context.json({ retentionDays: days ?? null }, 200);
   });

@@ -2,7 +2,10 @@ import { createHash } from 'node:crypto';
 
 import type { DatabaseExecutor } from '../../db/client.js';
 import type { DisposalInstructionStep, DisposalReferenceImage } from '../../db/schema/index.js';
-import type { DisposalInstructionView } from '../../contracts/disposal.js';
+import type {
+  DisposalInstructionView,
+  DisposalReviewReasonCode,
+} from '../../contracts/disposal.js';
 import type {
   DisposalApprovalMaterial,
   DisposalApprovalScope,
@@ -58,6 +61,7 @@ export interface DisposalTaskRecord {
   approvalAuthorizesDisposal: boolean;
   latestBatchId: string | null;
   latestBatchReviewStatus: DisposalBatchReviewStatus | null;
+  latestBatchReviewReasonCode: DisposalReviewReasonCode | null;
   holdActive: boolean;
   authorizationId: string | null;
   authorizationStatus: DisposalAuthorizationStatus | null;

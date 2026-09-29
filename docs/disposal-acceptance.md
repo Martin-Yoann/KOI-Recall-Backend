@@ -1,5 +1,10 @@
 # Consumer disposal — acceptance matrix
 
+> **2026-09-29 整改状态：本页下方表格是先前运行记录，不能作为本次改动的已通过验收。**
+> 当前已实现批准有效期门禁、声明幂等与真实例外、退回原因码的消费者提示、管理端处置决定与成功审计的同事务写入；本地单元/契约测试已运行。数据库集成测试因没有隔离数据库而跳过，浏览器和真实 Blob 路径未重跑，均不得标为本轮通过。
+> D09 原要求是“已接受照片被替换时重新审核并撤销旧许可”；当前仍禁止替换，属于**需求未决**，下方将其列入 Proven 的旧结论不成立。D18 当前实际时序是“先提交案件，再从确认邮件续填处置”，并非“最终提交前审核照片”；需产品、合规确认后修订原要求。
+> 证据和待决事项以 [2026-09-28 继续整改计划](superpowers/plans/2026-09-28-disposal-instructions-remediation-continuation.zh-CN.md)及本段为准。本轮整改尚未推送或部署；已部署服务的验收状态没有因此变化。
+
 Spec §7.1. One row per acceptance criterion, with the evidence that exists **today**.
 A criterion is only marked proven when there is a concrete artefact to point at: a
 named test, or a browser action whose write was confirmed in the database. Everything

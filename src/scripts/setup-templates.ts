@@ -187,16 +187,16 @@ async function setupTemplates() {
     {
       templateKey: 'claim_confirmation',
       locale: 'en-US',
-      version: 5,
+      version: 6,
       subject: 'We received your recall claim {{caseReference}}',
       htmlBody: shell({
-        preheader: 'Your claim is in the queue and needs no action right now.',
+        preheader: 'Your claim is in the queue. Review the next steps in this message.',
         kicker: 'Claim received',
         kickerColor: INFO,
         title: 'We received your recall claim',
         body:
           para(
-            'Thank you. Your claim has been submitted and is now in our review queue. You do not need to do anything else right now.',
+            'Thank you. Your claim has been submitted and is now in our review queue. Please review the next steps below.',
           ) +
           facts([
             { label: 'Case reference', value: '{{caseReference}}' },
@@ -215,7 +215,7 @@ async function setupTemplates() {
         title: 'We received your recall claim',
         lines: [
           'Thank you. Your claim has been submitted and is now in our review queue.',
-          'You do not need to do anything else right now.',
+          'Please review the next steps below.',
           '',
           'Case reference: {{caseReference}}',
           'Submitted: {{submittedAt}}',

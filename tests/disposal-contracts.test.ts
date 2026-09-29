@@ -13,6 +13,7 @@ const taskView = {
   allowedActions: ['disposal.submit_evidence'],
   blockingReasons: [],
   evidenceReviewStatus: null,
+  evidenceReviewReasonCode: null,
   authorizationStatus: null,
   holdActive: false,
   version: 1,
@@ -42,6 +43,7 @@ describe('DisposalTaskView contract', () => {
       'blockingReasons',
       'declarationTextVersion',
       'eligibilityStatus',
+      'evidenceReviewReasonCode',
       'evidenceReviewStatus',
       'expiresAt',
       'holdActive',
@@ -93,6 +95,21 @@ describe('DisposalTaskView contract', () => {
     expect(parsed.holdActive).toBe(true);
     // Accepted evidence plus a hold is not permission, and the payload says so.
     expect(parsed.blockingReasons).toContain(DISPOSAL_BLOCKING_REASONS.DISPOSAL_ON_HOLD);
+  });
+
+  it('returns a controlled resubmission reason without reviewer free text', () => {
+    const parsed = disposalTaskViewSchema.parse({
+      ...taskView,
+      evidenceReviewStatus: 'needs_resubmission',
+      evidenceReviewReasonCode: 'recognition_unclear',
+    });
+    expect(parsed.evidenceReviewReasonCode).toBe('recognition_unclear');
+    expect(
+      disposalTaskViewSchema.safeParse({
+        ...taskView,
+        evidenceReviewReasonCode: 'The consumer described an injury in detail.',
+      }).success,
+    ).toBe(false);
   });
 });
 

@@ -579,6 +579,17 @@ components:
         - url
         - altText
       type: object
+    DisposalReviewReasonCode:
+      enum:
+        - recognition_unclear
+        - coverage_insufficient
+        - photo_unreadable
+        - wrong_product
+        - safety_step_not_visible
+        - other
+        - null
+      nullable: true
+      type: string
     DisposalTaskProductView:
       properties:
         campaignProductId:
@@ -621,6 +632,8 @@ components:
           type: string
         eligibilityStatus:
           $ref: "#/components/schemas/DisposalEligibilityStatus"
+        evidenceReviewReasonCode:
+          $ref: "#/components/schemas/DisposalReviewReasonCode"
         evidenceReviewStatus:
           $ref: "#/components/schemas/DisposalBatchReviewStatus"
         expiresAt:
@@ -650,6 +663,7 @@ components:
         - allowedActions
         - blockingReasons
         - evidenceReviewStatus
+        - evidenceReviewReasonCode
         - authorizationStatus
         - holdActive
         - version

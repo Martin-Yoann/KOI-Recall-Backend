@@ -94,7 +94,12 @@ describe.skipIf(!enabled)(
      * leave an approved instruction version behind and turn "no approved version
      * exists" into a false negative.
      */
-    async function fixture(options: { authorizes: boolean; approved: boolean }) {
+    async function fixture(options: {
+      authorizes: boolean;
+      approved: boolean;
+      effectiveFrom?: Date;
+      effectiveUntil?: Date;
+    }) {
       const db = handle!.db;
       const [campaignVersion] = await db
         .insert(campaignVersions)
@@ -139,6 +144,8 @@ describe.skipIf(!enabled)(
         scope: 'consumer_held_product',
         measure: options.authorizes ? 'consumer_disposal' : 'consumer_return',
         authorizesConsumerDisposal: options.authorizes,
+        effectiveFrom: options.effectiveFrom ?? null,
+        effectiveUntil: options.effectiveUntil ?? null,
         recordedByStaffUserId: staffUserId,
       });
 
@@ -289,6 +296,24 @@ describe.skipIf(!enabled)(
       await cleanup(built);
     });
 
+    it.each([
+      ['before start', { effectiveFrom: new Date(Date.now() + 3_600_000) }],
+      ['after expiry', { effectiveUntil: new Date(Date.now() - 3_600_000) }],
+    ])('creates no task %s of an approval window', async (_label, window) => {
+      const built = await fixture({ authorizes: true, approved: true, ...window });
+      const created = await handle!.transaction((tx) =>
+        service.createTaskForSubmission(tx, {
+          draftId: built.draftId,
+          caseId: null,
+          campaignVersionId: built.campaignVersionId,
+          productIds: [productId],
+          hasIncident: false,
+        }),
+      );
+      expect(created).toBeNull();
+      await cleanup(built);
+    });
+
     it('seeds a new task with every product unconfirmed', async () => {
       const opened = await openTask({ authorizes: true, approved: true });
       expect(opened.created).not.toBeNull();
@@ -349,6 +374,7 @@ describe.skipIf(!enabled)(
       });
       const afterRejection = await service.getTaskForVisitor(opened.taskId, opened.created!.token);
       expect(afterRejection!.task.latestBatchReviewStatus).toBe('needs_resubmission');
+      expect(afterRejection!.task.latestBatchReviewReasonCode).toBe('photo_unreadable');
       expect(evaluateDisposal(afterRejection!.task.policyState).maySubmitEvidence).toBe(true);
       await expect(
         service.issueAuthorization({ taskId: opened.taskId, actorStaffUserId: staffUserId }),
@@ -393,6 +419,30 @@ describe.skipIf(!enabled)(
 
       const detail = await service.getTaskForVisitor(opened.taskId, opened.created!.token);
       expect(detail!.task.authorizationStatus).toBe('active');
+
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
+    });
+
+    it('hides instructions and refuses a new authorization when approval expires after task creation', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'accepted',
+        rationale: 'The label and product are legible in the evidence.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+      await handle!.db
+        .update(disposalInstructionApprovals)
+        .set({ effectiveUntil: new Date(Date.now() - 3_600_000) })
+        .where(eq(disposalInstructionApprovals.instructionVersionId, opened.versionId));
+
+      const visitor = await service.getTaskForVisitor(opened.taskId, opened.created!.token);
+      expect(visitor!.instruction).toBeNull();
+      expect(visitor!.snapshot.allowedActions).not.toContain('disposal.issue_authorization');
+      await expect(
+        service.issueAuthorization({ taskId: opened.taskId, actorStaffUserId: staffUserId }),
+      ).rejects.toThrow(/APPROVAL_NOT_AUTHORIZING/);
 
       await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
     });
@@ -513,6 +563,85 @@ describe.skipIf(!enabled)(
       expect(authorizations).toHaveLength(0);
 
       await cleanup(opened, { taskId });
+    });
+
+    it('treats an identical exception retry as one declaration and rejects a changed retry', async () => {
+      const opened = await openTask({ authorizes: true, approved: true });
+      const taskId = opened.created!.taskId;
+      const input = {
+        taskId,
+        taskToken: opened.created!.token,
+        declarationTextVersion: 'integration-v1',
+        exceptionType: 'already_disposed_before_authorization' as const,
+        exceptionNote: 'The product was discarded before the recall notice arrived.',
+      };
+
+      const racing = await Promise.allSettled([
+        service.recordDeclaration(input),
+        service.recordDeclaration(input),
+      ]);
+      expect(racing.every((result) => result.status === 'fulfilled')).toBe(true);
+      await service.recordDeclaration(input);
+      await expect(
+        service.recordDeclaration({
+          ...input,
+          exceptionNote: 'A different account of the disposal.',
+        }),
+      ).rejects.toThrow(/conflict/i);
+
+      const declarations = await handle!.db
+        .select({ id: disposalDeclarations.id })
+        .from(disposalDeclarations)
+        .where(eq(disposalDeclarations.taskId, taskId));
+      expect(declarations).toHaveLength(1);
+      await cleanup(opened, { taskId });
+    });
+
+    it('rejects a declaration whose text version differs from the pinned instruction', async () => {
+      const opened = await openTask({ authorizes: true, approved: true });
+      await expect(
+        service.recordDeclaration({
+          taskId: opened.created!.taskId,
+          taskToken: opened.created!.token,
+          declarationTextVersion: 'not-the-pinned-version',
+          exceptionType: 'already_disposed_before_authorization',
+          exceptionNote: 'The product was discarded before the recall notice arrived.',
+        }),
+      ).rejects.toThrow(/declaration.*version/i);
+      await cleanup(opened, { taskId: opened.created!.taskId });
+    });
+
+    it('records a truthful exception after an earlier authorization was suspended', async () => {
+      const opened = await readyForAuthorization();
+      await service.reviewBatch({
+        batchId: opened.batch.batchId,
+        decision: 'accepted',
+        rationale: 'Evidence clearly identifies the affected product.',
+        actorStaffUserId: staffUserId,
+        actorRole: 'COMPLIANCE',
+      });
+      await service.issueAuthorization({ taskId: opened.taskId, actorStaffUserId: staffUserId });
+      await service.withdrawInstruction({
+        instructionVersionId: opened.versionId,
+        reason: 'The consumer procedure was withdrawn before completion.',
+        actorStaffUserId: staffUserId,
+      });
+
+      const visitor = await service.getTaskForVisitor(opened.taskId, opened.created!.token);
+      expect(visitor!.snapshot.allowedActions).toContain('disposal.declare_exception');
+      await service.recordDeclaration({
+        taskId: opened.taskId,
+        taskToken: opened.created!.token,
+        declarationTextVersion: 'integration-v1',
+        exceptionType: 'already_disposed_before_authorization',
+        exceptionNote: 'The consumer had already disposed of the product before the withdrawal.',
+      });
+      const [declaration] = await handle!.db
+        .select({ authorizationId: disposalDeclarations.authorizationId })
+        .from(disposalDeclarations)
+        .where(eq(disposalDeclarations.taskId, opened.taskId));
+      expect(declaration?.authorizationId).toBeNull();
+      await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
     });
 
     // The automatic incident pause, and the fact that nothing else lifts it.
@@ -1067,6 +1196,12 @@ describe.skipIf(!enabled)(
         declarationTextVersion: 'integration-v1',
         authorizationId: issued.authorizationId,
       });
+      await service.recordDeclaration({
+        taskId: opened.taskId,
+        taskToken: opened.created!.token,
+        declarationTextVersion: 'integration-v1',
+        authorizationId: issued.authorizationId,
+      });
 
       const suspended = await service.withdrawInstruction({
         instructionVersionId: opened.versionId,
@@ -1091,12 +1226,17 @@ describe.skipIf(!enabled)(
         .select({ id: disposalDeclarations.id })
         .from(disposalDeclarations)
         .where(eq(disposalDeclarations.authorizationId, issued.authorizationId));
+      const taskDeclarations = await handle!.db
+        .select({ id: disposalDeclarations.id })
+        .from(disposalDeclarations)
+        .where(eq(disposalDeclarations.taskId, opened.taskId));
 
       // Suspended, not deleted: the history a withdrawal has to keep.
       expect(batch).toBeDefined();
       expect(review).toBeDefined();
       expect(authorization!.status).toBe('suspended');
       expect(declaration).toBeDefined();
+      expect(taskDeclarations).toHaveLength(1);
 
       await cleanup(opened, { taskId: opened.taskId, documentIds: [opened.documentId] });
     });
@@ -1142,6 +1282,13 @@ describe.skipIf(!enabled)(
         exceptionType: 'already_disposed_before_authorization',
         exceptionNote: 'Disposed of at the local recycling center.',
       });
+      await service.recordDeclaration({
+        taskId: opened.taskId,
+        taskToken: opened.created!.token,
+        declarationTextVersion: 'integration-v1',
+        exceptionType: 'already_disposed_before_authorization',
+        exceptionNote: 'Disposed of at the local recycling center.',
+      });
 
       const notifications = await handle!.db
         .select({
@@ -1153,12 +1300,12 @@ describe.skipIf(!enabled)(
         .where(
           and(
             eq(outboxEvents.eventType, 'disposal.exception.recorded'),
-            like(outboxEvents.deduplicationKey, `disposal-exception:${opened.taskId}`),
+            like(outboxEvents.deduplicationKey, `disposal-declaration:${opened.taskId}`),
           ),
         );
 
       expect(notifications).toHaveLength(1);
-      expect(notifications[0]!.deduplicationKey).toBe(`disposal-exception:${opened.taskId}`);
+      expect(notifications[0]!.deduplicationKey).toBe(`disposal-declaration:${opened.taskId}`);
       const serialized = JSON.stringify(notifications[0]!.payload);
       expect(serialized).not.toContain('#token=');
       expect(serialized).toContain('already disposed of');

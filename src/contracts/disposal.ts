@@ -20,6 +20,19 @@ export const disposalBatchReviewStatusSchema = z
   .enum(['pending', 'accepted', 'needs_resubmission', 'superseded'])
   .openapi('DisposalBatchReviewStatus');
 
+/** Fixed operator reasons that may be shown to a consumer without reviewer prose. */
+export const disposalReviewReasonCodeSchema = z
+  .enum([
+    'recognition_unclear',
+    'coverage_insufficient',
+    'photo_unreadable',
+    'wrong_product',
+    'safety_step_not_visible',
+    'other',
+  ])
+  .openapi('DisposalReviewReasonCode');
+export type DisposalReviewReasonCode = z.infer<typeof disposalReviewReasonCodeSchema>;
+
 export const disposalAuthorizationStatusSchema = z
   .enum(['active', 'suspended', 'revoked'])
   .openapi('DisposalAuthorizationStatus');
@@ -84,6 +97,7 @@ export const disposalTaskViewSchema = z
     /** Stable codes explaining what is currently blocked. */
     blockingReasons: z.array(z.string()),
     evidenceReviewStatus: disposalBatchReviewStatusSchema.nullable(),
+    evidenceReviewReasonCode: disposalReviewReasonCodeSchema.nullable(),
     authorizationStatus: disposalAuthorizationStatusSchema.nullable(),
     holdActive: z.boolean(),
     /** Optimistic token; a stale page cannot decide an old state. */
@@ -158,16 +172,7 @@ export const reviewDisposalBatchRequestSchema = z
     decision: z.enum(['accepted', 'needs_resubmission']),
     rationale: z.string().min(10).max(2000),
     /** Required when asking for a resubmission; the consumer needs a reason. */
-    reasonCode: z
-      .enum([
-        'recognition_unclear',
-        'coverage_insufficient',
-        'photo_unreadable',
-        'wrong_product',
-        'safety_step_not_visible',
-        'other',
-      ])
-      .optional(),
+    reasonCode: disposalReviewReasonCodeSchema.optional(),
   })
   .openapi('ReviewDisposalBatchRequest');
 

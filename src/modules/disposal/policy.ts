@@ -114,11 +114,28 @@ export interface DisposalPolicyState {
    * Computed from the approval rows, never supplied by a client.
    */
   approvalAuthorizesDisposal: boolean;
+  /** The current approval's validity window, with a null endpoint unbounded. */
+  approvalEffectiveFrom?: Date | null;
+  approvalEffectiveUntil?: Date | null;
   /** Review status of the latest evidence batch; null when none was submitted. */
   latestBatchReviewStatus: DisposalBatchReviewStatus | null;
   /** A hold with no release timestamp exists. */
   holdActive: boolean;
   authorizationStatus: DisposalAuthorizationStatus | null;
+}
+
+/** Valid from the first instant, invalid at the expiry instant. */
+export function approvalWindowIncludes(
+  approval: {
+    effectiveFrom?: Date | null | undefined;
+    effectiveUntil?: Date | null | undefined;
+  },
+  now: Date,
+): boolean {
+  return (
+    (approval.effectiveFrom == null || approval.effectiveFrom <= now) &&
+    (approval.effectiveUntil == null || now < approval.effectiveUntil)
+  );
 }
 
 export interface DisposalPolicySnapshot {
@@ -150,7 +167,10 @@ export interface DisposalPolicySnapshot {
  * sequence of things to fix, so the first unmet precondition is the one an
  * operator should act on.
  */
-export function evaluateDisposal(state: DisposalPolicyState): DisposalPolicySnapshot {
+export function evaluateDisposal(
+  state: DisposalPolicyState,
+  now: Date = new Date(),
+): DisposalPolicySnapshot {
   const blockingReasons: DisposalBlockingReason[] = [];
   const allowedActions: string[] = [];
 
@@ -181,10 +201,15 @@ export function evaluateDisposal(state: DisposalPolicyState): DisposalPolicySnap
   // 3. The approval behind that version must actually authorize disposal. This
   //    is where a Notice of Violation, a lab report, or a Form 332 inventory
   //    procedure stops: they are recordable evidence, not permission.
-  if (instructionUsable && !state.approvalAuthorizesDisposal) {
+  const approvalInWindow = approvalWindowIncludes(
+    { effectiveFrom: state.approvalEffectiveFrom, effectiveUntil: state.approvalEffectiveUntil },
+    now,
+  );
+  if (instructionUsable && (!state.approvalAuthorizesDisposal || !approvalInWindow)) {
     blockingReasons.push(DISPOSAL_BLOCKING_REASONS.APPROVAL_NOT_AUTHORIZING);
   }
-  const approvalAuthorizes = instructionUsable && state.approvalAuthorizesDisposal;
+  const approvalAuthorizes =
+    instructionUsable && state.approvalAuthorizesDisposal && approvalInWindow;
 
   // 4. Evidence must exist and have been accepted by a person. `verified` is a
   //    malware/MIME fact and never substitutes for this.
@@ -224,10 +249,12 @@ export function evaluateDisposal(state: DisposalPolicyState): DisposalPolicySnap
   // anything was ever permitted. The client reads these ids rather than inferring
   // from `authorizationStatus`: the same reason every other action here is
   // server-issued.
-  if (taskOpen && state.authorizationStatus === 'active') {
+  const completionCurrentlyPermitted =
+    taskOpen && state.authorizationStatus === 'active' && blockingReasons.length === 0;
+  if (completionCurrentlyPermitted) {
     allowedActions.push('disposal.declare_completion');
   }
-  if (taskOpen && state.authorizationStatus !== 'active') {
+  if (taskOpen && !completionCurrentlyPermitted) {
     // The forward-looking path is not open, so the only honest declaration left is
     // one about what already happened. Offering it is what keeps a consumer who
     // disposed of the unit before we asked from having no way to say so.
@@ -240,8 +267,8 @@ export function evaluateDisposal(state: DisposalPolicyState): DisposalPolicySnap
   if (taskOpen && state.holdActive) {
     allowedActions.push('disposal.hold.release');
   }
-  if (taskOpen && approvalAuthorizes && state.authorizationStatus === null) {
-    // Not an operator action: the server issues this once the gate passes.
+  if (state.authorizationStatus === null && blockingReasons.length === 0) {
+    // The button and the server's hard gate use the same complete decision.
     allowedActions.push('disposal.issue_authorization');
   }
 

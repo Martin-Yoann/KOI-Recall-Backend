@@ -25,7 +25,20 @@ describe('disposal policy', () => {
     const snapshot = evaluateDisposal(satisfiable);
     expect(snapshot.blockingReasons).toEqual([]);
     expect(canIssueAuthorization(satisfiable)).toBe(true);
+    expect(snapshot.allowedActions).toContain('disposal.issue_authorization');
     expect(() => assertCanIssueAuthorization(satisfiable)).not.toThrow();
+  });
+
+  it('only offers issuance when the full authorization gate passes', () => {
+    for (const state of [
+      { ...satisfiable, latestBatchReviewStatus: null },
+      { ...satisfiable, latestBatchReviewStatus: 'pending' as const },
+      { ...satisfiable, holdActive: true },
+      { ...satisfiable, eligibilityStatus: 'pending_confirmation' as const },
+    ]) {
+      expect(canIssueAuthorization(state)).toBe(false);
+      expect(evaluateDisposal(state).allowedActions).not.toContain('disposal.issue_authorization');
+    }
   });
 
   // D01: a potential match is not a confirmed match.
@@ -95,6 +108,44 @@ describe('disposal policy', () => {
       approvalAuthorizesDisposal: false,
     };
     expect(canIssueAuthorization(state)).toBe(false);
+  });
+
+  it('refuses an approval before its effective time and at its expiry', () => {
+    const state = {
+      ...satisfiable,
+      approvalEffectiveFrom: new Date('2026-10-01T00:00:00.000Z'),
+      approvalEffectiveUntil: new Date('2026-10-02T00:00:00.000Z'),
+    };
+
+    for (const now of [
+      new Date('2026-09-30T23:59:59.999Z'),
+      new Date('2026-10-02T00:00:00.000Z'),
+    ]) {
+      const snapshot = evaluateDisposal(state, now);
+      expect(snapshot.blockingReasons).toContain(
+        DISPOSAL_BLOCKING_REASONS.APPROVAL_NOT_AUTHORIZING,
+      );
+      expect(snapshot.allowedActions).not.toContain('disposal.issue_authorization');
+      expect(snapshot.maySeeInstructions).toBe(false);
+    }
+  });
+
+  it('accepts an approval at its effective time and before its expiry', () => {
+    const state = {
+      ...satisfiable,
+      approvalEffectiveFrom: new Date('2026-10-01T00:00:00.000Z'),
+      approvalEffectiveUntil: new Date('2026-10-02T00:00:00.000Z'),
+    };
+
+    for (const now of [
+      new Date('2026-10-01T00:00:00.000Z'),
+      new Date('2026-10-01T23:59:59.999Z'),
+    ]) {
+      const snapshot = evaluateDisposal(state, now);
+      expect(snapshot.blockingReasons).toEqual([]);
+      expect(snapshot.allowedActions).toContain('disposal.issue_authorization');
+      expect(snapshot.maySeeInstructions).toBe(true);
+    }
   });
 
   // D06: `verified` is a malware/MIME fact. It is not acceptance.
@@ -198,6 +249,19 @@ describe('disposal policy', () => {
       const suspended = evaluateDisposal({ ...satisfiable, authorizationStatus: 'suspended' });
       expect(suspended.allowedActions).toContain('disposal.declare_exception');
       expect(suspended.allowedActions).not.toContain('disposal.declare_completion');
+    });
+
+    it('does not offer completion against a permission whose approval has expired', () => {
+      const expired = evaluateDisposal(
+        {
+          ...satisfiable,
+          authorizationStatus: 'active',
+          approvalEffectiveUntil: new Date('2026-10-02T00:00:00.000Z'),
+        },
+        new Date('2026-10-02T00:00:00.000Z'),
+      );
+      expect(expired.allowedActions).not.toContain('disposal.declare_completion');
+      expect(expired.allowedActions).toContain('disposal.declare_exception');
     });
 
     it('offers neither once the task is closed', () => {

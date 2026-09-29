@@ -1,9 +1,12 @@
-import { and, asc, desc, eq, inArray, isNull, ne, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, ne, sql } from 'drizzle-orm';
 
 import type { CommunicationQueueService } from '../communications/queue-service.js';
 import { getLatestTemplateVersionId } from '../communications/template-loader.js';
 
-import type { DisposalInstructionView } from '../../contracts/disposal.js';
+import {
+  disposalReviewReasonCodeSchema,
+  type DisposalInstructionView,
+} from '../../contracts/disposal.js';
 import type { DatabaseExecutor, DatabaseHandle } from '../../db/client.js';
 import {
   disposalAuthorizationItems,
@@ -25,6 +28,8 @@ import {
 import { consoleSafeLogger } from '../../platform/observability/logger.js';
 import {
   ClaimValidationError,
+  ClaimConflictError,
+  DataIntegrityError,
   EmailTemplateMissingError,
   ResourceNotFoundError,
 } from '../../shared/errors.js';
@@ -35,6 +40,7 @@ import {
 } from '../documents/document-status.js';
 import {
   assertCanIssueAuthorization,
+  approvalWindowIncludes,
   authorizesConsumerDisposal,
   evaluateDisposal,
   type DisposalPolicySnapshot,
@@ -178,25 +184,28 @@ export class DrizzleDisposalService implements DisposalService {
       hasIncident: boolean;
     },
   ): Promise<{ taskId: string; token: string } | null> {
-    const [version] = await tx
+    const now = new Date();
+    const candidates = await tx
       .select({
         id: disposalInstructionVersions.id,
-        tokenExpiryLocale: disposalInstructionVersions.locale,
+        effectiveFrom: disposalInstructionApprovals.effectiveFrom,
+        effectiveUntil: disposalInstructionApprovals.effectiveUntil,
       })
       .from(disposalInstructionVersions)
+      .innerJoin(
+        disposalInstructionApprovals,
+        eq(disposalInstructionApprovals.instructionVersionId, disposalInstructionVersions.id),
+      )
       .where(
         and(
           eq(disposalInstructionVersions.campaignVersionId, input.campaignVersionId),
           eq(disposalInstructionVersions.status, 'approved'),
-          sql`exists (
-            select 1 from ${disposalInstructionApprovals}
-            where ${disposalInstructionApprovals.instructionVersionId} = ${disposalInstructionVersions.id}
-              and ${disposalInstructionApprovals.authorizesConsumerDisposal} = true
-              and ${disposalInstructionApprovals.withdrawnAt} is null
-          )`,
+          eq(disposalInstructionApprovals.authorizesConsumerDisposal, true),
+          isNull(disposalInstructionApprovals.withdrawnAt),
         ),
       )
-      .limit(1);
+      .orderBy(desc(disposalInstructionVersions.versionNumber));
+    const version = candidates.find((candidate) => approvalWindowIncludes(candidate, now));
     if (!version) return null;
 
     const token = generateTaskToken();
@@ -813,39 +822,83 @@ export class DrizzleDisposalService implements DisposalService {
 
   async recordDeclaration(input: RecordDeclarationInput): Promise<void> {
     await this.handle.transaction(async (tx) => {
-      const record = await this.loadTaskRecord(tx, input.taskId, hashTaskToken(input.taskToken));
+      const tokenHash = hashTaskToken(input.taskToken);
+      const lockedTask = await this.lockTask(tx, input.taskId, tokenHash);
+      const record = await this.loadTaskRecord(tx, input.taskId, tokenHash, lockedTask);
       if (!record) throw new ResourceNotFoundError('Disposal task was not found.');
 
       const hasException = Boolean(input.exceptionType);
+      if (hasException && input.authorizationId) {
+        throw new ClaimValidationError(
+          'A declaration cannot cite both an authorization and an exception.',
+        );
+      }
+      const existing = await tx
+        .select({
+          authorizationId: disposalDeclarations.authorizationId,
+          exceptionType: disposalDeclarations.exceptionType,
+          exceptionNote: disposalDeclarations.exceptionNote,
+          declarationTextVersion: disposalDeclarations.declarationTextVersion,
+        })
+        .from(disposalDeclarations)
+        .where(eq(disposalDeclarations.taskId, input.taskId))
+        .limit(2);
+      if (existing.length > 1) {
+        throw new DataIntegrityError('This disposal task has more than one declaration.');
+      }
+      if (existing[0]) {
+        const sameRequest =
+          existing[0].declarationTextVersion === input.declarationTextVersion &&
+          existing[0].exceptionType === (input.exceptionType ?? null) &&
+          existing[0].exceptionNote === (input.exceptionNote ?? null) &&
+          (input.authorizationId === undefined ||
+            input.authorizationId === existing[0].authorizationId);
+        if (sameRequest) return;
+        throw new ClaimConflictError('This disposal task already has a different declaration.');
+      }
+      if (record.status !== 'open') {
+        throw new ClaimConflictError('This disposal task is already closed.');
+      }
+      if (input.declarationTextVersion !== record.declarationTextVersion) {
+        throw new ClaimValidationError('The declaration text version does not match this task.');
+      }
 
       // A declaration cites exactly one basis, and the *authorization* branch is
       // resolved by the server. The client is not asked to name an authorization:
       // the task holds at most one active one, the server can find it, and a page
       // left open across a re-issue would otherwise cite a stale id.
-      const citedAuthorization = input.authorizationId ?? record.authorizationId ?? undefined;
+      const citedAuthorization = hasException
+        ? undefined
+        : (input.authorizationId ?? record.authorizationId ?? undefined);
       const hasAuthorization = Boolean(citedAuthorization);
-      if (hasException && hasAuthorization) {
-        throw new ClaimValidationError(
-          'A declaration must cite either an authorization or an exception, and not both.',
-        );
-      }
       if (!hasException && !hasAuthorization) {
         throw new ClaimValidationError(
           'This task has no active authorization to declare against. Use the exception path if you disposed of the product some other way.',
         );
       }
 
+      const snapshot = evaluateDisposal(record.policyState);
       if (hasAuthorization) {
         if (
           citedAuthorization !== record.authorizationId ||
-          record.authorizationStatus !== 'active'
+          record.authorizationStatus !== 'active' ||
+          !snapshot.allowedActions.includes('disposal.declare_completion')
         ) {
           throw new ClaimValidationError(
-            'The authorization for this task is no longer active, so the disposal cannot be declared.',
+            'This task has no active authorization to declare against.',
           );
         }
-      } else if (!input.exceptionNote) {
-        throw new ClaimValidationError('An exception declaration must explain the circumstances.');
+      } else {
+        if (!hasException || !snapshot.allowedActions.includes('disposal.declare_exception')) {
+          throw new ClaimValidationError(
+            'An exception declaration is not available for this task.',
+          );
+        }
+        if (!input.exceptionNote) {
+          throw new ClaimValidationError(
+            'An exception declaration must explain the circumstances.',
+          );
+        }
       }
 
       await tx.insert(disposalDeclarations).values({
@@ -859,11 +912,11 @@ export class DrizzleDisposalService implements DisposalService {
       await this.notifyConsumer(
         tx,
         record.id,
-        'disposal.exception.recorded',
-        `disposal-exception:${record.id}`,
+        hasException ? 'disposal.exception.recorded' : 'disposal.completion.recorded',
+        `disposal-declaration:${record.id}`,
         input.exceptionType
           ? 'We recorded your statement that the product was already disposed of, or that the photos could not be taken. Your note has reached our team, who will follow up if anything else is needed.'
-          : 'We recorded that you disposed of the product. Your note has reached our team, who will follow up if anything else is needed.',
+          : 'We recorded that you disposed of the product. Our team will follow up if anything else is needed.',
       );
       await tx
         .update(disposalTasks)
@@ -1051,11 +1104,14 @@ export class DrizzleDisposalService implements DisposalService {
   }
 
   async listInstructionVersions(campaignVersionId?: string): Promise<InstructionVersionSummary[]> {
+    const now = new Date();
     const authorizingCount = sql<number>`(
       select count(*)::int from ${disposalInstructionApprovals}
       where ${disposalInstructionApprovals.instructionVersionId} = ${disposalInstructionVersions.id}
         and ${disposalInstructionApprovals.authorizesConsumerDisposal} = true
         and ${disposalInstructionApprovals.withdrawnAt} is null
+        and (${disposalInstructionApprovals.effectiveFrom} is null or ${disposalInstructionApprovals.effectiveFrom} <= ${now})
+        and (${disposalInstructionApprovals.effectiveUntil} is null or ${disposalInstructionApprovals.effectiveUntil} > ${now})
     )`;
     const rows = await this.handle.db
       .select({
@@ -1098,6 +1154,7 @@ export class DrizzleDisposalService implements DisposalService {
    */
   async listQueue(filter: { limit?: number } = {}): Promise<DisposalQueueRowView[]> {
     const db = this.handle.db;
+    const now = new Date();
     const rows = await db
       .select({
         taskId: disposalTasks.id,
@@ -1114,6 +1171,8 @@ export class DrizzleDisposalService implements DisposalService {
           where ${disposalInstructionApprovals.instructionVersionId} = ${disposalTasks.instructionVersionId}
             and ${disposalInstructionApprovals.authorizesConsumerDisposal} = true
             and ${disposalInstructionApprovals.withdrawnAt} is null
+            and (${disposalInstructionApprovals.effectiveFrom} is null or ${disposalInstructionApprovals.effectiveFrom} <= ${now})
+            and (${disposalInstructionApprovals.effectiveUntil} is null or ${disposalInstructionApprovals.effectiveUntil} > ${now})
         )`,
       })
       .from(disposalTasks)
@@ -1203,7 +1262,7 @@ export class DrizzleDisposalService implements DisposalService {
     return new Date(Date.now() + this.evidenceRetentionDays * 24 * 60 * 60 * 1000);
   }
 
-  private async lockTask(tx: DatabaseExecutor, taskId: string) {
+  private async lockTask(tx: DatabaseExecutor, taskId: string, tokenHash?: string) {
     const [task] = await tx
       .select({
         id: disposalTasks.id,
@@ -1211,7 +1270,14 @@ export class DrizzleDisposalService implements DisposalService {
         version: disposalTasks.version,
       })
       .from(disposalTasks)
-      .where(eq(disposalTasks.id, taskId))
+      .where(
+        and(
+          eq(disposalTasks.id, taskId),
+          ...(tokenHash
+            ? [eq(disposalTasks.tokenHash, tokenHash), gt(disposalTasks.tokenExpiresAt, new Date())]
+            : []),
+        ),
+      )
       .for('update');
     if (!task) throw new ResourceNotFoundError('Disposal task was not found.');
     return task;
@@ -1333,8 +1399,11 @@ export class DrizzleDisposalService implements DisposalService {
       if (row.tokenExpiresAt.getTime() <= Date.now()) return null;
     }
 
-    const [approval] = await db
-      .select({ authorizes: disposalInstructionApprovals.authorizesConsumerDisposal })
+    const approvals = await db
+      .select({
+        effectiveFrom: disposalInstructionApprovals.effectiveFrom,
+        effectiveUntil: disposalInstructionApprovals.effectiveUntil,
+      })
       .from(disposalInstructionApprovals)
       .where(
         and(
@@ -1342,8 +1411,8 @@ export class DrizzleDisposalService implements DisposalService {
           eq(disposalInstructionApprovals.authorizesConsumerDisposal, true),
           isNull(disposalInstructionApprovals.withdrawnAt),
         ),
-      )
-      .limit(1);
+      );
+    const approval = approvals.find((candidate) => approvalWindowIncludes(candidate, new Date()));
 
     const [batch] = await db
       .select({
@@ -1354,6 +1423,21 @@ export class DrizzleDisposalService implements DisposalService {
       .where(eq(disposalEvidenceBatches.taskId, taskId))
       .orderBy(desc(disposalEvidenceBatches.batchNumber))
       .limit(1);
+    const [review] =
+      batch?.reviewStatus === 'needs_resubmission'
+        ? await db
+            .select({ reasonCode: disposalReviews.reasonCode })
+            .from(disposalReviews)
+            .where(eq(disposalReviews.batchId, batch.id))
+            .limit(1)
+        : [];
+    const parsedReason = disposalReviewReasonCodeSchema.safeParse(review?.reasonCode);
+    const reviewReasonCode =
+      batch?.reviewStatus === 'needs_resubmission'
+        ? parsedReason.success
+          ? parsedReason.data
+          : 'other'
+        : null;
 
     const [hold] = await db
       .select({ id: disposalHolds.id })
@@ -1375,7 +1459,9 @@ export class DrizzleDisposalService implements DisposalService {
       taskStatus: row.status,
       eligibilityStatus: row.eligibilityStatus,
       instructionStatus: row.instructionStatus ?? null,
-      approvalAuthorizesDisposal: Boolean(approval?.authorizes),
+      approvalAuthorizesDisposal: Boolean(approval),
+      approvalEffectiveFrom: approval?.effectiveFrom ?? null,
+      approvalEffectiveUntil: approval?.effectiveUntil ?? null,
       latestBatchReviewStatus: batch?.reviewStatus ?? null,
       holdActive: Boolean(hold),
       authorizationStatus: authorization?.status ?? null,
@@ -1391,9 +1477,10 @@ export class DrizzleDisposalService implements DisposalService {
       instructionVersionNumber: row.instructionVersionNumber ?? null,
       instructionTitle: row.instructionTitle ?? null,
       declarationTextVersion: row.declarationTextVersion ?? null,
-      approvalAuthorizesDisposal: Boolean(approval?.authorizes),
+      approvalAuthorizesDisposal: Boolean(approval),
       latestBatchId: batch?.id ?? null,
       latestBatchReviewStatus: batch?.reviewStatus ?? null,
+      latestBatchReviewReasonCode: reviewReasonCode,
       holdActive: Boolean(hold),
       authorizationId: authorization?.id ?? null,
       authorizationStatus: authorization?.status ?? null,
