@@ -1052,6 +1052,7 @@ async function main() {
       .insert(reportabilityReviews)
       .values({
         id: reviewId,
+        caseId: c.id,
         incidentId,
         status: reviewStatus,
         reviewerId:

@@ -52,6 +52,23 @@ export function assertIncidentDetailsCompleteness(
     missing.push('injuryDescription');
   }
 
+  // `other` without a description is a requiredness gap in the strict stage; the
+  // contract already rejects the mirror image (a description naming a non-other
+  // mode) in every stage.
+  if (details.failureMode === 'other' && details.failureModeOtherDescription === undefined) {
+    missing.push('failureModeOtherDescription');
+  }
+
+  // "Treatment was received" owes a type that is not `none`. `unknown` stays
+  // allowed — treated but unsure of what kind is an honest answer; the
+  // contradiction (claiming treatment while naming none) is what is barred.
+  if (
+    details.medicalTreatmentReceived === 'yes' &&
+    (details.medicalTreatment === undefined || details.medicalTreatment === 'none')
+  ) {
+    missing.push('medicalTreatment (a type other than none)');
+  }
+
   if (missing.length > 0) {
     throw new ClaimValidationError(
       `Structured incident details are required for a confirmed incident: ${missing.join(', ')}.`,

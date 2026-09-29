@@ -70,6 +70,12 @@ export const incidentDetailsSchema = z
     // them required lives in the service layer (INCIDENT_STRICT_VALIDATION), so
     // the published contract stays backward-compatible during rollout.
     failureMode: incidentFailureModeSchema.optional(),
+    // What `other` means, in the consumer's words. Sensitive by the same standard
+    // as the injury description — free text about a person's experience — so it is
+    // encrypted at rest. The required half of the rule (`other` must carry one)
+    // is requiredness, not contradiction, and lives behind
+    // INCIDENT_STRICT_VALIDATION with the other new fields.
+    failureModeOtherDescription: z.string().trim().min(1).max(2000).optional(),
     injuryDescription: z.string().trim().min(1).max(2000).optional(),
     medicalTreatmentReceived: z.enum(['yes', 'no', 'unknown']).optional(),
     unitType: z.enum(['original', 'replacement', 'unknown']).optional(),
@@ -178,6 +184,19 @@ export const claimSubmissionRequestSchema = claimSubmissionRequestObject
         path: ['incidentDetails', 'medicalTreatmentReceived'],
         message:
           'medicalTreatmentReceived cannot be no while medicalTreatment names a treatment that was provided.',
+      });
+    }
+
+    // A description of "what went wrong, unlisted" only ever belongs to the
+    // `other` failure mode. Naming a specific mode and also describing an
+    // unlisted one is a contradiction, so it is rejected in every stage like
+    // the treatment pair above — the mirror-image rule (`other` must carry a
+    // description) is requiredness and lives behind INCIDENT_STRICT_VALIDATION.
+    if (details.failureModeOtherDescription !== undefined && details.failureMode !== 'other') {
+      context.addIssue({
+        code: 'custom',
+        path: ['incidentDetails', 'failureModeOtherDescription'],
+        message: 'failureModeOtherDescription is only valid when failureMode is other.',
       });
     }
   })

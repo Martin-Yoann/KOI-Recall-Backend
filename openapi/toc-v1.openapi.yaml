@@ -800,6 +800,10 @@ components:
             - other
             - unknown
           type: string
+        failureModeOtherDescription:
+          maxLength: 2000
+          minLength: 1
+          type: string
         injuryDescription:
           maxLength: 2000
           minLength: 1

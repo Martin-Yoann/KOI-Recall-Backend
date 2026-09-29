@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Database } from '../src/db/client.js';
-import { caseEscalations } from '../src/db/schema/index.js';
+import { caseEscalations, reportabilityReviews } from '../src/db/schema/index.js';
 import { DrizzleAdminService } from '../src/modules/admin/drizzle-admin-service.js';
 import type { SensitiveDataCryptoPort } from '../src/platform/crypto/port.js';
 
@@ -365,10 +365,90 @@ describe('DrizzleAdminService RBAC operations', () => {
       service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID),
     ).resolves.toBeUndefined();
   });
+
+  // --- A16: a review-required escalation owes a review even without an incident ---
+
+  it('refuses a closure for a review-required escalation whose review is missing, even forced', async () => {
+    const { service, triggered } = createEmailCapturingService(
+      [
+        openCaseRow('closure_review'),
+        undefined,
+        { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+        undefined,
+      ],
+      // A closed escalation is not the safety sign-off: the review it opened
+      // stays owed, and a missing row is a data problem that blocks closure.
+      [{ category: 'legal', closedAt: new Date('2026-09-01T00:00:00.000Z') }],
+    );
+
+    await expect(
+      service.transitionCaseStatus(
+        CASE_REFERENCE,
+        'closed',
+        STAFF_ID,
+        'Attempting to close over a missing case-level review.',
+        true,
+      ),
+    ).rejects.toThrow('review is missing');
+    expect(triggered).toEqual([]);
+  });
+
+  it('refuses a closure while the case-level review is pending, even forced', async () => {
+    const { service } = createEmailCapturingService(
+      [
+        openCaseRow('closure_review'),
+        undefined,
+        { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+        { status: 'pending' },
+      ],
+      [{ category: 'regulator', closedAt: new Date('2026-09-01T00:00:00.000Z') }],
+    );
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID, undefined, true),
+    ).rejects.toThrow('safety reportability review is pending');
+  });
+
+  it('allows the closure once the case-level review has been decided', async () => {
+    const { service } = createEmailCapturingService(
+      [
+        openCaseRow('closure_review'),
+        undefined,
+        { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+        { status: 'filed' },
+      ],
+      [{ category: 'media', closedAt: new Date('2026-09-01T00:00:00.000Z') }],
+    );
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID, undefined, true),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not owe a case review for a category without a reportability sign-off', async () => {
+    // Suspected fraud and data privacy are escalation classifications, not
+    // report-gated ones: closing the escalation closes the obligation, and no
+    // review is demanded (the select queue holds no review row).
+    const { service } = createEmailCapturingService(
+      [
+        openCaseRow('closure_review'),
+        undefined,
+        { requestedType: 'refund', approvedType: 'refund', status: 'externally_completed' },
+      ],
+      [{ category: 'suspected_fraud', closedAt: new Date('2026-09-01T00:00:00.000Z') }],
+    );
+
+    await expect(
+      service.transitionCaseStatus(CASE_REFERENCE, 'closed', STAFF_ID),
+    ).resolves.toBeUndefined();
+  });
 });
 
 /** A service wired to a fake email trigger that captures every enqueue. */
-function createEmailCapturingService(selectRows: unknown[]) {
+function createEmailCapturingService(
+  selectRows: unknown[],
+  escalationRows: Array<{ category: string; closedAt: Date | null }> = [],
+) {
   const inserted: Record<string, unknown>[] = [];
   const triggered: unknown[] = [];
   const emailTrigger = {
@@ -378,7 +458,7 @@ function createEmailCapturingService(selectRows: unknown[]) {
     },
   };
   const service = new DrizzleAdminService({
-    db: createTransitionFakeDb(inserted, selectRows),
+    db: createTransitionFakeDb(inserted, selectRows, escalationRows),
     crypto: cryptoFake,
     emailTrigger: emailTrigger as never,
     consumerWebBaseUrl: WEB_BASE_URL,
@@ -395,17 +475,20 @@ function createEmailCapturingService(selectRows: unknown[]) {
 function createTransitionFakeDb(
   inserted: Record<string, unknown>[],
   selectRows: unknown[] = [],
+  escalationRows: Array<{ category: string; closedAt: Date | null }> = [],
 ): Database {
   const fallback = openCaseRow('submitted');
   const nextRow = () => (selectRows.length > 0 ? selectRows.shift() : fallback);
   return {
     select: () => ({
       // The fake answers the case row to every query unless the table says otherwise.
-      // The closure gate asks a second question — open escalations for this case — and
-      // has to be answered with none of them, which is the state these tests mean to
-      // start from. Without this the gate sees the case row and refuses every closure.
+      // The closure gate asks a second question — this case's escalations — and
+      // gets the configured rows (empty by default), which is the state these
+      // tests mean to start from. Without this the gate sees the case row and
+      // refuses every closure.
       from: (table?: unknown) => {
-        const resolved = () => Promise.resolve(table === caseEscalations ? [] : [nextRow()]);
+        const resolved = () =>
+          Promise.resolve(table === caseEscalations ? escalationRows : [nextRow()]);
         return {
           where: () => ({
             for: () => ({ limit: resolved }),
@@ -427,3 +510,142 @@ function createTransitionFakeDb(
     }),
   } as unknown as Database;
 }
+
+// --- A16: opening a review-required escalation creates the review it owes ---
+
+/**
+ * Models the openCaseEscalation path: the case lookup, the review/incident
+ * reads, and the two inserts (a review first when one is owed, then the
+ * escalation row itself). `onConflictDoNothing` is modeled as always winning,
+ * so the race re-read branch stays out of these unit tests.
+ */
+function createOpenEscalationFakeDb(
+  selectRows: unknown[],
+  reviewInserts: Record<string, unknown>[],
+  escalationInserts: Record<string, unknown>[],
+): Database {
+  const nextRow = () => (selectRows.length > 0 ? selectRows.shift() : undefined);
+  return {
+    select: () => ({
+      from: () => ({
+        where: () => ({
+          limit: () => {
+            const row = nextRow();
+            return Promise.resolve(row === undefined ? [] : [row]);
+          },
+        }),
+      }),
+    }),
+    insert: (table?: unknown) => ({
+      values: (values: Record<string, unknown>) => {
+        (table === reportabilityReviews ? reviewInserts : escalationInserts).push(values);
+        return {
+          onConflictDoNothing: () => ({
+            returning: () => Promise.resolve([{ id: 'review-1' }]),
+          }),
+          returning: () => Promise.resolve([{ id: 'escalation-1' }]),
+        };
+      },
+    }),
+  } as unknown as Database;
+}
+
+describe('openCaseEscalation opens the review a report-gated category owes', () => {
+  it('creates a pending case-level review when the case has no review and no incident', async () => {
+    const reviewInserts: Record<string, unknown>[] = [];
+    const escalationInserts: Record<string, unknown>[] = [];
+    const service = new DrizzleAdminService({
+      db: createOpenEscalationFakeDb([openCaseRow('submitted'), undefined, undefined], reviewInserts, escalationInserts),
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
+
+    const opened = await service.openCaseEscalation({
+      caseReference: CASE_REFERENCE,
+      category: 'legal',
+      reason: 'Counsel asked for the file to be held.',
+      actorStaffUserId: STAFF_ID,
+    });
+
+    expect(opened).toEqual({ escalationId: 'escalation-1' });
+    expect(reviewInserts).toEqual([{ caseId: CASE_ID, status: 'pending' }]);
+    // The escalation points at the review it rests on, so the queue and the
+    // closure gate read one consistent pair.
+    expect(escalationInserts[0]).toMatchObject({
+      caseId: CASE_ID,
+      category: 'legal',
+      reviewId: 'review-1',
+      openedByStaffUserId: STAFF_ID,
+    });
+  });
+
+  it('reuses the review the case already has instead of opening a second one', async () => {
+    const reviewInserts: Record<string, unknown>[] = [];
+    const escalationInserts: Record<string, unknown>[] = [];
+    const service = new DrizzleAdminService({
+      db: createOpenEscalationFakeDb([openCaseRow('submitted'), { id: 'review-9' }], reviewInserts, escalationInserts),
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
+
+    await service.openCaseEscalation({
+      caseReference: CASE_REFERENCE,
+      category: 'regulator',
+      reason: 'A CPSC investigator asked for the file.',
+      actorStaffUserId: STAFF_ID,
+    });
+
+    expect(reviewInserts).toEqual([]);
+    expect(escalationInserts[0]).toMatchObject({ reviewId: 'review-9' });
+  });
+
+  it('re-attaches a missing incident review to the incident it belongs to', async () => {
+    const reviewInserts: Record<string, unknown>[] = [];
+    const escalationInserts: Record<string, unknown>[] = [];
+    const service = new DrizzleAdminService({
+      db: createOpenEscalationFakeDb(
+        [openCaseRow('submitted'), undefined, { id: INCIDENT_ID }],
+        reviewInserts,
+        escalationInserts,
+      ),
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
+
+    await service.openCaseEscalation({
+      caseReference: CASE_REFERENCE,
+      category: 'injury',
+      reason: 'The reported injury escalated to counsel.',
+      actorStaffUserId: STAFF_ID,
+    });
+
+    expect(reviewInserts).toEqual([{ caseId: CASE_ID, incidentId: INCIDENT_ID, status: 'pending' }]);
+  });
+
+  it('opens no review for a category that owes none', async () => {
+    const reviewInserts: Record<string, unknown>[] = [];
+    const escalationInserts: Record<string, unknown>[] = [];
+    const service = new DrizzleAdminService({
+      db: createOpenEscalationFakeDb(
+        [openCaseRow('submitted'), openCaseRow('submitted'), openCaseRow('submitted')],
+        reviewInserts,
+        escalationInserts,
+      ),
+      crypto: cryptoFake,
+      consumerWebBaseUrl: WEB_BASE_URL,
+    });
+
+    for (const category of ['suspected_fraud', 'data_privacy', 'other'] as const) {
+      await service.openCaseEscalation({
+        caseReference: CASE_REFERENCE,
+        category,
+        reason: 'A category without a reportability sign-off.',
+        actorStaffUserId: STAFF_ID,
+      });
+    }
+
+    expect(reviewInserts).toEqual([]);
+    expect(escalationInserts).toHaveLength(3);
+    expect(escalationInserts.every((row) => row.reviewId === undefined)).toBe(true);
+  });
+});

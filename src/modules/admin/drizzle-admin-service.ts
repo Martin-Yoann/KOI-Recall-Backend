@@ -72,6 +72,7 @@ import type {
   CloseCaseEscalationInput,
   OpenCaseEscalationInput,
 } from './service.js';
+import { REVIEW_REQUIRED_ESCALATION_CATEGORIES } from './service.js';
 
 /**
  * Statuses that put a case in each operational queue. `incident` is special:
@@ -649,6 +650,11 @@ export class DrizzleAdminService implements AdminService {
       : ({ piiTier: tier } as CaseDetailConsumer);
 
     const incident = await this.incidentFor(caseRow.id, tier);
+    // A16: when a review-required escalation opened a review on a case with no
+    // incident record, that review is the case's reportability gate — surface
+    // it top-level so the console can offer the same close form incident cases
+    // get inside `incident.reportability`.
+    const caseReportability = incident ? null : await this.caseReviewFor(caseRow.id);
     const campaign = await this.campaignFor(caseRow.campaignVersionId, caseRow.locale);
     return {
       caseReference: caseRow.publicReference,
@@ -662,9 +668,13 @@ export class DrizzleAdminService implements AdminService {
       products: await this.productsFor(caseRow.id, tier),
       documents: await this.documentsFor(caseRow.id),
       incident,
+      ...(caseReportability ? { reportability: caseReportability } : {}),
       consumer,
       resolution: this.resolutions ? await this.resolutions.getForCase(caseRow.id) : null,
-      workflow: await this.workflowFor(caseRow, incident?.reportability?.status ?? null),
+      workflow: await this.workflowFor(
+        caseRow,
+        incident?.reportability?.status ?? caseReportability?.status ?? null,
+      ),
       disposalTaskId: await db
         .select({ id: disposalTasks.id })
         .from(disposalTasks)
@@ -817,6 +827,8 @@ export class DrizzleAdminService implements AdminService {
         unitType: incidents.unitType,
         injuryDescriptionKeyVersion: incidents.injuryDescriptionKeyVersion,
         injuryDescriptionEncrypted: incidents.injuryDescriptionEncrypted,
+        failureModeOtherDescriptionKeyVersion: incidents.failureModeOtherDescriptionKeyVersion,
+        failureModeOtherDescriptionEncrypted: incidents.failureModeOtherDescriptionEncrypted,
         occurredAt: incidents.occurredAt,
         occurredDateUnknown: incidents.occurredDateUnknown,
         companyObtainedAt: incidents.companyObtainedAt,
@@ -837,6 +849,7 @@ export class DrizzleAdminService implements AdminService {
     // no narrative at all.
     let narrative: string | undefined;
     let injuryDescription: string | undefined;
+    let failureModeOtherDescription: string | undefined;
     let piiUnreadable = false;
     if (tier === 'raw') {
       try {
@@ -856,6 +869,22 @@ export class DrizzleAdminService implements AdminService {
           injuryDescription = await this.crypto.decrypt({
             value: row.injuryDescriptionEncrypted,
             keyVersion: row.injuryDescriptionKeyVersion,
+          });
+        } catch {
+          piiUnreadable = true;
+        }
+      }
+
+      // What `other` means is the same kind of testimonial free text, so it
+      // rides along with the injury description's tier and failure handling.
+      if (
+        row.failureModeOtherDescriptionEncrypted &&
+        row.failureModeOtherDescriptionKeyVersion
+      ) {
+        try {
+          failureModeOtherDescription = await this.crypto.decrypt({
+            value: row.failureModeOtherDescriptionEncrypted,
+            keyVersion: row.failureModeOtherDescriptionKeyVersion,
           });
         } catch {
           piiUnreadable = true;
@@ -893,15 +922,41 @@ export class DrizzleAdminService implements AdminService {
         : null,
       ...(narrative !== undefined ? { narrative } : {}),
       ...(injuryDescription !== undefined ? { injuryDescription } : {}),
+      ...(failureModeOtherDescription !== undefined ? { failureModeOtherDescription } : {}),
       ...(piiUnreadable ? { piiUnavailable: true } : {}),
+    };
+  }
+
+  /**
+   * The case-level reportability review for a case with no incident record —
+   * opened automatically when a review-required escalation is recorded (A16).
+   * Returns the same shape as `incident.reportability` so the console can treat
+   * the two exactly alike.
+   */
+  private async caseReviewFor(caseId: string) {
+    const [row] = await this.db
+      .select({
+        id: reportabilityReviews.id,
+        status: reportabilityReviews.status,
+        cpscReference: reportabilityReviews.cpscReference,
+        filedAt: reportabilityReviews.filedAt,
+      })
+      .from(reportabilityReviews)
+      .where(eq(reportabilityReviews.caseId, caseId))
+      .limit(1);
+    if (!row) return null;
+    return {
+      id: row.id,
+      status: row.status,
+      cpscReference: row.cpscReference ?? null,
+      filedAt: row.filedAt ? row.filedAt.toISOString() : null,
     };
   }
 
   /**
    * `reportabilityStatus` may be passed in by callers that already loaded the
    * incident (getCaseDetail); when omitted it is queried (listCases path).
-   */
-  private async workflowFor(
+   */  private async workflowFor(
     caseRow: {
       id: string;
       status: CaseStatus;
@@ -912,13 +967,15 @@ export class DrizzleAdminService implements AdminService {
   ) {
     let reviewStatus = reportabilityStatus;
     if (reviewStatus === undefined) {
-      const [incidentRow] = await this.db
+      // Case-scoped on purpose: this also picks up the case-level review a
+      // review-required escalation opened on a case with no incident record,
+      // so the list view and the detail view agree on the review's state.
+      const [reviewRow] = await this.db
         .select({ reportabilityStatus: reportabilityReviews.status })
-        .from(incidents)
-        .leftJoin(reportabilityReviews, eq(reportabilityReviews.incidentId, incidents.id))
-        .where(eq(incidents.caseId, caseRow.id))
+        .from(reportabilityReviews)
+        .where(eq(reportabilityReviews.caseId, caseRow.id))
         .limit(1);
-      reviewStatus = incidentRow?.reportabilityStatus ?? null;
+      reviewStatus = reviewRow?.reportabilityStatus ?? null;
     }
     const [resolutionRow] = await this.db
       .select({
@@ -1043,13 +1100,60 @@ export class DrizzleAdminService implements AdminService {
       throw new ClaimValidationError('An escalation reason of at least 10 characters is required.');
     }
     const caseId = await this.caseIdForReference(input.caseReference);
+    let reviewId = input.reviewId ?? null;
+    if (
+      !reviewId &&
+      (REVIEW_REQUIRED_ESCALATION_CATEGORIES as readonly string[]).includes(input.category)
+    ) {
+      // A16: the report-gated categories owe a reportability review even when
+      // the case has no incident record, so opening one makes the review exist —
+      // the escalation record says why the case left the standard path, and the
+      // review is the safety sign-off that must be decided before closure.
+      const [existing] = await this.db
+        .select({ id: reportabilityReviews.id })
+        .from(reportabilityReviews)
+        .where(eq(reportabilityReviews.caseId, caseId))
+        .limit(1);
+      if (existing) {
+        reviewId = existing.id;
+      } else {
+        // An incident case whose review is missing (legacy data) re-attaches to
+        // its incident; a case without one gets the case-level form. The unique
+        // index on case_id makes two concurrent opens agree on one row: the
+        // loser of the insert race re-reads what the winner created.
+        const [incidentRow] = await this.db
+          .select({ id: incidents.id })
+          .from(incidents)
+          .where(eq(incidents.caseId, caseId))
+          .limit(1);
+        const inserted = await this.db
+          .insert(reportabilityReviews)
+          .values({
+            caseId,
+            ...(incidentRow ? { incidentId: incidentRow.id } : {}),
+            status: 'pending',
+          })
+          .onConflictDoNothing({ target: reportabilityReviews.caseId })
+          .returning({ id: reportabilityReviews.id });
+        if (inserted[0]) {
+          reviewId = inserted[0].id;
+        } else {
+          const [raced] = await this.db
+            .select({ id: reportabilityReviews.id })
+            .from(reportabilityReviews)
+            .where(eq(reportabilityReviews.caseId, caseId))
+            .limit(1);
+          reviewId = raced?.id ?? null;
+        }
+      }
+    }
     const [row] = await this.db
       .insert(caseEscalations)
       .values({
         caseId,
         category: input.category,
         reason,
-        ...(input.reviewId ? { reviewId: input.reviewId } : {}),
+        ...(reviewId ? { reviewId } : {}),
         openedByStaffUserId: input.actorStaffUserId,
       })
       .returning({ id: caseEscalations.id });
@@ -1262,39 +1366,68 @@ export class DrizzleAdminService implements AdminService {
     // stays bypassable.
     //
     // Scope notes:
-    //  - `incident` and `incidentReview` were already loaded above, so this adds
-    //    no query.
+    //  - `incident` and `incidentReview` were already loaded above, so the
+    //    incident half of the gate adds no query.
     //  - Only `closed` is gated. A consumer-driven `withdrawn` must stay
     //    available (the review row simply remains pending against a closed-lite
     //    case, which is visible in the compliance queue).
-    //  - A case with no incident needs no review, so standard cases close freely.
+    //  - A case with no incident and no review-required escalation owes no
+    //    review, so standard cases close freely.
     // Escalation gate — outside the bypass for the same reason as the gate above.
     // An open escalation means the case is with legal, a regulator or the media;
     // closing it would take it back out of that conversation, and no role may do that
     // by force any more than it may close over an open safety review.
+    let reviewRequired = Boolean(incident);
     if (nextStatus === 'closed') {
-      const openEscalations = await db
-        .select({ id: caseEscalations.id })
+      const escalationRows = await db
+        .select({ category: caseEscalations.category, closedAt: caseEscalations.closedAt })
         .from(caseEscalations)
-        .where(and(eq(caseEscalations.caseId, caseRow.id), isNull(caseEscalations.closedAt)))
-        .limit(1);
-      if (openEscalations.length > 0) {
+        .where(eq(caseEscalations.caseId, caseRow.id))
+        .limit(20);
+      if (escalationRows.some((row) => row.closedAt === null)) {
         throw new ClaimValidationError(
           'This case cannot be closed while it has an open escalation. Close the escalation first, recording what closed it.',
         );
       }
+      // A16: the five report-gated categories owe a completed review even when
+      // the case has no incident record. Closing the escalation is not the
+      // safety sign-off — the review it opened stays owed until someone decides
+      // it, so a closed escalation keeps this half of the gate alive.
+      reviewRequired ||= escalationRows.some((row) =>
+        (REVIEW_REQUIRED_ESCALATION_CATEGORIES as readonly string[]).includes(row.category),
+      );
     }
 
-    if (nextStatus === 'closed' && incident) {
-      if (!incidentReview) {
-        throw new ClaimValidationError(
-          'This case cannot be closed because its safety reportability review is missing. Create and complete the review first.',
-        );
-      }
-      if (incidentReview.reportabilityStatus === 'pending') {
-        throw new ClaimValidationError(
-          'This case cannot be closed while its safety reportability review is pending. Complete the review first.',
-        );
+    if (nextStatus === 'closed' && reviewRequired) {
+      if (incident) {
+        if (!incidentReview) {
+          throw new ClaimValidationError(
+            'This case cannot be closed because its safety reportability review is missing. Create and complete the review first.',
+          );
+        }
+        if (incidentReview.reportabilityStatus === 'pending') {
+          throw new ClaimValidationError(
+            'This case cannot be closed while its safety reportability review is pending. Complete the review first.',
+          );
+        }
+      } else {
+        // The case-level review a review-required escalation opened (or should
+        // have opened) — same rule, keyed on the case instead of the incident.
+        const [caseReview] = await db
+          .select({ status: reportabilityReviews.status })
+          .from(reportabilityReviews)
+          .where(eq(reportabilityReviews.caseId, caseRow.id))
+          .limit(1);
+        if (!caseReview) {
+          throw new ClaimValidationError(
+            'This case cannot be closed because its safety reportability review is missing. Create and complete the review first.',
+          );
+        }
+        if (caseReview.status === 'pending') {
+          throw new ClaimValidationError(
+            'This case cannot be closed while its safety reportability review is pending. Complete the review first.',
+          );
+        }
       }
     }
 

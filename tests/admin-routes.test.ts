@@ -115,29 +115,11 @@ describe('admin routes (T8/O10)', () => {
     expect(csv).toContain('KOI-7N4Q-A91M2X6P');
   });
 
-  it('refuses an outcome that is not one of the two decisions', async () => {
-    const spy = makeAuditSpy();
-    const response = await appWith(admin, spy.service).request(
-      '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
-      {
-        method: 'POST',
-        headers: { Authorization: 'Bearer admin-secret' },
-        body: JSON.stringify({
-          outcome: 'Reportable',
-          reviewerId: '00000000-0000-4000-8000-000000000002',
-          rationale: 'Verified the incident report and filed with CPSC.',
-          cpscReference: 'CPSC-2026-001',
-        }),
-      },
-    );
-
-    // 'Reportable' is not a decision this endpoint records, and it used to be closed
-    // as 'filed' — a safety review recorded as filed with no intent to file.
-    expect(response.status).toBe(422);
-    expect(spy.inputs).toHaveLength(0);
-  });
-
-  it('closes a reportability review with the admin key', async () => {
+  it('refuses the legacy admin key on the review decision route', async () => {
+    // The M2 dual-mode window for safety decisions is closed: the legacy key
+    // cannot name a reviewer of record — its body `reviewerId` was an
+    // unverified assertion — so a reportability decision now requires a staff
+    // session held by COMPLIANCE or ADMIN.
     const spy = makeAuditSpy();
     const response = await appWith(admin, spy.service).request(
       '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
@@ -152,45 +134,8 @@ describe('admin routes (T8/O10)', () => {
         }),
       },
     );
-    expect(response.status).toBe(204);
-
-    // This path used to write no audit row at all, which is how a safety
-    // decision could reach a terminal state with no trail.
-    expect(spy.inputs).toHaveLength(1);
-    expect(spy.inputs[0]).toMatchObject({
-      action: 'review.close',
-      resourceType: 'review',
-      resourceId: '00000000-0000-4000-8000-000000000001',
-      outcome: 'success',
-      metadata: { outcome: 'filed', via: 'legacy_admin_key' },
-    });
-  });
-
-  it('preserves the legacy reviewerId during the M2 dual-mode window', async () => {
-    let reviewerId: string | undefined;
-    const legacyAdmin: AdminService = {
-      ...admin,
-      closeReportabilityReview: (_reviewId, input) => {
-        reviewerId = input.reviewerId;
-        return Promise.resolve();
-      },
-    };
-
-    const response = await appWith(legacyAdmin).request(
-      '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
-      {
-        method: 'POST',
-        headers: { Authorization: 'Bearer admin-secret' },
-        body: JSON.stringify({
-          outcome: 'documented_non_reportable',
-          reviewerId: '00000000-0000-4000-8000-000000000002',
-          rationale: 'Reviewed and documented as non-reportable.',
-        }),
-      },
-    );
-
-    expect(response.status).toBe(204);
-    expect(reviewerId).toBe('00000000-0000-4000-8000-000000000002');
+    expect(response.status).toBe(401);
+    expect(spy.inputs).toHaveLength(0);
   });
 
   it('surfaces 501 when no admin service is wired', async () => {

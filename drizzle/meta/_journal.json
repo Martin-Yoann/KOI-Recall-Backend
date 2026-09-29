@@ -169,6 +169,20 @@
       "when": 1790241558555,
       "tag": "0024_late_gamora",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1790660775476,
+      "tag": "0025_round_hawkeye",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1790660808484,
+      "tag": "0026_icy_liz_osborn",
+      "breakpoints": true
     }
   ]
 }

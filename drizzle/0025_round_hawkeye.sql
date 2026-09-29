@@ -1,0 +1,3 @@
+ALTER TABLE "incidents" ADD COLUMN "failure_mode_other_description_key_version" varchar(40);--> statement-breakpoint
+ALTER TABLE "incidents" ADD COLUMN "failure_mode_other_description_encrypted" text;--> statement-breakpoint
+ALTER TABLE "incidents" ADD CONSTRAINT "incidents_failure_mode_other_pair_chk" CHECK (("incidents"."failure_mode_other_description_key_version" is null) = ("incidents"."failure_mode_other_description_encrypted" is null));

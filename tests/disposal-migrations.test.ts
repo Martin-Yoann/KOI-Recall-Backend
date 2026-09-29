@@ -31,6 +31,26 @@ function isDisposalTable(name: string): boolean {
   return name.startsWith('disposal_');
 }
 
+/** The columns a list of statements adds, as `table.column` pairs. */
+function columnsAddedBy(statements: string[]): Set<string> {
+  const added = new Set<string>();
+  for (const statement of statements) {
+    for (const match of statement.matchAll(
+      /^ALTER TABLE\s+"([^"]+)"\s+ADD COLUMN\s+(?:"([^"]+)"|(\w+))/gim,
+    )) {
+      added.add(`${match[1]}.${match[2] ?? match[3]}`);
+    }
+  }
+  return added;
+}
+
+/** The columns an UPDATE statement assigns, by name. */
+function columnsSetByUpdate(statement: string): string[] {
+  const body =
+    /^UPDATE\s+"[^"]+"\s+SET\s+(.*?)(?:\s+FROM\s+|\s+WHERE\s+|$)/is.exec(statement)?.[1] ?? '';
+  return [...body.matchAll(/"([^"]+)"\s*=/g)].map((match) => match[1]!);
+}
+
 /** The feature's migrations, split into statements, in file-name order. */
 async function featureMigrations(): Promise<Migration[]> {
   const files = (await readdir('drizzle')).filter((file) => file.endsWith('.sql'));
@@ -62,20 +82,40 @@ describe('disposal migrations are additive (D22)', () => {
     );
   });
 
-  it('never rewrites rows that already existed', async () => {
+  it('never rewrites a fact that already existed', async () => {
+    // An UPDATE is admissible only as a backfill: every column it sets must be
+    // one the same migration just added. A backfill cannot reclassify anything —
+    // the columns it writes had no prior meaning — while an UPDATE touching a
+    // column that already existed rewrites a stored fact, which is what D22 bars.
     for (const { file, statements } of await featureMigrations()) {
-      const writes = statements.filter((statement) => /^UPDATE\s+"/i.test(statement));
-      expect({ file, writes }).toEqual({ file, writes: [] });
+      const added = columnsAddedBy(statements);
+      const offenders = statements.filter((statement) => {
+        if (!/^UPDATE\s+"/i.test(statement)) return false;
+        const table = /^UPDATE\s+"([^"]+)"/i.exec(statement)?.[1] ?? '';
+        return columnsSetByUpdate(statement).some((column) => !added.has(`${table}.${column}`));
+      });
+      expect({ file, offenders }).toEqual({ file, offenders: [] });
     }
   });
 
   it('never alters a column that already existed', async () => {
-    // A `SET DEFAULT` or a type change reinterprets the values already stored;
-    // adding a table or a column does not.
+    // Two ALTER COLUMN forms are admissible, both because they reinterpret no
+    // stored value: DROP NOT NULL (a relaxation — every row keeps exactly the
+    // value it had), and SET NOT NULL on a column the same migration added (the
+    // tightening half of a backfill, which cannot constrain a fact that existed
+    // before the column did). Everything else — SET DEFAULT, a type change —
+    // reinterprets the values already stored.
     for (const { file, statements } of await featureMigrations()) {
-      const altered = statements.filter((statement) =>
-        /^ALTER TABLE[\s\S]*ALTER COLUMN/i.test(statement),
-      );
+      const added = columnsAddedBy(statements);
+      const altered = statements.filter((statement) => {
+        const change =
+          /^ALTER TABLE\s+"([^"]+)"\s+ALTER COLUMN\s+"([^"]+)"\s+(DROP NOT NULL|SET NOT NULL)/i.exec(
+            statement,
+          );
+        if (!change) return /^ALTER TABLE[\s\S]*ALTER COLUMN/i.test(statement);
+        if (/^DROP NOT NULL/i.test(change[3]!)) return false;
+        return !added.has(`${change[1]}.${change[2]}`);
+      });
       expect({ file, altered }).toEqual({ file, altered: [] });
     }
   });

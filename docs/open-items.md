@@ -391,3 +391,33 @@ consumer-auth）真正在用的那套，且有专测。逐项比对后，两份*
 
 **合规需要定的是"改什么"**：哪些该更严（例如 `unsure` 是否也要结构化字段）、哪些组合应判为矛盾
 （例如同时报"无伤害"与"就医"）、以及历史缺失该怎么表述。上面这张表是把讨论的起点从零挪到"逐条确认"。
+
+---
+
+## 本轮实施记录（injury/hazard ・ 2026-09-29）
+
+按 9 月 28 日续篇的任务 2、任务 3 推进，三个仓库本地提交（未推送、未部署）。**数据库集成测试未运行**（需隔离库；本地 `DATABASE_URL` 指向生产，迁移 0025/0026 未在任何库执行过）；生产环境变量未核对，`INCIDENT_STRICT_VALIDATION` 与 `INCIDENT_ESCALATED_STATUS` 仍为关。
+
+### 落地的代码
+
+1. **`failureModeOtherDescription` 端到端**：契约字段（1–2000 字）→ 信封加密列（迁移 0025，pair CHECK）→ 提交加密持久化 → 管理端 raw PII 层解密展示 → 前端条件输入。矛盾规则（说明了"其他"却选了具体失效模式/未选模式）在契约层全阶段拒绝；"选了 other 必须说明"与"received=yes 必须给非 none 治疗类型"进严格层（开关关时不生效）——理由：现在就强制会打断尚未发布新前端的存量客户端，与既有的分级发布原则一致。前端已带客户端校验并即时生效。
+2. **案件级报告审查（A16）**：`reportability_reviews` 增加唯一 `case_id`、`incident_id` 改可空（迁移 0026：先加列→从 incidents 回填→收紧 NOT NULL，不为旧数据伪造）；升级分类为前五类（injury、battery_ingestion、legal、regulator、media）且案件尚无审查时，`openCaseEscalation` 自动建 Pending 审查（含并发冲突重读）；结案门禁从"有 incident 才查审查"扩展为"incident 或审查必填升级任一存在即查"，ADMIN 强制路径同样拦截；管理端案件详情为无事故案件展示 case-level 审查卡与同一份结案表单。
+3. **升级分类补齐**：`suspected_fraud`、`data_privacy` 入枚举与路由校验（PRD 3.4.1 七类 + other 全集）。**默认决策**：这两类不自动建审查、不进审查门禁——原方案 §5.2 只把前五类列为"需报告审查门禁"；待合规确认。
+4. **legacy key 审查决策入口关闭**：`/admin/reportability-reviews/:id/close` 移除 `allowLegacy`，旧 key 得 401；reviewer 一律取会话主体，body `reviewerId` 不再读取；`assertedReviewerId` 从审计键白名单移除（无生产者）。
+5. **管理端**：`escalated` 徽标（此前无标签灰点）；审查 Pending 时长徽章（自 `companyObtainedAt` 起，控制台时钟近似，阈值待合规）；案件详情新增 Escalations 面板（列/开/关，关闭需≥10字依据）——这是升级 API 首次有控制台入口。
+
+### 本轮采用的默认规则（均待合规确认）
+
+- `medicalTreatmentReceived=yes` 时治疗类型必填且 ≠ `none`；`unknown` 允许（"治疗过但说不清哪种"是诚实答案）。
+- 前五类升级欠审查且关案前必须已决；`suspected_fraud`/`data_privacy` 只受"开放升级阻止结案"约束。
+- 无事故案件的审查在 `AdminCaseDetail.reportability` 顶层暴露（`incident.reportability` 语义不变）。
+
+### 验证与未验证
+
+- 本轮 API 全量单测 **575 通过 / 139 跳过**（跳过均为需隔离库的 DB 集成）；`tsc`、`openapi:check`、`db:check`、`lint` 通过。Front/Admin `tsc`+`eslint`+`next build` 通过。
+- **未做**：迁移在隔离库演练（含 0026 回填与 `VALIDATE` 后续）、A16 端到端浏览器走查、`disposal-migrations` 新规则之外的历史迁移复核、生产发布。`drizzle-kit generate` 生成的 0026 初稿会直接 `ADD COLUMN NOT NULL`（有存量数据必失败），已手写回填顺序；两个快照与手写 SQL 的最终态一致，`db:check` 通过。
+- 迁移卫生测试（D22）规则精确化：UPDATE 仅允许回填同迁移新增列；ALTER COLUMN 仅允许 DROP NOT NULL 或对同迁移新增列 SET NOT NULL。旧行为（一律禁止）被 0026 的合法回填触碰后按语义收窄，守卫仍拦截改写既有事实的迁移。
+
+### 仍然开着的原方案验收项
+
+A03/A05 的服务端强制（等开关）、A16 浏览器级证据、A17"历史未采集"显式标签、A18 专用报告导出、A23/A28 安全续填与首次获知时间、A31–A35 监管事项与历史归集、结案门禁拒绝落审计（本轮仍未做：门禁在事务内 throw 早于 audit.record）。

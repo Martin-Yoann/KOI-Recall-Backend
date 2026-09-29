@@ -34,13 +34,13 @@ describe('sanitizeAuditMetadata', () => {
     expect(sentence.length).toBeGreaterThan(AUDIT_METADATA_VALUE_MAX_CHARS);
 
     const sanitized = sanitizeAuditMetadata({
-      assertedReviewerId: sentence,
+      externalReference: sentence,
       nextStatus: 'closed',
     });
 
     // The marker, not the text: an auditor sees that something was withheld rather
     // than reading a row that looks complete.
-    expect(sanitized.assertedReviewerId).toBe(AUDIT_METADATA_WITHHELD);
+    expect(sanitized.externalReference).toBe(AUDIT_METADATA_WITHHELD);
     expect(JSON.stringify(sanitized)).not.toContain('counsel');
     expect(sanitized.nextStatus).toBe('closed');
   });
@@ -78,14 +78,14 @@ describe('the audit write path uses the sanitizer', () => {
       outcome: 'success',
       metadata: {
         nextStatus: 'closed',
-        assertedReviewerId: `Something nobody should be reading from a shared table. ${'More. '.repeat(40)}`,
+        externalReference: `Something nobody should be reading from a shared table. ${'More. '.repeat(40)}`,
       },
     });
 
     expect(rows).toHaveLength(1);
     const stored = rows[0]!.metadata as Record<string, unknown>;
     expect(stored.nextStatus).toBe('closed');
-    expect(stored.assertedReviewerId).toBe(AUDIT_METADATA_WITHHELD);
+    expect(stored.externalReference).toBe(AUDIT_METADATA_WITHHELD);
   });
 });
 

@@ -122,6 +122,7 @@ interface EncryptedSubmission {
   snapshot: Ciphertext;
   incidentNarrative?: Ciphertext;
   injuryDescription?: Ciphertext;
+  failureModeOtherDescription?: Ciphertext;
 }
 
 /**
@@ -561,6 +562,8 @@ export class DrizzleCaseService implements CaseService {
             // Written as a pair: the CHECK on incidents requires both or neither.
             injuryDescriptionKeyVersion: encrypted.injuryDescription?.keyVersion,
             injuryDescriptionEncrypted: encrypted.injuryDescription?.value,
+            failureModeOtherDescriptionKeyVersion: encrypted.failureModeOtherDescription?.keyVersion,
+            failureModeOtherDescriptionEncrypted: encrypted.failureModeOtherDescription?.value,
             medicalTreatmentReceived: details.medicalTreatmentReceived,
             unitType: details.unitType,
             companyObtainedAt: submittedAt,
@@ -568,7 +571,7 @@ export class DrizzleCaseService implements CaseService {
           .returning({ id: incidents.id });
         await tx
           .insert(reportabilityReviews)
-          .values({ incidentId: incident!.id, status: 'pending' });
+          .values({ caseId, incidentId: incident!.id, status: 'pending' });
       }
       await tx
         .update(documentUploads)
@@ -856,6 +859,13 @@ export class DrizzleCaseService implements CaseService {
         : {}),
       ...(body.incidentDetails?.injuryDescription
         ? { injuryDescription: await this.crypto.encrypt(body.incidentDetails.injuryDescription) }
+        : {}),
+      ...(body.incidentDetails?.failureModeOtherDescription
+        ? {
+            failureModeOtherDescription: await this.crypto.encrypt(
+              body.incidentDetails.failureModeOtherDescription,
+            ),
+          }
         : {}),
     };
   }

@@ -18,6 +18,9 @@ export default tseslint.config(
       // throwaway script from failing the lint gate the way it did once.
       '_*.ts',
       '_*.py',
+      // Session tooling artifacts (rendered docs and their generators), not part of
+      // the type-checked project.
+      '.zcode/**',
       // Vercel serverless entry shim; not part of the type-checked tsconfig project.
       'api/**',
     ],

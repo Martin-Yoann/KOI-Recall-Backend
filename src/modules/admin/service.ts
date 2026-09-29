@@ -82,9 +82,37 @@ export interface CaseListPage {
  * Why a case is escalated. Separate from `incidents.event_types` on purpose — an
  * incident can report an ingestion with nothing battery-related about it, and a case can
  * go to legal with no incident at all.
+ *
+ * All seven PRD 3.4.1 classifications are represented; `other` stays for what
+ * does not fit a named category.
  */
-export type CaseEscalationCategory =
-  'injury' | 'battery_ingestion' | 'legal' | 'regulator' | 'media' | 'other';
+export const CASE_ESCALATION_CATEGORIES = [
+  'injury',
+  'battery_ingestion',
+  'legal',
+  'regulator',
+  'media',
+  'suspected_fraud',
+  'data_privacy',
+  'other',
+] as const;
+
+export type CaseEscalationCategory = (typeof CASE_ESCALATION_CATEGORIES)[number];
+
+/**
+ * The escalation categories that owe a completed reportability review before the
+ * case may close, even when the case has no incident record (A16). These are the
+ * plan's five report-gated classifications; suspected fraud and data privacy are
+ * escalation classifications without a reportability sign-off — for them the
+ * open-escalation gate alone applies.
+ */
+export const REVIEW_REQUIRED_ESCALATION_CATEGORIES = [
+  'injury',
+  'battery_ingestion',
+  'legal',
+  'regulator',
+  'media',
+] as const;
 
 /** One escalation of a case: why it left the standard path, and what closed it. */
 export interface CaseEscalationRow {
@@ -241,6 +269,11 @@ export interface AdminCaseIncident {
    */
   injuryDescription?: string | undefined;
   /**
+   * Raw-tier "what other means" detail. Same tier rule and audit coverage as
+   * `injuryDescription`.
+   */
+  failureModeOtherDescription?: string | undefined;
+  /**
    * True when raw-tier narrative or injury detail could not be decrypted, so
    * the raw view is incomplete rather than the incident simply having none.
    */
@@ -356,6 +389,17 @@ export interface AdminCaseDetail {
   products?: AdminCaseProduct[];
   documents?: AdminCaseDocument[];
   incident?: AdminCaseIncident | null;
+  /**
+   * The case-level reportability review, present only when the case has NO
+   * incident record but owes a review anyway (a review-required escalation, A16).
+   * Incident cases carry theirs inside `incident.reportability` instead.
+   */
+  reportability?: {
+    id: string;
+    status: string;
+    cpscReference?: string | null;
+    filedAt?: string | null;
+  } | null;
   consumer: CaseDetailConsumer;
   resolution?: CaseResolution | null;
   disposalTaskId?: string | null;

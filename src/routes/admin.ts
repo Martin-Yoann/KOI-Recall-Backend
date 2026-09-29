@@ -16,6 +16,7 @@ import type { AppEnv } from '../middleware/request-context.js';
 import { requestIpHash, requestUserAgentHash } from '../middleware/staff-auth.js';
 import { createStaffAuthMiddleware } from '../middleware/staff-auth.js';
 import { NotImplementedServiceError, problemType } from '../shared/errors.js';
+import { CASE_ESCALATION_CATEGORIES } from '../modules/admin/service.js';
 import {
   requireAdminTransactions,
   requireAuditService,
@@ -1046,14 +1047,11 @@ export function registerAdminRoutes(
   // follow-up. Deliberately no `allowLegacy`: the legacy key predates escalations and
   // should not acquire a new surface through this.
 
-  const ESCALATION_CATEGORIES = [
-    'injury',
-    'battery_ingestion',
-    'legal',
-    'regulator',
-    'media',
-    'other',
-  ] as const;
+  // The seven PRD 3.4.1 classifications plus `other`, from the single source in
+  // the service contract — the route validates against exactly what the enum
+  // and the admin UI label.
+
+  const ESCALATION_CATEGORIES = CASE_ESCALATION_CATEGORIES;
 
   app.get('/admin/cases/:caseRef/escalations', async (context) => {
     const guard = await requirePermission(context, registry, 'review.close');
@@ -1144,19 +1142,23 @@ export function registerAdminRoutes(
   });
 
   app.post('/admin/reportability-reviews/:id/close', async (context) => {
-    const guard = await requirePermission(context, registry, 'review.close', { allowLegacy: true });
+    // Deliberately no `allowLegacy`: a reportability decision names the person
+    // who made it, and the legacy key cannot supply a real reviewer — its body
+    // `reviewerId` was an unverified assertion. The M2 dual-mode window for
+    // this route is closed; a safety sign-off now requires a staff session held
+    // by COMPLIANCE or ADMIN (the `review.close` permission).
+    const guard = await requirePermission(context, registry, 'review.close');
     if (guard instanceof Response) return guard;
     const reviewId = context.req.param('id');
     const body = await bodyRecord(context);
     const cpscReference = asString(body.cpscReference);
     const outcome = asString(body.outcome);
-    const legacyReviewerId = asString(body.reviewerId);
     const rationaleValue = asString(body.rationale) ?? '';
     // The filing date and its receipt material. Both are the operator's facts, not
     // the server's, and neither is filled in for them — see CloseReportabilityReviewInput.
     const filedAt = asString(body.filedAt);
     const filingEvidence = asString(body.filingEvidence);
-    const reviewerId = context.get('legacyAdminKey') ? (legacyReviewerId ?? '') : guard.userId;
+    const reviewerId = guard.userId;
     // Anything that is not one of the two decisions is refused. This used to fall
     // through to 'filed', so a typo — or a missing field — closed a safety review as
     // filed with no CPSC reference and no intent to file.
@@ -1165,39 +1167,14 @@ export function registerAdminRoutes(
     }
     const input = {
       outcome,
-      // Staff sessions use the resolved principal; legacy M2 preserves the old body contract.
+      // The resolved session principal: the reviewer is who the session says,
+      // never a value the caller asserts about themselves.
       reviewerId,
       rationale: rationaleValue,
       ...(cpscReference ? { cpscReference } : {}),
       ...(filedAt ? { filedAt } : {}),
       ...(filingEvidence ? { filingEvidence } : {}),
     } as const;
-    if (context.get('legacyAdminKey')) {
-      // This branch used to close a review with no audit row and no transaction,
-      // so a safety decision could be recorded nowhere — which is how most
-      // existing reviews reached a terminal state with no trail. The legacy
-      // contract is preserved (the key still works, and `reviewerId` still comes
-      // from the body), but the decision is now audited with the sentinel
-      // principal and marked as coming through the legacy path.
-      await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
-        await admin.closeReportabilityReview(reviewId, input);
-        await audit.record({
-          actorUserId: guard.userId,
-          actorRole: guard.role,
-          action: 'review.close',
-          resourceType: 'review',
-          resourceId: reviewId,
-          outcome: 'success',
-          metadata: {
-            outcome,
-            via: 'legacy_admin_key',
-            assertedReviewerId: reviewerId,
-            ...(filedAt ? { filedAt } : {}),
-          },
-        });
-      });
-      return context.body(null, 204);
-    }
     await requireAdminTransactions(registry).run(async ({ admin, audit }) => {
       await admin.closeReportabilityReview(reviewId, input);
       await audit.record({

@@ -1194,6 +1194,125 @@ describe('B-end RBAC (ADR-0004)', () => {
     expect(audit.events.filter((event) => event.action === 'case.escalation.open')).toHaveLength(0);
   });
 
+  // The review decision route closed its legacy-key window: the reviewer of
+  // record is the session principal, never a body assertion. These two pin the
+  // role split on the route itself.
+  it('lets a compliance session close a review, recording the session as reviewer', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    const created = await staff.createStaffUser({
+      email: 'compliance@x.com',
+      displayName: 'Compliance',
+      role: 'COMPLIANCE',
+      password: 'password1234',
+    });
+    const token = (await staff.login('compliance@x.com', 'password1234'))!.token;
+    let reviewerId: string | undefined;
+    const admin = {
+      ...makeAdminFake(),
+      closeReportabilityReview: (_reviewId: string, input: { reviewerId: string }) => {
+        reviewerId = input.reviewerId;
+        return Promise.resolve();
+      },
+    };
+    const app = appWith({ admin, staff, audit });
+
+    const response = await app.request(
+      '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        // A body reviewerId is caller-supplied text; the route must not read it.
+        body: JSON.stringify({
+          outcome: 'documented_non_reportable',
+          reviewerId: '00000000-0000-4000-8000-0000000000ff',
+          rationale: 'Reviewed against the reporting criteria; not reportable.',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(204);
+    expect(reviewerId).toBe(created.id);
+    const closed = audit.events.find((event) => event.action === 'review.close');
+    expect(closed?.actorUserId).toBe(created.id);
+  });
+
+  it('refuses an outcome that is not one of the two decisions', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    await staff.createStaffUser({
+      email: 'compliance@x.com',
+      displayName: 'Compliance',
+      role: 'COMPLIANCE',
+      password: 'password1234',
+    });
+    const token = (await staff.login('compliance@x.com', 'password1234'))!.token;
+    const admin = makeAdminFake();
+    const app = appWith({ admin, staff, audit });
+
+    // 'Reportable' is not a decision this endpoint records, and it used to fall
+    // through to 'filed' — a safety review recorded as filed with no intent to
+    // file. The outcome check runs after the guard, so this also proves a valid
+    // session is not enough: the body has to say one of the two decisions.
+    const response = await app.request(
+      '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          outcome: 'Reportable',
+          rationale: 'Verified the incident report and filed with CPSC.',
+          cpscReference: 'CPSC-2026-001',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(422);
+    expect(
+      audit.events.filter(
+        (event) => event.action === 'review.close' && event.outcome === 'success',
+      ),
+    ).toHaveLength(0);
+  });
+
+  it('refuses a manager session on the review decision route', async () => {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    await staff.createStaffUser({
+      email: 'manager@x.com',
+      displayName: 'Manager',
+      role: 'MANAGER',
+      password: 'password1234',
+    });
+    const token = (await staff.login('manager@x.com', 'password1234'))!.token;
+    const admin = makeAdminFake();
+    const app = appWith({ admin, staff, audit });
+
+    const response = await app.request(
+      '/admin/reportability-reviews/00000000-0000-4000-8000-000000000001/close',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          outcome: 'documented_non_reportable',
+          rationale: 'A manager must not be able to sign off a safety decision.',
+        }),
+      },
+    );
+
+    expect(response.status).toBe(403);
+    // The refusal itself is audited (action = the permission, outcome denied);
+    // no *successful* review decision may exist.
+    const decisions = audit.events.filter(
+      (event) => event.action === 'review.close' && event.outcome === 'success',
+    );
+    expect(decisions).toHaveLength(0);
+    const refused = audit.events.find(
+      (event) => event.action === 'review.close' && event.outcome === 'denied',
+    );
+    expect(refused?.reasonCode).toBe('insufficient_role');
+  });
+
   it('refuses every disposal route for a role that holds none of its permissions', async () => {
     const staff = makeStaffFake();
     const audit = makeAuditFake();

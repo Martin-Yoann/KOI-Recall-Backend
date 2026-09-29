@@ -31,12 +31,11 @@
  *   that can read the audit trail can also read the case's document list, which shows
  *   the same names. Removing the key here would shorten a security trail without
  *   closing anything; closing the channel means changing what the document list shows.
- * - `assertedReviewerId` comes from the legacy admin key's request body, so it is
- *   caller-supplied text. The length cap above bounds it, and the legacy path is the
- *   only writer.
+ * - `via` remains because it distinguishes *how* an action reached the API (e.g. a
+ *   since-removed legacy path) on rows history still holds; it is a short enum-like
+ *   word, not caller prose.
  */
 export const AUDIT_METADATA_KEYS = [
-  'assertedReviewerId',
   'assignee',
   'authorizationId',
   'authorizesConsumerDisposal',

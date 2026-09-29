@@ -237,4 +237,73 @@ describe('structured incident fields (P0-4)', () => {
 
     expect(result.success).toBe(false);
   });
+
+  // The description belongs to `other` and only to `other`. Naming a specific
+  // mode and also describing an unlisted one is a contradiction, rejected in
+  // every stage; the mirror half (`other` must carry a description) is
+  // requiredness and lives behind INCIDENT_STRICT_VALIDATION.
+  it('rejects an other-description naming a specific failure mode', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['other'],
+        narrative: 'A fictional hazard was observed but no injury occurred.',
+        occurredDateUnknown: true,
+        failureMode: 'battery_exposure',
+        failureModeOtherDescription: 'The handle came apart in an unlisted way.',
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues.map((issue: ZodIssue) => issue.path.join('.'))).toContain(
+        'incidentDetails.failureModeOtherDescription',
+      );
+    }
+  });
+
+  it('rejects an other-description with no failure mode named at all', () => {
+    const result = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['other'],
+        narrative: 'A fictional hazard was observed but no injury occurred.',
+        occurredDateUnknown: true,
+        failureModeOtherDescription: 'Something happened that is not on the list.',
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts other with its description, and other without one (the strict switch owns that half)', () => {
+    const withDescription = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['other'],
+        narrative: 'A fictional hazard was observed but no injury occurred.',
+        occurredDateUnknown: true,
+        failureMode: 'other',
+        failureModeOtherDescription: 'The candy stick split along a seam.',
+      },
+    });
+    expect(withDescription.success).toBe(true);
+
+    // Stage 1: `other` without a description is incomplete, not contradictory —
+    // the contract accepts it and INCIDENT_STRICT_VALIDATION decides requiredness.
+    const withoutDescription = claimSubmissionRequestSchema.safeParse({
+      ...baseClaim,
+      incidentAnswer: 'yes',
+      incidentDetails: {
+        eventTypes: ['other'],
+        narrative: 'A fictional hazard was observed but no injury occurred.',
+        occurredDateUnknown: true,
+        failureMode: 'other',
+      },
+    });
+    expect(withoutDescription.success).toBe(true);
+  });
 });

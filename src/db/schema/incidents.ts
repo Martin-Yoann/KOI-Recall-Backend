@@ -56,6 +56,12 @@ export const incidents = pgTable(
     // same envelope encryption as the narrative rather than plain text.
     injuryDescriptionKeyVersion: varchar('injury_description_key_version', { length: 40 }),
     injuryDescriptionEncrypted: text('injury_description_encrypted'),
+    // What the `other` failure mode means, in the consumer's words — the same
+    // testimonial standard as the injury description, so the same encryption.
+    failureModeOtherDescriptionKeyVersion: varchar('failure_mode_other_description_key_version', {
+      length: 40,
+    }),
+    failureModeOtherDescriptionEncrypted: text('failure_mode_other_description_encrypted'),
     medicalTreatmentReceived: varchar('medical_treatment_received', { length: 16 }),
     unitType: varchar('unit_type', { length: 16 }),
     companyObtainedAt: timestamp('company_obtained_at', {
@@ -79,6 +85,10 @@ export const incidents = pgTable(
       'incidents_injury_description_pair_chk',
       sql`(${table.injuryDescriptionKeyVersion} is null) = (${table.injuryDescriptionEncrypted} is null)`,
     ),
+    check(
+      'incidents_failure_mode_other_pair_chk',
+      sql`(${table.failureModeOtherDescriptionKeyVersion} is null) = (${table.failureModeOtherDescriptionEncrypted} is null)`,
+    ),
   ],
 );
 
@@ -86,9 +96,17 @@ export const reportabilityReviews = pgTable(
   'reportability_reviews',
   {
     id: uuid('id').primaryKey().defaultRandom(),
-    incidentId: uuid('incident_id')
+    /**
+     * The review belongs to the CASE (A16): a legal, regulator or media
+     * escalation owes a reportability sign-off even when the case has no
+     * incident record, so the unique association is on `case_id`. Existing
+     * incident reviews were backfilled with it; `incident_id` stays for the
+     * incident-scoped reads and is null on case-level reviews.
+     */
+    caseId: uuid('case_id')
       .notNull()
-      .references(() => incidents.id, { onDelete: 'restrict' }),
+      .references(() => recallCases.id, { onDelete: 'restrict' }),
+    incidentId: uuid('incident_id').references(() => incidents.id, { onDelete: 'restrict' }),
     status: reportabilityReviewStatusEnum('status').notNull().default('pending'),
     reviewerId: uuid('reviewer_id'),
     rationaleEncrypted: text('rationale_encrypted'),
@@ -112,6 +130,7 @@ export const reportabilityReviews = pgTable(
     ...timestamps,
   },
   (table) => [
+    uniqueIndex('reportability_reviews_case_uidx').on(table.caseId),
     uniqueIndex('reportability_reviews_incident_uidx').on(table.incidentId),
     index('reportability_reviews_pending_idx').on(table.status, table.createdAt),
     check(
@@ -133,6 +152,11 @@ export const reportabilityReviews = pgTable(
  * legal or the media with no incident at all — so reading one vocabulary as the other
  * would turn "a child swallowed a piece of candy" into "a battery was ingested". These
  * are the categories a case is escalated *under*, not the events a claim reported.
+ *
+ * The seven PRD 3.4.1 classifications are all represented. The first five owe a
+ * completed reportability review before closure even without an incident (A16);
+ * suspected fraud and data privacy are escalation classifications without a
+ * reportability sign-off.
  */
 export const caseEscalationCategoryEnum = pgEnum('case_escalation_category', [
   'injury',
@@ -140,6 +164,8 @@ export const caseEscalationCategoryEnum = pgEnum('case_escalation_category', [
   'legal',
   'regulator',
   'media',
+  'suspected_fraud',
+  'data_privacy',
   'other',
 ]);
 

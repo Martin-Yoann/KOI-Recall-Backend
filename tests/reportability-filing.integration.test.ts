@@ -84,7 +84,7 @@ describe.skipIf(!enabled)(
 
       const [review] = await handle!.db
         .insert(reportabilityReviews)
-        .values({ incidentId: incident!.id, status: 'pending' })
+        .values({ caseId: caseRow!.id, incidentId: incident!.id, status: 'pending' })
         .returning({ id: reportabilityReviews.id });
       reviewId = review!.id;
     });
@@ -97,7 +97,9 @@ describe.skipIf(!enabled)(
         .where(eq(reportabilityReviews.id, reviewId));
       if (review) {
         await handle.db.delete(reportabilityReviews).where(eq(reportabilityReviews.id, reviewId));
-        await handle.db.delete(incidents).where(eq(incidents.id, review.incidentId));
+        if (review.incidentId) {
+          await handle.db.delete(incidents).where(eq(incidents.id, review.incidentId));
+        }
       }
       await handle.close();
     });

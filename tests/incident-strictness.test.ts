@@ -88,6 +88,52 @@ describe('incident strict validation switch', () => {
     expect(() => assertIncidentDetailsCompleteness(bodyWith('yes', noInjury), true)).not.toThrow();
   });
 
+  // `other` names an unlisted failure mode, so the strict stage asks what it
+  // was: without the description, "other" is a category with nothing in it.
+  it('requires a description when the failure mode is other', () => {
+    const details: IncidentDetails = {
+      ...completeDetails,
+      eventTypes: ['other'],
+      failureMode: 'other',
+      injuryDescription: undefined,
+    };
+    expect(() => assertIncidentDetailsCompleteness(bodyWith('yes', details), true)).toThrow(
+      /failureModeOtherDescription/,
+    );
+
+    const described: IncidentDetails = {
+      ...details,
+      failureModeOtherDescription: 'The candy stick split along a seam.',
+    };
+    expect(() => assertIncidentDetailsCompleteness(bodyWith('yes', described), true)).not.toThrow();
+  });
+
+  // "Treatment was received" owes a type that is not `none`; `unknown` stays
+  // allowed, because treated-but-unsure-what-kind is an honest answer.
+  it('rejects a confirmed treatment that names no treatment type', () => {
+    const namedNone: IncidentDetails = { ...completeDetails, medicalTreatment: 'none' };
+    expect(() => assertIncidentDetailsCompleteness(bodyWith('yes', namedNone), true)).toThrow(
+      /medicalTreatment/,
+    );
+
+    // eventTypes ['other'] means the contract layer does not require the type —
+    // the strict rule catches it independently of the injury-only contract rule.
+    const missingType: IncidentDetails = {
+      ...completeDetails,
+      eventTypes: ['other'],
+      injuryDescription: undefined,
+      medicalTreatment: undefined,
+    };
+    expect(() => assertIncidentDetailsCompleteness(bodyWith('yes', missingType), true)).toThrow(
+      /medicalTreatment/,
+    );
+
+    const unknownKind: IncidentDetails = { ...completeDetails, medicalTreatment: 'unknown' };
+    expect(() =>
+      assertIncidentDetailsCompleteness(bodyWith('yes', unknownKind), true),
+    ).not.toThrow();
+  });
+
   // An `unsure` answer is the consumer saying they cannot confirm the details.
   // Enforcing here would suppress exactly the reports compliance needs to see,
   // which is the opposite of what P0 is for.
