@@ -5,6 +5,8 @@
 > 同日第二轮补齐了此前核查出的缺口：消费者可删除未进入审核的证据照片（Front 行内 Remove + `DELETE /v1/disposal-tasks/{taskId}/documents/{documentId}`）；管理端任务详情返回审核人的照片识别清单（`instructionChecklist`，不受消费者展示门禁约束）与在 force 的 hold 原因（`activeHold`、队列 `holdReason`）；单任务撤销许可（`POST …/authorization/revoke`，`disposal.review` 权限，幂等重试不重复审计，消费者收到"许可不再适用"通知）；`disposal.issue_authorization` 的展示条件从"无许可记录"改为"无在 force 许可"，与硬门禁对齐——被暂停/撤销的许可不再意外封死重新授权路径；`disposal_declarations` 增加每任务唯一索引（迁移 0027）。以上均有单元/契约层测试；对应数据库集成用例已写入 `tests/disposal-service.integration.test.ts`，待隔离库执行。迁移 0027 未在目标库做先期只读审计（本机无生产凭据）——若目标库存在同任务多条声明，该迁移会**创建失败而非删数据**，届时须人工核对后再处理。
 > D09 原要求是“已接受照片被替换时重新审核并撤销旧许可”；当前仍禁止替换，属于**需求未决**，下方将其列入 Proven 的旧结论不成立。D18 当前实际时序是“先提交案件，再从确认邮件续填处置”，并非“最终提交前审核照片”；需产品、合规确认后修订原要求。
 > 证据和待决事项以 [2026-09-28 继续整改计划](superpowers/plans/2026-09-28-disposal-instructions-remediation-continuation.zh-CN.md)及本段为准。本轮整改尚未推送或部署；已部署服务的验收状态没有因此变化。
+>
+> **2026-09-29 晚间：浏览器验收执行 + 三个生产缺陷修复（`886dfad`、`f1cc0e0`，CI 全绿）。** 线上（demo 活动）浏览器验收发现：**BUG-0（P0）**生产库缺迁移 0024–0026 而部署代码已读写新列——事故申报与全部 admin 案件读 500，修复=按 [生产迁移 runbook](runbook-apply-prod-migrations.md) 应用迁移（待执行，需凭据；`pnpm db:drift-check` 只读检查已交付）；**BUG-3（P1）**处置证据上传被活动证据规则拒绝（存量活动无 `disposal_evidence` 规则行）——`authorizeUpload` 对该类别回退结构化默认（图片/10MiB/显式行优先），集成测试以“删除夹具行”的真实生产状态验证；**BUG-1（P2）**指引库列表 Approvals 恒 0——根因是 Drizzle 列插值在相关子查询中渲染裸列名、`"id"` 被子查询自己的表劫持为恒假自比较，两处计数子查询改为显式表限定。本地首次以真库执行完整 15 套件集成门禁（134 用例）全绿。浏览器验收用例见 [disposal-gap-closure-browser-acceptance.md](disposal-gap-closure-browser-acceptance.md)；照片流（TC-02…TC-25 等 12 个用例）待 BUG-0 迁移应用后在生产复跑。
 
 Spec §7.1. One row per acceptance criterion, with the evidence that exists **today**.
 A criterion is only marked proven when there is a concrete artefact to point at: a
