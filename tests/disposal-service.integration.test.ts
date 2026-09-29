@@ -979,6 +979,64 @@ describe.skipIf(!enabled)(
       await cleanup(opened, { taskId });
     });
 
+    // The content library listing is what an operator reads before publishing:
+    // "Authorizes disposal: No" with approvals recorded is the misleading state
+    // production showed, so the counts are pinned here against the real
+    // queries — including the validity-window clauses.
+    it('counts recorded approvals on the instruction library listing', async () => {
+      const built = await fixture({ authorizes: true, approved: true });
+
+      const rows = await service.listInstructionVersions(built.campaignVersionId);
+      const row = rows.find((candidate) => candidate.id === built.versionId);
+      expect(row).toBeDefined();
+      // The fixture inserts exactly one authorizing approval directly.
+      expect(row!.approvalCount).toBe(1);
+      expect(row!.authorizesConsumerDisposal).toBe(true);
+
+      // A service-recorded approval joins the listing at once, and its
+      // authorizing algebra is what flips the flag — the fixture's direct row
+      // plus this one makes two.
+      const created = await service.createInstructionVersion({
+        campaignVersionId: built.campaignVersionId,
+        locale: 'en-US',
+        title: 'Listing count instructions',
+        steps: [{ order: 1, text: 'Follow the recall instructions.' }],
+        referenceImages: [],
+        safetyWarnings: ['Do not open or damage the battery.'],
+        recognitionRequirements: ['The product label must be readable.'],
+        declarationTextVersion: 'integration-v1',
+      });
+      await handle!.db.insert(disposalInstructionApprovals).values({
+        instructionVersionId: created.instructionVersionId,
+        materialType: 'nov',
+        scope: 'consumer_held_product',
+        measure: 'consumer_disposal',
+        authorizesConsumerDisposal: false,
+        recordedByStaffUserId: staffUserId,
+      });
+      await service.recordInstructionApproval({
+        instructionVersionId: created.instructionVersionId,
+        materialType: 'recall_expectation_letter',
+        scope: 'consumer_held_product',
+        measure: 'consumer_disposal',
+        actorStaffUserId: staffUserId,
+      });
+
+      const afterRows = await service.listInstructionVersions(built.campaignVersionId);
+      const newRow = afterRows.find((candidate) => candidate.id === created.instructionVersionId);
+      expect(newRow).toBeDefined();
+      expect(newRow!.approvalCount).toBe(2);
+      expect(newRow!.authorizesConsumerDisposal).toBe(true);
+
+      await handle!.db
+        .delete(disposalInstructionApprovals)
+        .where(eq(disposalInstructionApprovals.instructionVersionId, created.instructionVersionId));
+      await handle!.db
+        .delete(disposalInstructionVersions)
+        .where(eq(disposalInstructionVersions.id, created.instructionVersionId));
+      await cleanup(built);
+    });
+
     // ---- the acceptance rows that had no execution behind them --------------
 
     // D09: an accepted batch cannot be replaced at all. The policy permits a new

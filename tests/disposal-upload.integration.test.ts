@@ -258,6 +258,57 @@ describe.skipIf(!enabled)('disposal evidence upload path', { timeout: 120_000 },
     expect(row?.category).toBe('disposal_evidence');
   });
 
+  it('falls back to structural defaults when the campaign declares no disposal rule', async () => {
+    // Remove the fixture rule this suite's beforeAll adds: the resulting state —
+    // no campaign_evidence_requirements row for disposal_evidence — is the state
+    // every campaign authored before the disposal feature lives in. The upload
+    // must still succeed, bounded by the service's own defaults.
+    await handle!.db
+      .delete(campaignEvidenceRequirements)
+      .where(
+        and(
+          eq(campaignEvidenceRequirements.campaignVersionId, campaignVersionId),
+          eq(campaignEvidenceRequirements.category, 'disposal_evidence'),
+        ),
+      );
+
+    const opened = await openTask();
+    expect(opened).not.toBeNull();
+    await confirmEligibility(opened!.taskId);
+    const { draftId } = await disposal.assertCanUploadEvidence(opened!.taskId, opened!.token);
+
+    const authorization = await documents.authorizeUpload({
+      draftId,
+      category: 'disposal_evidence',
+      fileName: 'fallback.jpg',
+      mimeType: 'image/jpeg',
+      sizeBytes: 2048,
+    });
+    expect(authorization.documentId).toBeTruthy();
+
+    // The defaults still bind: over the fallback size limit is refused...
+    await expect(
+      documents.authorizeUpload({
+        draftId,
+        category: 'disposal_evidence',
+        fileName: 'too-big.jpg',
+        mimeType: 'image/jpeg',
+        sizeBytes: 10_485_760 + 1,
+      }),
+    ).rejects.toThrow(/exceeds/i);
+
+    // ...and so is a media type outside the fallback's image list.
+    await expect(
+      documents.authorizeUpload({
+        draftId,
+        category: 'disposal_evidence',
+        fileName: 'document.pdf',
+        mimeType: 'application/pdf',
+        sizeBytes: 1024,
+      }),
+    ).rejects.toThrow(/not allowed/i);
+  });
+
   it('refuses an upload before eligibility is confirmed', async () => {
     const opened = await openTask();
     await expect(disposal.assertCanUploadEvidence(opened!.taskId, opened!.token)).rejects.toThrow(

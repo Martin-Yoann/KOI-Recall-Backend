@@ -46,6 +46,24 @@ const DELETABLE_UPLOAD_STATUSES = ['authorized', 'uploaded', 'verified'] as cons
 const DOCUMENT_AUTHORIZATION_TTL_MS = 48 * 60 * 60 * 1000;
 
 /**
+ * Disposal evidence does not belong to the claim-intake rule set: its gate is
+ * the disposal policy, and campaigns authored before the disposal feature (all
+ * of them today) carry no `campaign_evidence_requirements` row for the
+ * category. When the campaign defines no rule, these structural defaults
+ * apply — an explicit campaign row, when one exists, still wins. Mirrors the
+ * seeding convention (10 MiB, image types).
+ */
+const DISPOSAL_EVIDENCE_FALLBACK_RULES: {
+  allowedMimeTypes: string[];
+  maximumFileSizeBytes: number;
+  maximumFiles: number;
+} = {
+  allowedMimeTypes: ['image/jpeg', 'image/png', 'image/heic', 'image/heif'],
+  maximumFileSizeBytes: 10_485_760,
+  maximumFiles: 10,
+};
+
+/**
  * Persists draft-owned document uploads in Postgres via Drizzle and obtains
  * short-lived Private Blob client-upload authorizations. The injected
  * {@link Database} is the dual-adapter union; the {@link PrivateBlobPort}
@@ -72,7 +90,7 @@ export class DrizzleDocumentService implements DocumentService {
       .limit(1);
     if (!draft) throw new ResourceNotFoundError('Draft was not found or is no longer accessible.');
 
-    const [rule] = await db
+    const [campaignRule] = await db
       .select({
         allowedMimeTypes: campaignEvidenceRequirements.allowedMimeTypes,
         maximumFileSizeBytes: campaignEvidenceRequirements.maximumFileSizeBytes,
@@ -86,6 +104,9 @@ export class DrizzleDocumentService implements DocumentService {
         ),
       )
       .limit(1);
+    const rule =
+      campaignRule ??
+      (input.category === 'disposal_evidence' ? DISPOSAL_EVIDENCE_FALLBACK_RULES : null);
     if (!rule) {
       throw new EvidenceRulesViolationError(
         `Evidence category '${input.category}' is not accepted by this campaign.`,
