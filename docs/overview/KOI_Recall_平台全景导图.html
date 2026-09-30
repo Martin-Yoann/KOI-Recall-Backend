@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>KOI Recall 召回平台全景导图</title>
+<style>
+  /* ══════════ 页面基础:A3 横向 1587×1123px @96dpi ══════════ */
+  @page { size: 1587px 1123px; margin: 0; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 1587px;
+    background: #F7F4EE; /* 与页面底色一致,消除亚像素白边 */
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans SC", sans-serif;
+    color: #22405A;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }
+  .mono { font-family: Consolas, "JetBrains Mono", "Courier New", monospace; }
+
+  .page {
+    width: 1587px; height: 1123px;
+    position: relative; overflow: hidden;
+    background: #F7F4EE;
+    page-break-after: always;
+    break-after: page;
+  }
+  .page:last-child { page-break-after: auto; break-after: auto; }
+
+  /* 浏览器预览自适应缩放(不影响打印) */
+  @media screen {
+    html { height: auto; display: flex; justify-content: center; background: #F7F4EE; }
+    body { transform-origin: top center; scale: min(1, calc(100vw / 1587)); margin: 0 auto; box-shadow: 0 0 60px rgba(30,58,79,.18); }
+  }
+
+  /* ══════════ 公共页眉 / 页脚 ══════════ */
+  .hd {
+    position: absolute; top: 0; left: 0; right: 0; height: 88px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 60px; z-index: 5;
+  }
+  .hd::after { content: ''; position: absolute; left: 60px; right: 60px; bottom: 0; height: 1px; background: #DAD2C2; }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .mark {
+    width: 40px; height: 40px; border-radius: 11px; background: #1E3A4F;
+    color: #F9D56E; font-weight: 700; font-size: 15px; letter-spacing: .5px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .brand .bt { font-size: 13px; font-weight: 700; color: #1E3A4F; letter-spacing: 2px; }
+  .brand .bs { font-size: 10.5px; color: #6B7E8A; letter-spacing: 1px; margin-top: 2px; }
+  .hd .pgno { text-align: right; }
+  .hd .pgno .n { font-size: 22px; font-weight: 700; color: #1E3A4F; }
+  .hd .pgno .n span { color: #A8B4BC; font-weight: 400; }
+  .hd .pgno .t { font-size: 10.5px; color: #6B7E8A; letter-spacing: 2.5px; margin-top: 1px; }
+
+  .ft {
+    position: absolute; left: 60px; right: 60px; bottom: 20px;
+    display: flex; justify-content: space-between; align-items: center;
+    font-size: 10.5px; color: #8A97A0; z-index: 5;
+  }
+  .ghost {
+    position: absolute; right: 34px; bottom: 6px; z-index: 0;
+    font-size: 300px; font-weight: 800; color: rgba(30,58,79,.045); line-height: 1;
+    letter-spacing: -10px; height: 300px; overflow: hidden;
+  }
+
+  /* 页标题块 */
+  .tt { position: absolute; top: 104px; left: 60px; right: 60px; z-index: 5; }
+  .tt .kick { font-size: 12px; font-weight: 700; letter-spacing: 3.5px; color: #C96F3F; }
+  .tt h1 { margin: 6px 0 0; font-size: 31px; font-weight: 800; color: #1E3A4F; letter-spacing: 1px; }
+  .tt h1 em { font-style: normal; color: #8A97A0; font-weight: 400; font-size: 20px; margin-left: 12px; letter-spacing: 0; }
+  .tt .lead { margin-top: 7px; font-size: 12.5px; color: #5C7486; }
+
+  /* 色彩系统:Candy Safety 低饱和填充 */
+  .c-web   { --c: #D9536B; --cd: #B23A50; --ct: #FCE9ED; }
+  .c-admin { --c: #2F9A7B; --cd: #20765E; --ct: #E5F5EF; }
+  .c-api   { --c: #3E8EC9; --cd: #2A6DA1; --ct: #E8F2FC; }
+  .c-flow  { --c: #B07E1F; --cd: #8A6114; --ct: #FBF3DC; }
+  .c-safe  { --c: #C96F3F; --cd: #A1542B; --ct: #FBEADD; }
+  .c-ops   { --c: #4E6E86; --cd: #3A5568; --ct: #ECF1F4; }
+
+  /* ══════════ P1 总览:中心放射 ══════════ */
+  #svg1 { position: absolute; inset: 0; z-index: 1; display: block; }
+  .hub {
+    position: absolute; left: 633px; top: 508px; width: 320px; height: 180px; z-index: 3;
+    background: #1E3A4F; border-radius: 20px; color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; box-shadow: 0 14px 34px rgba(30,58,79,.28);
+  }
+  .hub .hk { font-size: 10.5px; letter-spacing: 3px; color: #F9D56E; font-weight: 700; }
+  .hub h2 { margin: 7px 0 6px; font-size: 26px; font-weight: 800; letter-spacing: 1px; }
+  .hub .hm { font-size: 11.5px; color: rgba(255,255,255,.78); line-height: 1.55; }
+  .cluster { position: absolute; width: 450px; z-index: 3; }
+  .cluster .pill {
+    display: inline-flex; align-items: baseline; gap: 8px;
+    background: var(--c); color: #fff; border-radius: 10px;
+    padding: 8px 16px; font-size: 16px; font-weight: 700; letter-spacing: 1px;
+    box-shadow: 0 6px 14px rgba(30,58,79,.14);
+  }
+  .cluster .pill small { font-size: 10px; font-weight: 400; opacity: .88; letter-spacing: 1.2px; }
+  .cluster .card {
+    margin-top: 10px; background: #fff; border: 1px solid #E7E0D2;
+    border-left: 4px solid var(--c); border-radius: 13px;
+    padding: 13px 16px 11px; box-shadow: 0 8px 18px rgba(30,58,79,.07);
+  }
+  .cluster li { list-style: none; font-size: 12.5px; line-height: 1.5; color: #3D5568; padding: 4px 0 4px 15px; position: relative; }
+  .cluster li + li { border-top: 1px dashed #EAE4D6; }
+  .cluster li::before { content: ''; position: absolute; left: 0; top: 12px; width: 7px; height: 7px; border-radius: 50%; background: var(--c); opacity: .75; }
+  .cluster li b { color: #1E3A4F; }
+  .cluster li .en { color: #8A97A0; font-size: 10.5px; }
+
+  /* ══════════ P2 / P5 左干树 ══════════ */
+  .root-node {
+    position: absolute; left: 60px; top: 500px; width: 168px; height: 170px; z-index: 3;
+    background: #1E3A4F; border-radius: 18px; color: #fff;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center;
+    box-shadow: 0 12px 28px rgba(30,58,79,.25);
+  }
+  .root-node .rk { font-size: 10px; letter-spacing: 2.5px; color: #F9D56E; font-weight: 700; }
+  .root-node .rt { font-size: 24px; font-weight: 800; margin: 8px 0 6px; letter-spacing: 2px; }
+  .root-node .rs { font-size: 10.5px; color: rgba(255,255,255,.75); line-height: 1.5; }
+  .trunk { position: absolute; left: 262px; width: 3px; background: #D8CFC0; border-radius: 2px; z-index: 1; }
+  .root-link { position: absolute; height: 3px; background: #D8CFC0; z-index: 1; border-radius: 2px; }
+
+  .band { position: relative; margin-left: 236px; display: flex; gap: 14px; align-items: flex-start; }
+  .band .elbow { position: absolute; left: -34px; top: 21px; width: 34px; height: 26px; border-left: 3px solid var(--c); border-bottom: 3px solid var(--c); border-bottom-left-radius: 10px; opacity: .8; }
+  .band .bpill {
+    flex: 0 0 186px; background: var(--c); color: #fff; border-radius: 11px;
+    padding: 9px 14px; font-size: 15px; font-weight: 700; letter-spacing: .5px;
+    box-shadow: 0 5px 12px rgba(30,58,79,.13); position: relative;
+  }
+  .band .bpill small { display: block; font-size: 10px; font-weight: 400; opacity: .88; margin-top: 3px; letter-spacing: .5px; }
+  .chips { flex: 1; display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    flex: 1 1 265px; max-width: 340px; background: #fff; border: 1px solid #E7E0D2;
+    border-top: 3px solid var(--c); border-radius: 10px; padding: 10px 14px 9px;
+    box-shadow: 0 4px 10px rgba(30,58,79,.05);
+  }
+  .chip b { display: block; font-size: 13px; color: #1E3A4F; }
+  .chip span { display: block; font-size: 11px; color: #6B7E8A; line-height: 1.45; margin-top: 3px; }
+
+  /* ══════════ P3 流程步骤 ══════════ */
+  .sec-t { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; }
+  .sec-t .tag { background: var(--c, #1E3A4F); color: #fff; font-size: 12px; font-weight: 700; border-radius: 7px; padding: 4px 11px; letter-spacing: 1.5px; }
+  .sec-t .st { font-size: 15px; font-weight: 800; color: #1E3A4F; letter-spacing: 1px; }
+  .sec-t .se { font-size: 10.5px; color: #8A97A0; letter-spacing: 2px; }
+  .steps { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 11px; }
+  .step {
+    background: #fff; border: 1px solid #E7E0D2; border-radius: 12px;
+    padding: 10px 13px 9px; position: relative; box-shadow: 0 4px 10px rgba(30,58,79,.05);
+    border-top: 3px solid var(--c); min-height: 118px;
+  }
+  .step .num {
+    position: absolute; top: -12px; left: 12px; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--c); color: #fff; font-size: 13px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 8px rgba(30,58,79,.2);
+  }
+  .step h4 { margin: 6px 0 4px; font-size: 13.5px; color: #1E3A4F; }
+  .step h4 small { color: #8A97A0; font-size: 10px; font-weight: 400; margin-left: 5px; letter-spacing: .5px; }
+  .step p { margin: 0; font-size: 11px; line-height: 1.5; color: #5C7486; }
+  .step .arr { position: absolute; right: 10px; top: 8px; color: var(--c); font-size: 14px; font-weight: 800; opacity: .55; }
+
+  .statebox { display: flex; align-items: center; flex-wrap: nowrap; gap: 5px; }
+  .st-node {
+    background: var(--ct); border: 1.6px solid var(--c); color: #1E3A4F;
+    border-radius: 9px; padding: 6px 9px; font-size: 11.5px; font-weight: 700; text-align: center; line-height: 1.3;
+  }
+  .st-node small { display: block; font-size: 10px; font-weight: 400; color: #6B7E8A; letter-spacing: 0; }
+  .st-node.term { background: #F1EEE6; border-color: #A3977F; border-style: dashed; color: #6E6350; }
+  .st-node.hot { background: var(--c); color: #fff; }
+  .st-node.hot small { color: rgba(255,255,255,.85); }
+  .st-arr { color: #B9AF9C; font-size: 13px; font-weight: 800; flex: 0 0 auto; }
+  .lane { font-size: 10.5px; color: #8A97A0; margin-top: 7px; line-height: 1.55; }
+  .lane b { color: #4E6E86; }
+
+  .miles { display: flex; gap: 12px; }
+  .mile { flex: 1; background: #fff; border: 1px solid #E7E0D2; border-radius: 12px; padding: 12px 13px 10px; position: relative; border-top: 3px solid var(--c); box-shadow: 0 4px 10px rgba(30,58,79,.05); min-height: 130px; }
+  .mile .dot { position: absolute; top: -7px; left: 50%; margin-left: -7px; width: 14px; height: 14px; border-radius: 50%; background: var(--c); border: 3px solid #F7F4EE; }
+  .mile h5 { margin: 0 0 5px; font-size: 12.5px; color: #1E3A4F; }
+  .mile h5 small { display: block; font-size: 10px; color: #8A97A0; font-weight: 400; letter-spacing: 1px; margin-top: 2px; }
+  .mile p { margin: 0; font-size: 10.5px; line-height: 1.6; color: #5C7486; }
+
+  /* ══════════ P4 功能需求:四象限 ══════════ */
+  .quad {
+    background: #fff; border: 1px solid #E7E0D2; border-radius: 16px;
+    padding: 15px 18px 12px; box-shadow: 0 8px 18px rgba(30,58,79,.06); position: relative;
+  }
+  .quad .qpill {
+    display: inline-flex; align-items: baseline; gap: 8px; background: var(--c); color: #fff;
+    border-radius: 9px; padding: 6px 14px; font-size: 15px; font-weight: 700; letter-spacing: 1px;
+  }
+  .quad .qpill small { font-size: 10px; font-weight: 400; opacity: .88; }
+  .quad ul { margin: 11px 0 0; padding: 0; }
+  .quad li { list-style: none; font-size: 13px; line-height: 1.65; color: #3D5568; padding: 7px 0 7px 16px; position: relative; }
+  .quad li + li { border-top: 1px dashed #EFE9DC; }
+  .quad li::before { content: ''; position: absolute; left: 1px; top: 15px; width: 7px; height: 7px; border-radius: 50%; background: var(--c); opacity: .75; }
+  .quad li b { color: #1E3A4F; }
+  .quad li .code { font-family: Consolas, "JetBrains Mono", monospace; font-size: 11px; color: var(--cd); background: var(--ct); border-radius: 4px; padding: 0 5px; }
+
+  /* P4 统计速览条 */
+  .statbar { display: flex; gap: 14px; }
+  .stat { flex: 1; background: #fff; border: 1px solid #E7E0D2; border-radius: 12px; padding: 10px 14px 9px; text-align: center; box-shadow: 0 4px 10px rgba(30,58,79,.05); }
+  .stat .sv { font-size: 24px; font-weight: 800; color: var(--c, #1E3A4F); line-height: 1.1; }
+  .stat .sv small { font-size: 12px; font-weight: 700; }
+  .stat .sl { font-size: 11px; color: #6B7E8A; margin-top: 3px; letter-spacing: 1px; }
+
+  /* ══════════ P5 安全卡片 ══════════ */
+  .safe-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; grid-template-rows: 1fr 1fr; gap: 16px; flex: 1; }
+  .scard { background: #fff; border: 1px solid #E7E0D2; border-radius: 14px; padding: 16px 18px 12px; border-top: 4px solid var(--c); box-shadow: 0 6px 14px rgba(30,58,79,.06); }
+  .scard h5 { margin: 0 0 9px; font-size: 15.5px; color: #1E3A4F; display: flex; align-items: baseline; gap: 8px; }
+  .scard h5 small { font-size: 10px; color: #8A97A0; letter-spacing: 1.5px; font-weight: 400; }
+  .scard li { list-style: none; font-size: 12.5px; line-height: 1.65; color: #3D5568; padding: 6px 0 6px 14px; position: relative; }
+  .scard li::before { content: ''; position: absolute; left: 0; top: 13px; width: 6px; height: 6px; border-radius: 50%; background: var(--c); opacity: .75; }
+  .scard li b { color: #1E3A4F; }
+  .scard ul { margin: 0; padding: 0; }
+  .risk {
+    margin-top: 16px; background: #F3E9E4; border: 1px solid #E3C9BC; border-left: 5px solid #B4533A;
+    border-radius: 12px; padding: 14px 20px; display: flex; gap: 16px; align-items: center;
+  }
+  .risk .rl { flex: 0 0 auto; font-size: 14px; font-weight: 800; color: #B4533A; letter-spacing: 1px; }
+  .risk p { margin: 0; font-size: 12.5px; line-height: 1.65; color: #6E4A3A; }
+  .risk p b { color: #93402A; }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════════ P1 平台总览 ═══════════════════ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand">
+      <div class="mark">KOI</div>
+      <div><div class="bt">KOI RECALL 召回平台</div><div class="bs">PANORAMA MIND MAP · 01 OVERVIEW</div></div>
+    </div>
+    <div class="pgno"><div class="n">01 <span>/ 05</span></div><div class="t">平台总览</div></div>
+  </div>
+
+  <svg id="svg1" viewBox="0 0 1587 1123">
+    <g fill="none" stroke-width="3" opacity="0.55">
+      <path d="M 633 575 C 565 555, 585 140, 508 140" stroke="#2F9A7B"/>
+      <path d="M 633 598 C 565 598, 570 465, 508 465" stroke="#B07E1F"/>
+      <path d="M 633 622 C 570 640, 585 790, 508 790" stroke="#4E6E86"/>
+      <path d="M 953 575 C 1020 555, 1000 140, 1079 140" stroke="#D9536B"/>
+      <path d="M 953 598 C 1020 598, 1015 460, 1079 460" stroke="#3E8EC9"/>
+      <path d="M 953 622 C 1015 640, 1000 790, 1079 790" stroke="#C96F3F"/>
+    </g>
+    <g>
+      <circle cx="508" cy="140" r="5" fill="#2F9A7B"/><circle cx="508" cy="465" r="5" fill="#B07E1F"/><circle cx="508" cy="790" r="5" fill="#4E6E86"/>
+      <circle cx="1079" cy="140" r="5" fill="#D9536B"/><circle cx="1079" cy="460" r="5" fill="#3E8EC9"/><circle cx="1079" cy="790" r="5" fill="#C96F3F"/>
+    </g>
+  </svg>
+
+  <div class="hub">
+    <div class="hk">KOI RECALL PLATFORM</div>
+    <h2>KOI Recall 召回平台</h2>
+    <div class="hm">koiimprtinc.com · CPSC 消费品召回<br>查询 — 索赔 — 审核 — 补偿 — 处置 全流程</div>
+  </div>
+
+  <div class="cluster c-admin" style="left:55px; top:120px;">
+    <div class="pill">三端架构 <small>ONE PRODUCT · THREE REPOS</small></div>
+    <div class="card"><ul>
+      <li><b>koi-recall-web</b> · C 端消费者站 <span class="en">www.koiimprtinc.com</span><br>召回查询 / 产品校验 / 索赔提交 / 进度跟踪</li>
+      <li><b>koi-recall-admin</b> · B 端运营后台 <span class="en">admin.koiimprtinc.com</span><br>案件审核 / 处置管理 / 退款 / 合规审计</li>
+      <li><b>koi-recall-backend</b> · API 服务 <span class="en">koi-recall-backend.vercel.app</span><br>Hono + Drizzle · OpenAPI 3.1 契约单一事实源</li>
+    </ul></div>
+  </div>
+
+  <div class="cluster c-flow" style="left:55px; top:445px;">
+    <div class="pill">核心业务流程 <small>CORE PIPELINE · 9 STEPS</small></div>
+    <div class="card"><ul>
+      <li><b>① 浏览召回</b> → ② 产品预筛 → ③ 索赔草稿 + 证据直传 → ④ 提交建案(加密 · 幂等 · 单事务)</li>
+      <li><b>⑤ 后台审核</b>(10 态状态机)→ ⑥ 补偿 Resolution → ⑦ 消费者处置 Disposal</li>
+      <li><b>⑧ 邮件通知</b>(Outbox → Resend → Svix 回执)⑨ 事故 · CPSC 可报告性闭环</li>
+    </ul></div>
+  </div>
+
+  <div class="cluster c-ops" style="left:55px; top:770px;">
+    <div class="pill">实施阶段 <small>DELIVERY ROADMAP</small></div>
+    <div class="card"><ul>
+      <li><b>Phase 1 · 后端先行</b>:契约骨架 → 46 表建模 → ToC API → 前端接入</li>
+      <li><b>Phase 2 · Admin 全量接 API</b>:Resolution / Workflow / Refund 四大工作流</li>
+      <li><b>能力增强</b>:邮件全链路 · 缓存标签按需失效 · 发布接口 · 跨实例限流</li>
+      <li><b>事故整改</b>:处置一致性 P0-A → escalated P0-B → P1(A01–A35)</li>
+    </ul></div>
+  </div>
+
+  <div class="cluster c-web" style="left:1082px; top:120px;">
+    <div class="pill">所用技术 <small>TECH STACK</small></div>
+    <div class="card"><ul>
+      <li><b>前端</b>:Next.js 16 · React 19 · TypeScript · Tailwind v4 · Ant Design 6(Admin)</li>
+      <li><b>后端</b>:Hono 4 · Drizzle ORM · PostgreSQL(Neon)· Node.js 24</li>
+      <li><b>能力</b>:Vercel Blob · Resend + Svix · Upstash 限流 · Vercel Cron</li>
+      <li><b>质量</b>:Vitest 三层测试 · ESLint + Prettier · openapi:check 门禁</li>
+    </ul></div>
+  </div>
+
+  <div class="cluster c-api" style="left:1082px; top:440px;">
+    <div class="pill">功能需求 <small>FUNCTIONAL SCOPE</small></div>
+    <div class="card"><ul>
+      <li><b>C 端 6+ 页面</b>:召回详情"三刀流" · 免注册查询 · 用户中心 · 处置任务页</li>
+      <li><b>B 端 10 模块</b>:案件审核全流程 · 6 运营队列 · 退款导出 · 处置内容库</li>
+      <li><b>API 4 组端点</b>:/v1 消费者 · /admin 管理 · /webhooks · /internal</li>
+      <li><b>数据模型</b>:10 个 schema 文件 · 46 张表 · 24 个迁移</li>
+    </ul></div>
+  </div>
+
+  <div class="cluster c-safe" style="left:1082px; top:770px;">
+    <div class="pill">安全与合规 <small>SECURITY & COMPLIANCE</small></div>
+    <div class="card"><ul>
+      <li><b>数据</b>:AES-256-GCM 字段加密 · HMAC 查询哈希 · 两级 PII 脱敏</li>
+      <li><b>权限</b>:RBAC 双角色(ADMIN / MANAGER)· 审计事件全留痕</li>
+      <li><b>防护</b>:Upstash 限流 · Idempotency-Key 幂等 · Svix 验签</li>
+      <li><b>合规</b>:CPSC 可报告性闭环 · closure_review 双门闩 · escalated 强制升级</li>
+    </ul></div>
+  </div>
+
+  <div class="ft">
+    <div>依据 koi-recall-web / koi-recall-admin / koi-recall-backend 三仓库 README · docs · package.json 及项目周报(2026-09-18)整理</div>
+    <div class="mono">koiimprtinc.com</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ P2 所用技术 ═══════════════════ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand">
+      <div class="mark">KOI</div>
+      <div><div class="bt">KOI RECALL 召回平台</div><div class="bs">PANORAMA MIND MAP · 02 TECH STACK</div></div>
+    </div>
+    <div class="pgno"><div class="n">02 <span>/ 05</span></div><div class="t">所用技术</div></div>
+  </div>
+  <div class="ghost">02</div>
+
+  <div class="tt">
+    <div class="kick">TECHNOLOGY STACK</div>
+    <h1>所用技术导图<em>三端技术栈 · 基础设施 · 工程化</em></h1>
+    <div class="lead">前后端均为 TypeScript 全栈;OpenAPI 契约贯穿三端,CI 门禁保障契约与数据库结构不漂移。</div>
+  </div>
+
+  <div class="root-node" style="top:492px;">
+    <div class="rk">TECH STACK</div>
+    <div class="rt">技术栈</div>
+    <div class="rs">三端 + 基础设施<br>TypeScript 全栈</div>
+  </div>
+  <div class="root-link" style="left:228px; top:575px; width:34px;"></div>
+  <div class="trunk" style="left:262px; top:238px; height:678px;"></div>
+
+  <div style="position:absolute; top:200px; left:60px; right:60px; display:flex; flex-direction:column; gap:26px;">
+
+    <div class="band c-web">
+      <div class="elbow"></div>
+      <div class="bpill">C 端 · koi-recall-web<small>消费者网站 · Next.js 全栈</small></div>
+      <div class="chips">
+        <div class="chip"><b>Next.js 16.2</b><span>App Router · Turbopack · React Server Components</span></div>
+        <div class="chip"><b>React 19.2 + TypeScript 5</b><span>组件体系全量 TS,契约类型自动生成</span></div>
+        <div class="chip"><b>Tailwind CSS v4</b><span>+ shadcn/ui + Base UI 组件 · Candy Safety 设计系统</span></div>
+        <div class="chip"><b>React Hook Form + Zod 4</b><span>索赔表单校验,前后端 schema 同源</span></div>
+        <div class="chip"><b>Framer Motion</b><span>"三刀流"滚动叙事与页面动效</span></div>
+        <div class="chip"><b>openapi-typescript</b><span>由 OpenAPI YAML 生成 API 类型 · api-client 优先 + Demo 兜底</span></div>
+        <div class="chip"><b>@vercel/blob</b><span>索赔证据(产品照 / 小票)客户端直传</span></div>
+        <div class="chip"><b>Playwright</b><span>页面冒烟预览脚本 · 截图回归</span></div>
+        <div class="chip"><b>lucide-react</b><span>图标体系 · Inter + JetBrains Mono 字体</span></div>
+      </div>
+    </div>
+
+    <div class="band c-admin">
+      <div class="elbow"></div>
+      <div class="bpill">B 端 · koi-recall-admin<small>运营后台 · Next.js 全栈</small></div>
+      <div class="chips">
+        <div class="chip"><b>Next.js 16.2 + React 19.2</b><span>App Router · 与 C 端同构技术底座</span></div>
+        <div class="chip"><b>Ant Design 6.6</b><span>表格 / 表单密集型后台组件 · nextjs-registry SSR 兼容</span></div>
+        <div class="chip"><b>Tailwind v4 + shadcn/ui</b><span>与 AntD 混合,Ethereal Emerald 设计系统</span></div>
+        <div class="chip"><b>React Hook Form + Zod</b><span>审核操作与 Closure Checklist 表单</span></div>
+        <div class="chip"><b>rbac.ts 权限矩阵</b><span>前端镜像后端 RBAC,按钮级显隐控制</span></div>
+        <div class="chip"><b>openapi-typescript</b><span>消费同一份 OpenAPI 契约,类型不漂移</span></div>
+        <div class="chip"><b>可收起侧边栏</b><span>64px ↔ 236px 双态布局 · 案件详情工作台</span></div>
+      </div>
+    </div>
+
+    <div class="band c-api">
+      <div class="elbow"></div>
+      <div class="bpill">API · koi-recall-backend<small>服务端 · Hono + Drizzle</small></div>
+      <div class="chips">
+        <div class="chip"><b>Node.js 24 + TS strict</b><span>pnpm 工作区 · TypeScript ^6 严格模式</span></div>
+        <div class="chip"><b>Hono 4 + @hono/zod-openapi</b><span>契约即代码:路由 · 校验 · 文档一体生成</span></div>
+        <div class="chip"><b>Drizzle ORM 0.45 + Kit</b><span>10 个 schema 文件 · 46 张表 · 24 个迁移</span></div>
+        <div class="chip"><b>PostgreSQL 17</b><span>生产 Neon Serverless Pool · 本地 docker-compose</span></div>
+        <div class="chip"><b>Vercel Functions</b><span>api/index.ts 单入口部署 · routes → domain → ports 单向依赖</span></div>
+        <div class="chip"><b>Resend + Svix</b><span>事务邮件发送 · webhook 回执验签</span></div>
+        <div class="chip"><b>Upstash Redis</b><span>@upstash/ratelimit 跨实例分布式限流</span></div>
+        <div class="chip"><b>Vercel Cron</b><span>每日 03:00 排空 Outbox · 草稿清理任务</span></div>
+        <div class="chip"><b>Vitest 4</b><span>三层测试:静态 → 单元/HTTP → PostgreSQL 集成</span></div>
+      </div>
+    </div>
+
+    <div class="band c-flow">
+      <div class="elbow"></div>
+      <div class="bpill">基础设施 · 工程化<small>INFRA & WORKFLOW</small></div>
+      <div class="chips">
+        <div class="chip"><b>Vercel 全栈托管</b><span>www / admin / api 三域名,koiimprtinc.com 已上线</span></div>
+        <div class="chip"><b>GitHub → Vercel</b><span>push main 自动构建部署,三仓库独立流水线</span></div>
+        <div class="chip"><b>CI 门禁</b><span>typecheck · lint · format · openapi:check · db:check · vitest</span></div>
+        <div class="chip"><b>OpenAPI 3.1 契约</b><span>toc-v1.openapi.yaml(2258 行)三端单一事实源</span></div>
+        <div class="chip"><b>Vercel Private Blob</b><span>索赔证据私有存储 · upload token + 回调校验</span></div>
+        <div class="chip"><b>配置与脚本</b><span>.env 14 项配置分域 · bootstrap-staff / migrate / seed / generate-openapi</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ft">
+    <div>版本号取自各仓库 package.json(2026-09 锁定)· 详见 koi-recall-backend/docs/phase-1/01-server-architecture.md</div>
+    <div class="mono">02 / 05</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ P3 实现步骤 ═══════════════════ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand">
+      <div class="mark">KOI</div>
+      <div><div class="bt">KOI RECALL 召回平台</div><div class="bs">PANORAMA MIND MAP · 03 IMPLEMENTATION</div></div>
+    </div>
+    <div class="pgno"><div class="n">03 <span>/ 05</span></div><div class="t">实现步骤</div></div>
+  </div>
+  <div class="ghost">03</div>
+
+  <div class="tt">
+    <div class="kick">IMPLEMENTATION PIPELINE</div>
+    <h1>实现步骤导图<em>业务主线 · 状态机 · 研发路线</em></h1>
+    <div class="lead">完整链路:Claim Draft → 提交建案 KOI-XXXX-XXXXXXXX → Admin 处理同一 Case;前后端流转规则由 CaseWorkflowPolicy 单一函数保证不漂移。</div>
+  </div>
+
+  <div style="position:absolute; top:200px; left:60px; right:60px;">
+    <div class="sec-t c-flow"><span class="tag">A</span><span class="st">核心业务主线</span><span class="se">END-TO-END · 9 STEPS</span></div>
+    <div class="steps">
+      <div class="step c-api"><span class="num">1</span><span class="arr">▶</span><h4>浏览召回 Campaign<small>Campaign Discovery</small></h4><p>slug + code 访问;生命周期 draft→scheduled→active→paused→closed;版本化发布 + 多语言 localization</p></div>
+      <div class="step c-api"><span class="num">2</span><span class="arr">▶</span><h4>产品预筛 Product Check<small>Screening</small></h4><p>shape / flavor / lotCode / dateCode 四要素匹配 → potential_match · not_matched · manual_review</p></div>
+      <div class="step c-api"><span class="num">3</span><span class="arr">▶</span><h4>索赔草稿 Claim Draft<small>Anonymous Draft</small></h4><p>匿名草稿 token 仅存 hash;证据直传 Vercel Private Blob(一次性 upload token + webhook 回调校验)</p></div>
+      <div class="step c-web"><span class="num">4</span><span class="arr">▶</span><h4>提交建案 Submit Claim<small>Case Creation</small></h4><p>单事务写入 Case 聚合 + 确认函 + Outbox;AES-256-GCM 加密 PII;Idempotency-Key 提交幂等</p></div>
+      <div class="step c-admin"><span class="num">5</span><span class="arr">▶</span><h4>后台审核 Case Review<small>10-State Machine</small></h4><p>认领 → 分诊 triage → 审查 under_review ⇄ 补件 need_info;approved 后必须过 closure_review 双门闩才可 closed</p></div>
+      <div class="step c-admin"><span class="num">6</span><span class="arr">▶</span><h4>补偿 Resolution<small>Remedy</small></h4><p>requested → approved → complete → externally_completed / cancelled;退款走 Refund Export CSV + SHA-256 留痕</p></div>
+      <div class="step c-admin"><span class="num">7</span><span class="arr">▶</span><h4>消费者处置 Disposal<small>Safe Disposal</small></h4><p>处置指引版本 → 处置任务 → 证据批次人工审核 → 处置授权(coverage 快照)→ 完成声明;支持 hold / 撤回</p></div>
+      <div class="step c-flow"><span class="num">8</span><span class="arr">▶</span><h4>邮件通知 Notification<small>Transactional Email</small></h4><p>Transactional Outbox → Vercel Cron 每日排空 → Resend 发送 → Svix 验签回执;9 触点品牌模板</p></div>
+      <div class="step c-safe" style="border-top-color:#C96F3F;"><span class="num" style="background:#C96F3F;">9</span><h4>事故与合规 Incident<small>Reportability</small></h4><p>Incident → Reportability Review:pending → filed(含 CPSC 编号)/ documented_non_reportable → Case Escalation</p></div>
+    </div>
+
+    <div style="display:flex; gap:16px; margin-top:32px;">
+      <div style="flex:1.55;">
+        <div class="sec-t c-admin" style="margin-bottom:9px;"><span class="tag">B</span><span class="st">案件状态机</span><span class="se">10 STATES · 4 TERMINAL</span></div>
+        <div class="statebox c-admin">
+          <div class="st-node">submitted<small>已提交</small></div><span class="st-arr">→</span>
+          <div class="st-node">triage<small>分诊</small></div><span class="st-arr">→</span>
+          <div class="st-node">under_review<small>审查中</small></div><span class="st-arr">⇄</span>
+          <div class="st-node">need_info<small>待补件</small></div><span class="st-arr">→</span>
+          <div class="st-node">approved<small>已批准</small></div><span class="st-arr">→</span>
+          <div class="st-node">closure_review<small>关闭审查</small></div><span class="st-arr">→</span>
+          <div class="st-node hot">closed<small>已关闭</small></div>
+        </div>
+        <div class="statebox c-admin" style="margin-top:8px; gap:8px;">
+          <span style="font-size:11px; color:#8A97A0; font-weight:700; letter-spacing:1px;">终态</span>
+          <div class="st-node term">rejected<small>已拒绝</small></div>
+          <div class="st-node term">duplicate<small>重复案件</small></div>
+          <div class="st-node term">withdrawn<small>已撤回</small></div>
+          <span style="font-size:11px; color:#8A97A0; font-weight:700; letter-spacing:1px; margin-left:10px;">合规升级</span>
+          <div class="st-node" style="border-style:dashed;">escalated<small>伤害事故强制 → 合规通道</small></div>
+        </div>
+        <div class="lane"><b>双门闩关闭:</b>approved → closed 已移除,必须同时满足 ① Resolution externally_completed ② Reportability 已关闭;CaseWorkflowPolicy.evaluate 为流转规则唯一事实源。</div>
+      </div>
+      <div style="flex:1;">
+        <div class="sec-t c-safe" style="margin-bottom:9px;"><span class="tag" style="background:#C96F3F;">B+</span><span class="st">Resolution 补偿子流程</span><span class="se">SUB-WORKFLOW</span></div>
+        <div class="statebox c-safe">
+          <div class="st-node">requested<small>发起补偿</small></div><span class="st-arr">→</span>
+          <div class="st-node">approved<small>审批通过</small></div><span class="st-arr">→</span>
+          <div class="st-node">complete<small>执行完成</small></div><span class="st-arr">→</span>
+          <div class="st-node">externally_completed<small>外部完成</small></div>
+        </div>
+        <div class="lane" style="margin-top:9px;"><b>取消分支:</b>cancelled;退款统一走 Refund Export CSV 批次导出 + SHA-256 校验留痕,后台 /exports 可追踪批次与明细。</div>
+      </div>
+    </div>
+
+    <div style="margin-top:32px;">
+      <div class="sec-t c-ops" style="margin-bottom:14px;"><span class="tag" style="background:#4E6E86;">C</span><span class="st">研发实施路线</span><span class="se">PHASE 1 → NOW</span></div>
+      <div class="miles">
+        <div class="mile c-api"><span class="dot"></span><h5>Phase 1 · 后端先行<small>CONTRACT FIRST</small></h5><p>契约优先骨架 → 46 表 DB 设计 → ToC API → 前端接入;文档 docs/phase-1 01–05(架构 / 建模 / API / 集成 / 契约重构)</p></div>
+        <div class="mile c-admin"><span class="dot"></span><h5>Phase 2 · Admin 全量接 API<small>WORKFLOW V2</small></h5><p>optimization-plan-v2:Resolution / Workflow / Refund Export 四大工作流改造,替代 Demo 数据</p></div>
+        <div class="mile c-flow"><span class="dot"></span><h5>能力增强<small>HARDENING</small></h5><p>邮件全链路(域名 · Svix 回执 · 9 模板 · outbox cron)· Data Cache 标签按需失效 · /publish 发布接口 · Upstash 限流 · 404 语义修复</p></div>
+        <div class="mile c-safe" style="border-top-color:#C96F3F;"><span class="dot" style="background:#C96F3F;"></span><h5>事故整改<small>REMEDIATION</small></h5><p>P0-A 处置一致性 → P0-B escalated 状态 → P1-A / P1-B;A01–A35 映射 · 隔离测试库 · 惰性导入门禁</p></div>
+        <div class="mile c-ops"><span class="dot"></span><h5>现状与风险<small>STATUS · RISKS</small></h5><p>三端已上线 koiimprtinc.com · CI 全绿;风险:邮件时效(Hobby cron 每日一次,最长延迟 24h)· 负载测试缺失</p></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="ft">
+    <div>状态机口径:koi-recall-admin/docs/case-review-workflow.md · 整改路线:.zcode/plans 整改执行方案 · 邮件触点见 docs/email</div>
+    <div class="mono">03 / 05</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ P4 功能需求 ═══════════════════ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand">
+      <div class="mark">KOI</div>
+      <div><div class="bt">KOI RECALL 召回平台</div><div class="bs">PANORAMA MIND MAP · 04 FEATURES</div></div>
+    </div>
+    <div class="pgno"><div class="n">04 <span>/ 05</span></div><div class="t">功能需求</div></div>
+  </div>
+  <div class="ghost">04</div>
+
+  <div class="tt">
+    <div class="kick">FUNCTIONAL REQUIREMENTS</div>
+    <h1>功能需求导图<em>C 端页面 · B 端模块 · API 端点 · 数据模型</em></h1>
+    <div class="lead">C 端支持免注册(编号 + 手机号)与注册双模式;B 端权限为 ADMIN / MANAGER 双角色,前端按钮级控制、后端为权限权威。</div>
+  </div>
+
+  <div style="position:absolute; top:192px; left:60px; right:60px; height:872px; display:flex; flex-direction:column; justify-content:space-between; gap:16px;">
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+
+    <div class="quad c-web">
+      <div class="qpill">C 端 · 消费者页面 <small>WEB · 6+ PAGES</small></div>
+      <ul>
+        <li><span class="code">/</span> <b>首页</b> — 召回品牌检索入口,历史召回浏览</li>
+        <li><span class="code">/recalls/[slug]</span> <b>召回详情"三刀流"</b> — 3×100vh 叙事:召回概览 → 产品校验 → 发起索赔</li>
+        <li><span class="code">/recalls/[slug]/disposal/[taskId]</span> <b>消费者处置页</b> — 处置指引 · 证据上传 · 完成声明 / 例外申报</li>
+        <li><span class="code">/lookup</span> <b>免注册查询</b> — 案件编号 + 手机号验证,查看进度与结果</li>
+        <li><span class="code">/dashboard</span> <b>用户中心</b> — 我的索赔 / 订单 / 资料(Neon 后端真实认证)</li>
+        <li><span class="code">/faq · /how-it-works · /privacy</span> <b>内容页</b> — 流程说明与隐私政策</li>
+        <li><b>双模式认证</b> — 游客会话 guest-claim-session(一次性 token)+ 注册制 consumer-auth</li>
+      </ul>
+    </div>
+
+    <div class="quad c-admin">
+      <div class="qpill">B 端 · 管理模块 <small>ADMIN · 10 MODULES</small></div>
+      <ul>
+        <li><span class="code">/</span> <b>运营总览</b> + <span class="code">/login</span> Staff 登录(会话刷新 / 下线)</li>
+        <li><span class="code">/campaigns</span> <b>召回活动</b> — 只读列表 + 详情 + publish 发布操作</li>
+        <li><span class="code">/cases</span> <b>案件列表</b> — 统计卡 · 多维筛选 · 认领 · CSV 导出</li>
+        <li><span class="code">/cases/[id]</span> <b>案件详情工作台</b> — 活动产品卡 · 证据卡 · 事故卡 · 两级 PII · 指派 · 状态流转 · Resolution 审批 · Closure Checklist · 审计时间线</li>
+        <li><span class="code">/queues</span> <b>6 个运营队列</b> — 分诊 / 补件 / 关闭审查等按角色分流</li>
+        <li><span class="code">/incidents</span> 事故与可报告性关闭 · <span class="code">/exports</span> 退款批次导出</li>
+        <li><span class="code">/access</span> 员工管理 + 审计 · <span class="code">/disposal</span> 处置队列 · <span class="code">/disposal-instructions</span> 内容库</li>
+      </ul>
+    </div>
+
+    <div class="quad c-api">
+      <div class="qpill">API · 端点矩阵 <small>4 ENDPOINT GROUPS</small></div>
+      <ul>
+        <li><span class="code">/v1</span> <b>消费者端</b> — campaigns · product-checks · claim-drafts(+upload-tokens / documents)· claims · case-status-lookups · consumer-auth(register / login / logout / me)</li>
+        <li><span class="code">/admin</span> <b>管理端</b> — sessions · staff CRUD · profile · cases(列表 / assign / status / resolution 四操作)· campaigns + publish · incidents + reportability · refund-exports · disposal 全套 · audit-events</li>
+        <li><span class="code">/webhooks</span> <b>回调</b> — resend 邮件回执(Svix 验签)· vercel-blob 上传回调</li>
+        <li><span class="code">/internal</span> <b>定时任务</b> — jobs/outbox 排空 · jobs/cleanup-drafts(CRON_SECRET 保护)· /health 健康检查</li>
+        <li><b>契约治理</b> — OpenAPI 3.1(2258 行)自动生成文档与三端类型,openapi:check 防漂移</li>
+      </ul>
+    </div>
+
+    <div class="quad c-flow">
+      <div class="qpill">数据模型 · 46 表 <small>POSTGRESQL · 24 MIGRATIONS</small></div>
+      <ul>
+        <li><b>campaigns 域 10 表</b> — versions · localizations · products · variants · identifiers · lots · remedy_options · evidence_requirements · message_templates</li>
+        <li><b>案件域</b> — recall_cases · case_consumers · claimed_products · consents · submission_snapshots · claim_drafts · document_uploads</li>
+        <li><b>处置域 11 表</b> — instruction_versions · approvals · tasks · evidence_batches · reviews · authorizations · declarations · holds 等</li>
+        <li><b>事故域</b> — incidents · reportability_reviews · case_escalations</li>
+        <li><b>身份与后台</b> — consumer_users · sessions · staff · 审计事件表</li>
+        <li><b>支撑域</b> — communications · outbox_events · idempotency_records · webhook_events · refund_export_batches / items</li>
+      </ul>
+    </div>
+    </div>
+
+    <div class="statbar">
+      <div class="stat c-web"><div class="sv">6<small>+</small></div><div class="sl">C 端页面</div></div>
+      <div class="stat c-admin"><div class="sv">10</div><div class="sl">B 端模块</div></div>
+      <div class="stat c-api"><div class="sv">4</div><div class="sl">API 端点组</div></div>
+      <div class="stat c-flow"><div class="sv">46</div><div class="sl">张数据表</div></div>
+      <div class="stat c-ops"><div class="sv">24</div><div class="sl">个迁移</div></div>
+      <div class="stat c-safe"><div class="sv">2258<small> 行</small></div><div class="sl">OpenAPI 契约</div></div>
+    </div>
+  </div>
+
+  <div class="ft">
+    <div>页面与端点清单见三仓库 README 与 koi-recall-backend/openapi/toc-v1.openapi.yaml · 数据模型按 src/db/schema 10 个文件统计</div>
+    <div class="mono">04 / 05</div>
+  </div>
+</div>
+
+<!-- ═══════════════════ P5 安全合规与质量 ═══════════════════ -->
+<div class="page">
+  <div class="hd">
+    <div class="brand">
+      <div class="mark">KOI</div>
+      <div><div class="bt">KOI RECALL 召回平台</div><div class="bs">PANORAMA MIND MAP · 05 SECURITY & QUALITY</div></div>
+    </div>
+    <div class="pgno"><div class="n">05 <span>/ 05</span></div><div class="t">安全合规与质量保障</div></div>
+  </div>
+  <div class="ghost">05</div>
+
+  <div class="tt">
+    <div class="kick">SECURITY · COMPLIANCE · QUALITY</div>
+    <h1>安全合规与质量保障导图<em>数据 · 权限 · 防护 · 合规 · 质量</em></h1>
+    <div class="lead">面向 CPSC 监管场景设计:消费者 PII 加密存储、操作全程审计、可报告性闭环,能力未配置时失败关闭(501)而非静默降级。</div>
+  </div>
+
+  <div style="position:absolute; top:196px; left:60px; right:60px; height:864px; display:flex; flex-direction:column;">
+    <div class="safe-grid">
+      <div class="scard c-safe">
+        <h5>数据安全 <small>DATA PROTECTION</small></h5>
+        <ul>
+          <li><b>AES-256-GCM 字段加密</b> — PII 落库加密(FIELD_ENCRYPTION_KEY)</li>
+          <li><b>HMAC-SHA256 查询哈希</b> — 密文等值查询(HASH_PEPPER)</li>
+          <li><b>scrypt 密码哈希</b> — 消费者与员工凭据</li>
+          <li><b>两级 PII 脱敏</b> — 列表掩码 + 详情按需授权展示</li>
+          <li><b>Vercel Private Blob</b> — 索赔证据私有存储,非公开链接</li>
+          <li><b>密钥分层</b> — FIELD_ENCRYPTION_KEY 与 HASH_PEPPER 独立配置于 .env</li>
+        </ul>
+      </div>
+      <div class="scard c-admin">
+        <h5>访问与权限 <small>ACCESS CONTROL</small></h5>
+        <ul>
+          <li><b>Staff Session 认证</b> — 登录 · 刷新 · 主动下线</li>
+          <li><b>RBAC 双角色</b> — ADMIN / MANAGER 权限矩阵前后端镜像</li>
+          <li><b>staff.manage 仅 ADMIN</b> — 员工与权限管理最小化</li>
+          <li><b>后端为权限权威</b> — 越权 403 + 拒绝动作写入审计</li>
+          <li><b>处置细粒度权限</b> — disposal.review 等独立能力位</li>
+          <li><b>案件认领制</b> — cases/assign 指派处理人,责任到人</li>
+        </ul>
+      </div>
+      <div class="scard c-api">
+        <h5>可靠性与防滥用 <small>RELIABILITY</small></h5>
+        <ul>
+          <li><b>Upstash 跨实例限流</b> — 案件查询 10 次/分 · 后台登录 5 次/分</li>
+          <li><b>Idempotency-Key 幂等</b> — 重复提交不产生重复案件</li>
+          <li><b>单事务写入 + Outbox</b> — 建案与通知最终一致</li>
+          <li><b>失败关闭</b> — 能力未配置返回 501,不静默降级</li>
+          <li><b>受保护运维路由</b> — 缓存失效 / 内部任务需密钥</li>
+          <li><b>草稿过期清理</b> — cleanup-drafts 定时任务回收匿名草稿</li>
+        </ul>
+      </div>
+      <div class="scard c-flow">
+        <h5>通信安全 <small>COMMUNICATION</small></h5>
+        <ul>
+          <li><b>Svix webhook 验签</b> — Resend 回执防伪造</li>
+          <li><b>一次性 upload token</b> — 证据直传绑定草稿 + 回调校验</li>
+          <li><b>恶意软件扫描</b> — 上传证据经 Vercel Blob 安全检测</li>
+          <li><b>CRON_SECRET</b> — outbox / cleanup 内部任务令牌保护</li>
+          <li><b>9 触点事务邮件</b> — 品牌模板 · 状态变更即时告知</li>
+          <li><b>发信域配置</b> — koiimprtinc.com 自有域名发信</li>
+        </ul>
+      </div>
+      <div class="scard c-web">
+        <h5>合规与可追溯 <small>COMPLIANCE</small></h5>
+        <ul>
+          <li><b>CPSC 可报告性闭环</b> — pending → filed(含 CPSC 编号)/ documented_non_reportable</li>
+          <li><b>伤害事故强制升级</b> — escalated 状态 + Case Escalation</li>
+          <li><b>closure_review 双门闩</b> — 处置完成 + 可报告性关闭方可 closed</li>
+          <li><b>审计事件全留痕</b> — 关键操作可回溯(audit-events)</li>
+          <li><b>架构决策记录</b> — 5 份 ADR + claim-before-disposal 决策</li>
+          <li><b>先建案后处置</b> — 处置任务必须挂在已建案件之下</li>
+        </ul>
+      </div>
+      <div class="scard c-ops">
+        <h5>质量保障 <small>QUALITY ASSURANCE</small></h5>
+        <ul>
+          <li><b>Vitest 三层测试</b> — 静态 → 单元/HTTP → PostgreSQL 集成(gated)</li>
+          <li><b>D01–D29 验收矩阵</b> — 处置功能 proven / unproven 分级验收</li>
+          <li><b>CI 门禁全绿</b> — typecheck · lint · openapi:check · db:check · vitest</li>
+          <li><b>三仓库冒烟测试</b> — 脚本化页面快照与 API 响应留档</li>
+          <li><b>契约与结构防漂移</b> — openapi:check + db:check 双检查</li>
+          <li><b>容量基准脚本</b> — capacity-benchmark(尚未体系化)</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="risk">
+      <div class="rl">⚠ 遗留风险与待办</div>
+      <p><b>邮件时效</b>:Vercel Hobby cron 每日仅一次,通知最长延迟 24h(建议升 Pro)· <b>负载测试缺失</b>:容量基准脚本已有(capacity-benchmark)未成体系 · <b>遗留桥接</b>:shared-claims-store localStorage 待退出 · <b>D27</b>:处置内容包待业务定稿 · <b>E4</b>:部分业务材料未齐</p>
+    </div>
+  </div>
+
+  <div class="ft">
+    <div>安全设计详见 koi-recall-backend README 与 CONTEXT.md · 验收矩阵 docs/disposal-acceptance.md · 遗留项 docs/open-items.md</div>
+    <div class="mono">05 / 05</div>
+  </div>
+</div>
+
+</body>
+</html>
