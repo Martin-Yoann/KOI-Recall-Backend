@@ -74,3 +74,68 @@
 - 本轮所有测试数据均为虚构（`example.test` 邮箱、编造叙述与订单号）；写入生产的仅 TC-01 一条无事故案件（`KOI-5C6Q-9UJHGW33`）与 6 个已验证上传文件；未对生产做任何审查决策、状态流转或升级写入。
 - PASS 判定全部基于响应体/DOM 证据，截图不作为依据；本记录未持久化页面截图（MCP 截图保存受工作区限制），关键状态以引用文本快照留存于执行过程。
 - 本记录不关闭原方案任何 A 项；"3.2.1 处理流程未实现"维持开放。
+
+---
+
+# Re-run — 2026-09-30（生产迁移补齐后）
+
+> 同事确认生产库补齐迁移（0022/0024–0026）后，按记录第 3 节顺序重跑全部 BLOCKED 项。执行者会话：管理端 ADMIN（alex.yuan@rjfresh.com）；消费者端为匿名访客。**结论：迁移修复生效，13 项前次阻塞用例全部转 PASS；另发现 2 个管理端 UI 缺陷（记为 D1/D2）。**
+
+## R0. 修复验证（Phase 0）
+
+| 路径 | 前次 | 本次 |
+| --- | --- | --- |
+| `GET /admin/cases`（列表） | 500 | **200**，38→44 cases 实时 |
+| `GET /admin/cases/{ref}`（详情） | 500 | **200**（KOI-5C6Q 等全部可开） |
+| 事故申报 POST /claims | 500 ×2 | **201**（TC-02 重跑建案） |
+
+## R1. 本轮新建案件（全部虚构数据）
+
+| Case | 用例 | 内容 | 终态 |
+| --- | --- | --- | --- |
+| `KOI-KNQ9-MZYTPS8X` | TC-02 重跑 | 完整结构化伤害申报（payload 与方案 §4 逐项一致） | Filed `CPSC-TEST-2026-0031` → 补偿批准 $19.99 + 外部完成 → **Closed/Completed** |
+| `KOI-LGBS-AMCGWSUG` | TC-03+07 | 仅危害（无伤害）、battery_exposure、**replacement unit**、Date unknown（客户端拦了一次缺失日期） | 审查 Pending |
+| `KOI-NLBW-ULF4KU9W` | TC-05 | **failureMode=other + failureModeOtherDescription 持久化** | Non-reportable（API 决策） |
+| `KOI-VUL9-9RPJ4NEP` | TC-04 | Unsure + 日期未知、无批次码 | **Triage + compliance 阶段**；强制 closed 422 |
+| `KOI-LZ24-EXLNXFPR` | TC-33 | 无事故案件；regulator 升级 → 自动案件级审查 | Filed `CPSC-TEST-2026-0044`（filedAt=2026-09-29 操作人日期） |
+| `KOI-SUGP-G52S696Y` | TC-34 | 无事故案件；suspected_fraud + data_privacy 升级 | **未建审查**；升级已凭据关闭 |
+
+## R2. 结果更新（前次 BLOCKED 项）
+
+| TC | 前次 | 本次 | 关键证据 |
+| --- | --- | --- | --- |
+| TC-02 | BLOCKED | **PASS** | 201 `KOI-KNQ9`；管理端事故卡八字段全对；Safety gate → Review Closed |
+| TC-03 | BLOCKED | **PASS** | 仅勾 Other 时无伤害描述输入框（条件显示）；队列显示 OTHER/battery exposure |
+| TC-04 | BLOCKED | **PASS** | Unsure→`triage` + workflow 阶段 `compliance_review`（双轴并存，9-28 决策的线上实证） |
+| TC-05 | BLOCKED | **PASS** | 客户端阻断文案 "You selected Other…describe what happened."；说明随 other 持久化；**切走 other 自动清空**（回来为空） |
+| TC-06② | PARTIAL | **PASS**（客户端半边） | "You answered that medical treatment was received, but no treatment type is selected." |
+| TC-07 | BLOCKED | **PASS** | 队列+详情 "unit: replacement" 可识别 |
+| TC-20 | BLOCKED | **PASS** | 4 案未经人工操作全部入队 PENDING |
+| TC-21 | BLOCKED | **PASS** | raw 层叙述+伤害描述 "· DECRYPTED · AUDITED"；审计 2×`pii.view_raw` ADMIN success |
+| TC-22 | BLOCKED | **PASS** | "Pending 0 h since company obtained" 徽章（<1h，算术正确） |
+| TC-24 | BLOCKED | **PASS** | 三次缺项拒（理由/CPSC 引用/报送日期，各带明确文案）→ 四要素齐 → FILED |
+| TC-25 | BLOCKED | **PASS** | 短理由客户端拒；**意外实证服务端矛盾门禁**（non-reportable 携带 filedAt → 422 "cannot carry filedAt or filingEvidence"）→ 合规理由 204 |
+| TC-26 | BLOCKED | **PASS** | Filed 后案件仍 Submitted（不自动结案）；批准+外部完成后经矩阵 submitted→under review→approved→closure review→**closed** 全链放行 |
+| TC-27 | BLOCKED | **PASS** | ADMIN 会话直接 POST closed（pending 审查）→ **422** "cannot be closed while its safety reportability review is pending"（requestId `17f99efe`）——服务层门禁压过 ADMIN bypass |
+| TC-30 | BLOCKED | **PASS** | legal 升级开启 → **"Reportability Review (case-level)" 卡自动出现（pending）** → closed 422（open escalation 门禁，requestId `f96b87ff`） |
+| TC-31 | BLOCKED | **PASS** | 依据 <10 字拒 → 合规凭据关闭成功 |
+| TC-32 | BLOCKED | **PASS** | 升级关闭后审查 pending 仍 422（requestId `3502a225`）——**关闭升级≠安全签核**；审查决定后 closed 放行（204） |
+| TC-33 | BLOCKED | **PASS** | regulator 升级 → 案件级审查自动 pending → API Filed 四要素 → 详情 `filed + CPSC-TEST-2026-0044 + filedAt` |
+| TC-34 | BLOCKED | **PASS** | fraud/privacy 均 **未建审查**（escalations.reviewId=null，详情无 reportability）；开放期间 closed 422；凭据关闭后干净 |
+
+**本轮总计：新增 PASS 17 项。累计 PASS 26 项；剩余 SKIP/未建：TC-12（人工读屏/移动端）、TC-23/35（需 MANAGER 账号与 legacy key 凭据）、TC-28（`INCIDENT_ESCALATED_STATUS` 生产未开）、TC-50 实际投递（example.test 不可达）。第 9 节缺口清单（A17/A18/A23/A27/A28/A31–A35）不变，维持开放。**
+
+## R3. 新发现的缺陷与行为
+
+| # | 级别 | 描述 | 影响 |
+| --- | --- | --- | --- |
+| D1 | **P2** | 案件详情页的结案表单（"Close reportability review"）在部署版上**不渲染**——事故审查 pending 与案件级审查 pending 两种场景、ADMIN 会话下均不出现（bundle 中代码存在、条件含 `(incident?.reportability ?? reportability)?.status==='pending' && can('review.close')`，运行时未触发；原因未定位）。**案件级审查因此没有任何 UI 决策入口**（事故队列只列事故审查）——合规人员无法从控制台决定 A16 的案件级审查，只能走 API | A16 操作面缺口；建议排查渲染条件后单独修复 |
+| D2 | P3 | 事故队列结案弹窗把 outcome 切到 non-reportable 时**不清空默认报送日期**（及已填回执），请求携带 filedAt → 服务端按矛盾拒绝（该门禁本身工作正常）。操作者须改用 API 或先切 outcome 再刷新弹窗 | 交互瑕疵；建议 outcome 切换时清空 filedAt/filingEvidence 状态 |
+| N1 | 记录 | KOI-5C6Q 在审查决定后由 ADMIN 强制 closed（204）——此时其补偿仍为 requested。这与 ADR 一致（force 绕过流转顺序与补偿门禁，**不绕过**安全门禁），不是泄漏；但意味着 ADMIN 强制结案可以跳过补偿完成检查，是否合意值得产品确认 | 无 |
+| N2 | 记录 | 管理端会话在执行中途过期且 `koi_admin_session` 被清空，UI 侧自动续期后恢复；API 重放需改用 `session.token` 键名 | 运维备忘 |
+
+## R4. 诚实性声明（补充）
+
+- 本轮写入生产（演示活动）的案件 6 条 + TC-01 的 1 条；审查决策 4 次（filed ×2、non-reportable ×2，均虚构编号/依据）；升级 5 次（legal/regulator/fraud/privacy ×2）全部关闭或随案闭环；状态流转仅 KOI-KNQ9 全链与 KOI-5C6Q 强制 closed。无真实消费者数据接触。
+- D1 未深挖（bundle 静态分析到条件为止）；TC-23/35 仍需凭据；TC-12 建议人工执行。
+- 本记录不关闭原方案任何 A 项；"3.2.1 处理流程未实现"总项维持开放，但 A02/A04/A05/A06/A07/A09/A10/A12 部分/A13/A14/A15/A16/A20 的浏览器级证据现已齐备或部分齐备，可交合规/运营负责人做相应确认。
