@@ -139,3 +139,20 @@
 - 本轮写入生产（演示活动）的案件 6 条 + TC-01 的 1 条；审查决策 4 次（filed ×2、non-reportable ×2，均虚构编号/依据）；升级 5 次（legal/regulator/fraud/privacy ×2）全部关闭或随案闭环；状态流转仅 KOI-KNQ9 全链与 KOI-5C6Q 强制 closed。无真实消费者数据接触。
 - D1 未深挖（bundle 静态分析到条件为止）；TC-23/35 仍需凭据；TC-12 建议人工执行。
 - 本记录不关闭原方案任何 A 项；"3.2.1 处理流程未实现"总项维持开放，但 A02/A04/A05/A06/A07/A09/A10/A12 部分/A13/A14/A15/A16/A20 的浏览器级证据现已齐备或部分齐备，可交合规/运营负责人做相应确认。
+
+---
+
+# D1/D2 修复部署与复验 — 2026-09-30
+
+> 修复提交 admin `91e4505` 推送部署后（API docs 4 提交变基于同事的 `24b4fa1` 迁移回填修复后随推，`6d30a19`），浏览器复验全部通过。
+
+| 项 | 复验结果 | 证据 |
+| --- | --- | --- |
+| D1 表单渲染 | **PASS** | `KOI-LGBS-AMCGWSUG`（submitted + 审查 pending）：案件详情出现 "CLOSE REPORTABILITY REVIEW" 表单（此前同状态不渲染） |
+| D2 案件详情提交 | **PASS** | 切 outcome → non-reportable，填理由提交 → **204**；请求体仅 `{outcome, rationale}`，零 filing 残留（requestId `f2293dfb`）；审查状态变 documented non reportable |
+| D2 队列弹窗 onChange | **PASS** | KOI-VUL9 弹窗：切 non-reportable → 日期输入消失（状态清空）；切回 filed → 日期重置为今日 `2026-09-30` |
+| 队列 Filed 路径回归 | **PASS** | KOI-VUL9 四要素 Filed 提交 → 204，队列显示 FILED/Completed |
+
+KOI-VUL9 的审查由 pending 变为 filed（`CPSC-TEST-2026-0050`）——TC-27 的拒绝证据（requestId `17f99efe`）已在案，pending 夹具的消耗不影响既有记录。
+
+D1/D2 关闭。验收状态回到 R2 表 + 第 9 节缺口清单：剩余开放项为 TC-12（人工读屏/移动端）、TC-28（等 escalated 开关）、TC-23/35（需凭据）、A17/A18/A23/A27/A28/A31–A35（未建）。
