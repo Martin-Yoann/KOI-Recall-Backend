@@ -22,6 +22,8 @@
  * An earlier stage passing says nothing about a later one. That is the point.
  */
 
+import { HttpProblemError, problemType } from '../../shared/errors.js';
+
 export type DisposalApprovalMaterial =
   | 'recall_expectation_letter'
   | 'cap_or_written_coordination'
@@ -315,10 +317,16 @@ export function canIssueAuthorization(state: DisposalPolicyState): boolean {
 
 /**
  * Declares the invariant as an exception so the service cannot forget it. The
- * message names the specific unmet precondition, which is what makes a 500 from
- * a missed gate actionable rather than mysterious.
+ * message names the specific unmet precondition, and the problem body carries
+ * it as a 409 Conflict — the request is well-formed but collides with the
+ * task's current workflow state, so the operator sees which gate refused
+ * instead of an opaque 500.
  */
-export class DisposalGateViolationError extends Error {
+export class DisposalGateViolationError extends HttpProblemError {
+  readonly status = 409;
+  readonly type = problemType('conflict');
+  readonly title = 'Conflict';
+
   constructor(public readonly reason: DisposalBlockingReason) {
     super(`Disposal authorization was refused: ${reason}.`);
     this.name = 'DisposalGateViolationError';
