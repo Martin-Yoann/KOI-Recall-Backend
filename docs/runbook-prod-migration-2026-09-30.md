@@ -148,10 +148,25 @@ https://koi-recall-web.vercel.app, https://koi-recall-admin.vercel.app`,并 `ver
 - **修复**:`17338ef fix(disposal): a refused authorization gate reads as 409 conflict, not 500` —
   该错误改为继承 `HttpProblemError`(409 Conflict,type=`…/conflict`,detail 携带被拒门禁原因),
   `instanceof` 与 `.reason` 不变,33 个 policy 单测全过,typecheck/lint 干净。部署后生产验证:
-  ```
-  POST /admin/disposal-tasks/{taskId}/authorization
-  → 409 {"type":"…/conflict","detail":"Disposal authorization was refused: evidence_not_submitted."}
-  ```
+```
+POST /admin/disposal-tasks/{taskId}/authorization
+→ 409 {"type":"…/conflict","detail":"Disposal authorization was refused: evidence_not_submitted."}
+```
+
+## 4g. 批次验收 → 发授权 全流程(已验证 ✓)
+
+用测试案件把此前只到"409"的链路走完:
+
+| 步骤 | 调用 | 结果 |
+|---|---|---|
+| 批次验收 | `POST /admin/disposal-batches/{batchId}/review`(decision=accepted) | 204;批次 review_status=**accepted** |
+| 门禁复核 | `GET /admin/disposal-tasks/{taskId}` | blockingReasons=[];allowedActions 出现 **disposal.issue_authorization** |
+| 发授权 | `POST /admin/disposal-tasks/{taskId}/authorization` | **201** {authorizationId: 7faba280…, status: active};覆盖已确认产品 ×1 |
+| 消费者可见 | 处置页(Refresh status 后) | photos=**Accepted by our team**;**Permission to dispose: Given**;声明按钮激活 |
+
+> 同一条 authorization 路径先 409(批次未验收)→ 验收后 201——409 修复的完整闭环。
+> 消费者页初始加载可能命中 Data Cache 旧状态,页面自带 "Refresh status" 即时拉新(设计如此)。
+> 剩余未验证步骤:消费者声明完成(`disposal.declare_completion`,页面按钮已可用)。
 - 测试案件 KOI-XGNW-GUA7VWXK 的处置任务已推进到"证据待审"状态(演示数据),供管理端复核流程使用。
 
 ## 5. 命令清单(可复现)
