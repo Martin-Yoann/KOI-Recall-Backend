@@ -129,8 +129,8 @@
 
 | # | 级别 | 描述 | 影响 |
 | --- | --- | --- | --- |
-| D1 | **P2** | 案件详情页的结案表单（"Close reportability review"）在部署版上**不渲染**——事故审查 pending 与案件级审查 pending 两种场景、ADMIN 会话下均不出现（bundle 中代码存在、条件含 `(incident?.reportability ?? reportability)?.status==='pending' && can('review.close')`，运行时未触发；原因未定位）。**案件级审查因此没有任何 UI 决策入口**（事故队列只列事故审查）——合规人员无法从控制台决定 A16 的案件级审查，只能走 API | A16 操作面缺口；建议排查渲染条件后单独修复 |
-| D2 | P3 | 事故队列结案弹窗把 outcome 切到 non-reportable 时**不清空默认报送日期**（及已填回执），请求携带 filedAt → 服务端按矛盾拒绝（该门禁本身工作正常）。操作者须改用 API 或先切 outcome 再刷新弹窗 | 交互瑕疵；建议 outcome 切换时清空 filedAt/filingEvidence 状态 |
+| D1 | **P2** | ~~案件详情页的结案表单不渲染~~ **已定位并修复（admin 提交 `91e4505`，待推送部署）**：根因是表单嵌在 Closure Checklist 卡内，而该卡有 `["approved","closure_review"].includes(status)` 门禁——submitted/triage/under_review 状态整卡不渲染。修复=表单移出为独立块（挂在 Escalations 面板之后），条件与状态解耦；案件级审查因此获得控制台决策入口 | 部署后浏览器复验 |
+| D2 | P3 | ~~队列结案弹窗切 outcome 不清空默认 filedAt~~ **已修复（同一提交）**：两处表单（队列弹窗+案件详情）payload 均按 `outcome === "filed"` 守卫 filing 事实，且切换 outcome 时清空 cpsc/date/evidence（切回 filed 时重置今天为默认值） | 部署后浏览器复验 |
 | N1 | 记录 | KOI-5C6Q 在审查决定后由 ADMIN 强制 closed（204）——此时其补偿仍为 requested。这与 ADR 一致（force 绕过流转顺序与补偿门禁，**不绕过**安全门禁），不是泄漏；但意味着 ADMIN 强制结案可以跳过补偿完成检查，是否合意值得产品确认 | 无 |
 | N2 | 记录 | 管理端会话在执行中途过期且 `koi_admin_session` 被清空，UI 侧自动续期后恢复；API 重放需改用 `session.token` 键名 | 运维备忘 |
 
