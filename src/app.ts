@@ -108,7 +108,7 @@ export function createApp(dependencies: AppDependencies = {}) {
     '*',
     cors({
       origin: (origin) => (config.allowedOrigins.includes(origin) ? origin : ''),
-      allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowMethods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowHeaders: [...CORS_ALLOW_HEADERS],
       exposeHeaders: [
         'ETag',

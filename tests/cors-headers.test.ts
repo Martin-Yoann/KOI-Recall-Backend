@@ -95,3 +95,22 @@ describe('the development upload header', () => {
     expect(CORS_ALLOW_HEADERS).toContain(DEV_BLOB_UPLOAD_TOKEN_HEADER);
   });
 });
+
+describe('Owner permission configuration CORS', () => {
+  it('permits browser PUT preflight from the admin origin', async () => {
+    const origin = 'https://admin.koiimprtinc.com';
+    const config = loadConfig({ CORS_ALLOWED_ORIGINS: origin });
+    const app = createApp({ config, registry: createDefaultRegistry(config) });
+    const response = await app.request('/admin/access', {
+      method: 'OPTIONS',
+      headers: {
+        Origin: origin,
+        'Access-Control-Request-Method': 'PUT',
+        'Access-Control-Request-Headers': 'authorization,content-type',
+      },
+    });
+    expect(response.status).toBe(204);
+    expect(response.headers.get('Access-Control-Allow-Origin')).toBe(origin);
+    expect(response.headers.get('Access-Control-Allow-Methods')?.split(',')).toContain('PUT');
+  });
+});
