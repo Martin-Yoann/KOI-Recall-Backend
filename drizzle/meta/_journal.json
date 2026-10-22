@@ -197,6 +197,13 @@
       "when": 1792577401488,
       "tag": "0028_configurable_access",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1792635296789,
+      "tag": "0029_custom_staff_roles",
+      "breakpoints": true
     }
   ]
 }

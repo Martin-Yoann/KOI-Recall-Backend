@@ -8,6 +8,7 @@ import type { AccessPolicy, AccessPolicySnapshot } from './access-policy.js';
  * populated only after a valid session token resolves.
  */
 export interface StaffPrincipal {
+  accessRoleIds?: string[] | null;
   isOwner?: boolean;
   permissions?: Permission[];
   userId: string;
@@ -18,6 +19,7 @@ export interface StaffPrincipal {
 }
 
 export interface StaffUser {
+  accessRoleIds?: string[] | null;
   isOwner?: boolean;
   id: string;
   email: string;
@@ -29,6 +31,7 @@ export interface StaffUser {
 }
 
 export interface CreateStaffUserInput {
+  accessRoleIds?: string[] | null;
   email: string;
   displayName: string;
   role: StaffRole;
@@ -36,6 +39,7 @@ export interface CreateStaffUserInput {
 }
 
 export interface UpdateStaffUserInput {
+  accessRoleIds?: string[] | null;
   role?: StaffRole;
   status?: 'active' | 'disabled';
   displayName?: string;
@@ -51,6 +55,7 @@ export interface SessionIssueResult {
 
 /** A resolved, usable session (the plaintext token is NOT included). */
 export interface ResolvedSession {
+  accessRoleIds?: string[] | null;
   isOwner?: boolean;
   permissions?: Permission[];
   userId: string;

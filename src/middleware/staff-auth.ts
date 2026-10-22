@@ -45,6 +45,7 @@ export function createStaffAuthMiddleware(deps: {
           userId: session.userId,
           ...(session.permissions ? { permissions: session.permissions } : {}),
           isOwner: session.isOwner ?? false,
+          accessRoleIds: session.accessRoleIds ?? null,
           sessionId: session.sessionId,
           role: session.role,
           displayName: session.displayName,

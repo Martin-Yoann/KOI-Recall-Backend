@@ -135,10 +135,19 @@ It does not create an account or change its password. On a fresh database, run
 `pnpm staff:bootstrap` to provision this reserved address with an interactive password.
 
 Apply migrations with `pnpm db:migrate` before deploying the updated backend and admin.
-The admin page `/access/permissions` allows the Owner to edit the grants and display
-names of the existing ADMIN, MANAGER, and COMPLIANCE role slots, and rename every
-permission. Internal role and permission identifiers remain stable. This release
-does not add arbitrary new role slots or executable permission identifiers.
+The admin page `/access/roles` lists built-in and custom roles, with a dedicated
+editor for names, descriptions, grouped permissions, and shared permission labels.
+The Owner can create, duplicate, edit, export, and remove unassigned custom roles.
+ADMIN, MANAGER, and COMPLIANCE remain built-in starter roles for existing accounts.
+Internal permission identifiers still correspond to executable backend capabilities.
+
+Migration `0029_custom_staff_roles` adds nullable `staff_users.access_role_ids`.
+A null value preserves the account's legacy role assignment; an explicit array
+assigns up to 20 roles, whose permissions are combined. An empty array grants no
+operational permissions. Unknown role IDs fail closed. Role assignment changes
+revoke existing sessions. Role deletion and assignments serialize on the policy
+row inside the admin transaction; a role assigned to any staff account cannot be
+deleted. Built-in starter roles and the sole Owner remain protected.
 
 `GET /admin/access` returns the current persisted policy, revision, and the caller's
 effective permissions. `PUT /admin/access` accepts `roles`, `permissionNames`, and

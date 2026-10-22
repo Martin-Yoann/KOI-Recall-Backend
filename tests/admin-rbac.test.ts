@@ -116,6 +116,8 @@ function makeStaffFake(): StaffService & {
         email: input.email,
         displayName: input.displayName,
         role: input.role,
+        accessRoleIds: input.accessRoleIds ?? null,
+        isOwner: input.email === OWNER_EMAIL,
         status: 'active',
         lastLoginAt: null,
         avatarDataUrl: null,
@@ -1439,10 +1441,12 @@ describe('Owner-managed configurable access', () => {
       const session = await resolve(token);
       if (!session) return null;
       const isOwner = session.email === OWNER_EMAIL;
+      const user = staff.users.get(session.userId);
       return {
         ...session,
+        accessRoleIds: user?.accessRoleIds ?? null,
         isOwner,
-        permissions: effectivePermissions(policy, session.role, isOwner),
+        permissions: effectivePermissions(policy, session.role, isOwner, user?.accessRoleIds),
       };
     };
     for (const [email, role] of [
@@ -1607,5 +1611,47 @@ describe('Owner-managed configurable access', () => {
         })
       ).status,
     ).toBe(422);
+  });
+  it('creates a custom role, assigns it to a user, and authorizes its actual capabilities', async () => {
+    const { app, staff, headers, audit } = await fixture();
+    const owner = await headers(OWNER_EMAIL);
+    const policy = { ...defaultAccessPolicy(), revision: 1 };
+    policy.roles.role_support = {
+      name: 'Support specialist',
+      description: 'Reads recall cases',
+      permissions: ['case.queue.read'],
+    };
+    const saved = await app.request('/admin/access', {
+      method: 'PUT',
+      headers: owner,
+      body: JSON.stringify(policy),
+    });
+    expect(saved.status).toBe(200);
+    expect(audit.events).toContainEqual(
+      expect.objectContaining({ action: 'access.role.create', resourceId: 'role_support' }),
+    );
+    const worker = [...staff.users.values()].find((user) => user.email === 'worker@example.com')!;
+    const assigned = await app.request(`/admin/staff/${worker.id}`, {
+      method: 'PATCH',
+      headers: owner,
+      body: JSON.stringify({ accessRoleIds: ['role_support'] }),
+    });
+    expect(assigned.status).toBe(200);
+    const session = await headers(worker.email);
+    expect((await app.request('/admin/cases', { headers: session })).status).toBe(200);
+    expect((await app.request('/admin/staff', { headers: session })).status).toBe(403);
+    const invalid = await app.request(`/admin/staff/${worker.id}`, {
+      method: 'PATCH',
+      headers: owner,
+      body: JSON.stringify({ accessRoleIds: ['role_missing'] }),
+    });
+    expect(invalid.status).toBe(422);
+    expect((await app.request('/admin/access', { headers: session })).status).toBe(200);
+    await app.request(`/admin/staff/${worker.id}`, {
+      method: 'PATCH',
+      headers: owner,
+      body: JSON.stringify({ accessRoleIds: [] }),
+    });
+    expect((await app.request('/admin/cases', { headers: session })).status).toBe(403);
   });
 });

@@ -10,6 +10,7 @@ import type { AuditService } from '../modules/staff/audit-service.js';
 import type { CampaignApproval } from '../modules/campaigns/service.js';
 import {
   accessPolicySchema,
+  accessRoleIdsSchema,
   effectivePermissions,
   OWNER_EMAIL,
 } from '../modules/staff/access-policy.js';
@@ -176,7 +177,7 @@ export function registerAdminRoutes(
     return (
       !target ||
       (!target.isOwner &&
-        policy.roles[target.role].permissions.every((permission) =>
+        effectivePermissions(policy, target.role, false, target.accessRoleIds).every((permission) =>
           principalHasPermission(actor, permission),
         ))
     );
@@ -220,12 +221,14 @@ export function registerAdminRoutes(
         avatarDataUrl: profile?.avatarDataUrl ?? null,
         role: profile?.role ?? 'MANAGER',
         isOwner: profile?.isOwner ?? false,
+        accessRoleIds: profile?.accessRoleIds ?? null,
         ...(profile && staff.getAccessPolicy
           ? {
               permissions: effectivePermissions(
                 await staff.getAccessPolicy(),
                 profile.role,
                 profile.isOwner ?? false,
+                profile.accessRoleIds,
               ),
             }
           : {}),
@@ -374,6 +377,7 @@ export function registerAdminRoutes(
         displayName: principal.displayName,
         role: principal.role,
         isOwner: principal.isOwner ?? false,
+        accessRoleIds: principal.accessRoleIds ?? null,
         permissions: principal.permissions ?? [],
       },
       200,
@@ -390,7 +394,12 @@ export function registerAdminRoutes(
     return context.json({
       ...policy,
       isOwner: principal.isOwner ?? false,
-      permissions: effectivePermissions(policy, principal.role, principal.isOwner ?? false),
+      permissions: effectivePermissions(
+        policy,
+        principal.role,
+        principal.isOwner ?? false,
+        principal.accessRoleIds,
+      ),
     });
   });
 
@@ -429,21 +438,27 @@ export function registerAdminRoutes(
       const before = await staff.getAccessPolicy();
       const updated = await staff.updateAccessPolicy(parsed.data, Number(body.revision));
       // Keep each before/after value in a separate bounded audit field.
-      for (const role of STAFF_ROLES) {
+      for (const role of new Set([...Object.keys(before.roles), ...Object.keys(updated.roles)])) {
         if (JSON.stringify(before.roles[role]) !== JSON.stringify(updated.roles[role])) {
           await audit.record({
             actorUserId: principal.userId,
             actorRole: principal.role,
-            action: 'access.role.update',
+            action: !before.roles[role]
+              ? 'access.role.create'
+              : !updated.roles[role]
+                ? 'access.role.delete'
+                : 'access.role.update',
             resourceType: 'permission',
             resourceId: role,
             outcome: 'success',
             metadata: {
               role,
-              beforeName: before.roles[role].name,
-              afterName: updated.roles[role].name,
-              beforePermissions: before.roles[role].permissions,
-              afterPermissions: updated.roles[role].permissions,
+              beforeName: before.roles[role]?.name ?? null,
+              beforeDescription: before.roles[role]?.description ?? null,
+              afterName: updated.roles[role]?.name ?? null,
+              afterDescription: updated.roles[role]?.description ?? null,
+              beforePermissions: before.roles[role]?.permissions ?? [],
+              afterPermissions: updated.roles[role]?.permissions ?? [],
             },
           });
         }
@@ -493,7 +508,16 @@ export function registerAdminRoutes(
     const email = asString(body.email);
     const password = asString(body.password);
     const displayName = asString(body.displayName);
-    const role = asString(body.role);
+    const role = asString(body.role) ?? (body.accessRoleIds !== undefined ? 'MANAGER' : undefined);
+    const roleIdsResult =
+      body.accessRoleIds !== undefined ? accessRoleIdsSchema.safeParse(body.accessRoleIds) : null;
+    if (roleIdsResult && !roleIdsResult.success)
+      return validationError(
+        context,
+        'accessRoleIds must contain at most 20 unique role identifiers.',
+      );
+    const accessRoleIds = roleIdsResult?.success ? roleIdsResult.data : undefined;
+
     if (!email || !password || !displayName || !role) {
       return validationError(context, 'email, displayName, role, and password are required.');
     }
@@ -506,11 +530,14 @@ export function registerAdminRoutes(
     if (password.length < 12 || password.length > 1024) {
       return validationError(context, 'password must contain between 12 and 1024 characters.');
     }
-    if (!guard.isOwner && registry.services.staff?.getAccessPolicy) {
+    if (registry.services.staff?.getAccessPolicy) {
       const policy = await registry.services.staff.getAccessPolicy();
+      if (accessRoleIds?.some((id) => !Object.hasOwn(policy.roles, id)))
+        return validationError(context, 'One or more selected roles no longer exist.');
       if (
+        !guard.isOwner &&
         role &&
-        policy.roles[role].permissions.some(
+        effectivePermissions(policy, role, false, accessRoleIds).some(
           (permission) => !principalHasPermission(guard, permission),
         )
       ) {
@@ -522,7 +549,13 @@ export function registerAdminRoutes(
       }
     }
     const created = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
-      const user = await staff.createStaffUser({ email, displayName, role, password });
+      const user = await staff.createStaffUser({
+        email,
+        displayName,
+        role,
+        password,
+        ...(accessRoleIds !== undefined ? { accessRoleIds } : {}),
+      });
       await audit.record({
         actorUserId: guard.userId,
         actorRole: guard.role,
@@ -542,6 +575,15 @@ export function registerAdminRoutes(
     const userId = context.req.param('id');
     const body = await bodyRecord(context);
     const role = asString(body.role);
+    const roleIdsResult =
+      body.accessRoleIds !== undefined ? accessRoleIdsSchema.safeParse(body.accessRoleIds) : null;
+    if (roleIdsResult && !roleIdsResult.success)
+      return validationError(
+        context,
+        'accessRoleIds must contain at most 20 unique role identifiers.',
+      );
+    const accessRoleIds = roleIdsResult?.success ? roleIdsResult.data : undefined;
+
     const status = asString(body.status);
     const displayName = asString(body.displayName);
     if (role !== undefined && !isStaffRole(role)) {
@@ -550,22 +592,33 @@ export function registerAdminRoutes(
     if (status !== undefined && !isStaffUserStatus(status)) {
       return validationError(context, 'status is invalid.');
     }
-    if (role === undefined && status === undefined && displayName === undefined) {
+    if (
+      role === undefined &&
+      accessRoleIds === undefined &&
+      status === undefined &&
+      displayName === undefined
+    ) {
       return validationError(context, 'At least one staff field must be supplied.');
     }
-    if (!guard.isOwner && registry.services.staff?.getAccessPolicy) {
+    if (registry.services.staff?.getAccessPolicy) {
       const policy = await registry.services.staff.getAccessPolicy();
       const target = (await registry.services.staff.listStaff()).find((user) => user.id === userId);
+      if (accessRoleIds?.some((id) => !Object.hasOwn(policy.roles, id)))
+        return validationError(context, 'One or more selected roles no longer exist.');
       if (
-        target?.isOwner ||
-        (target &&
-          policy.roles[target.role].permissions.some(
-            (permission) => !principalHasPermission(guard, permission),
-          )) ||
-        (role &&
-          policy.roles[role].permissions.some(
-            (permission) => !principalHasPermission(guard, permission),
-          ))
+        !guard.isOwner &&
+        (target?.isOwner ||
+          (target &&
+            effectivePermissions(policy, target.role, false, target.accessRoleIds).some(
+              (permission) => !principalHasPermission(guard, permission),
+            )) ||
+          ((role !== undefined || accessRoleIds !== undefined) &&
+            effectivePermissions(
+              policy,
+              role ?? target?.role ?? 'MANAGER',
+              false,
+              accessRoleIds,
+            ).some((permission) => !principalHasPermission(guard, permission))))
       ) {
         return json(context, 403, {
           title: 'Forbidden',
@@ -578,6 +631,7 @@ export function registerAdminRoutes(
     const updated = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
       const user = await staff.updateStaffUser(userId, {
         ...(role !== undefined ? { role } : {}),
+        ...(accessRoleIds !== undefined ? { accessRoleIds } : {}),
         ...(status !== undefined ? { status } : {}),
         ...(displayName !== undefined ? { displayName } : {}),
       });
@@ -588,7 +642,11 @@ export function registerAdminRoutes(
         resourceType: 'user',
         resourceId: userId,
         outcome: 'success',
-        metadata: { role: user.role, status: user.status },
+        metadata: {
+          role: user.role,
+          status: user.status,
+          accessRoleIds: user.accessRoleIds ?? [user.role],
+        },
       });
       return user;
     });

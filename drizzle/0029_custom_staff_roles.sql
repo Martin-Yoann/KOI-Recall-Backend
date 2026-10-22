@@ -1,0 +1,1 @@
+ALTER TABLE "staff_users" ADD COLUMN "access_role_ids" jsonb;

@@ -59,6 +59,7 @@ export const staffUsers = pgTable(
     displayName: varchar('display_name', { length: 160 }).notNull(),
     role: staffRoleEnum('role').notNull(),
     isOwner: boolean('is_owner').notNull().default(false),
+    accessRoleIds: jsonb('access_role_ids').$type<string[] | null>(),
     status: staffUserStatusEnum('status').notNull().default('active'),
     /** Profile avatar as base64 data-URL (JPEG/PNG/WebP), max 512 KiB. Null = use initials fallback. */
     avatarDataUrl: text('avatar_data_url'),

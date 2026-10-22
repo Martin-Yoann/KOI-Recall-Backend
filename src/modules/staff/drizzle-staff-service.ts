@@ -18,6 +18,7 @@ import {
 } from '../../shared/errors.js';
 import {
   accessPolicySchema,
+  accessRoleIdsSchema,
   defaultAccessPolicy,
   effectivePermissions,
   OWNER_EMAIL,
@@ -43,6 +44,7 @@ import type {
 const toStaffUser = (row: typeof staffUsers.$inferSelect): StaffUser => ({
   id: row.id,
   isOwner: row.isOwner,
+  accessRoleIds: row.accessRoleIds,
   email: row.email,
   displayName: row.displayName,
   role: row.role,
@@ -83,6 +85,28 @@ export class DrizzleStaffService implements StaffService {
     expectedRevision: number,
   ): Promise<AccessPolicySnapshot> {
     const parsed = accessPolicySchema.parse(policy);
+    const [locked] = await this.db
+      .select()
+      .from(staffAccessPolicy)
+      .where(eq(staffAccessPolicy.id, 1))
+      .for('update');
+    if (!locked) throw new ClaimConflictError('Load role management before editing roles.');
+    const before = accessPolicySchema.parse(locked.policy);
+    const removedIds = Object.keys(before.roles).filter((id) => !Object.hasOwn(parsed.roles, id));
+    if (removedIds.length) {
+      const users = await this.listStaff();
+      if (
+        users.some(
+          (user) =>
+            !user.isOwner &&
+            (user.accessRoleIds ?? [user.role]).some((id) => removedIds.includes(id)),
+        )
+      ) {
+        throw new ClaimConflictError(
+          'This role is assigned to staff. Reassign those users before deleting it.',
+        );
+      }
+    }
     const [row] = await this.db
       .update(staffAccessPolicy)
       .set({
@@ -94,6 +118,23 @@ export class DrizzleStaffService implements StaffService {
       .returning();
     if (!row) throw new ClaimConflictError('The access policy changed. Reload before saving.');
     return { ...parsed, revision: row.revision };
+  }
+
+  private async validateAccessRoleIds(ids: string[]): Promise<string[]> {
+    const parsed = accessRoleIdsSchema.safeParse(ids);
+    if (!parsed.success)
+      throw new ClaimValidationError('Supply at most 20 unique, valid role identifiers.');
+    // Assignment and role deletion serialize on the policy row within adminTransactions.
+    const [row] = await this.db
+      .select()
+      .from(staffAccessPolicy)
+      .where(eq(staffAccessPolicy.id, 1))
+      .for('update');
+    if (!row) throw new ClaimConflictError('Load role management before assigning roles.');
+    const policy = accessPolicySchema.parse(row.policy);
+    if (ids.some((id) => !Object.hasOwn(policy.roles, id)))
+      throw new ClaimValidationError('One or more selected roles no longer exist.');
+    return parsed.data;
   }
 
   async login(
@@ -162,6 +203,7 @@ export class DrizzleStaffService implements StaffService {
         userId: staffUsers.id,
         role: staffUsers.role,
         isOwner: staffUsers.isOwner,
+        accessRoleIds: staffUsers.accessRoleIds,
         displayName: staffUsers.displayName,
         email: staffUsers.email,
         expiresAt: staffSessions.expiresAt,
@@ -178,7 +220,13 @@ export class DrizzleStaffService implements StaffService {
     return {
       userId: row.userId,
       isOwner: row.isOwner,
-      permissions: effectivePermissions(await this.getAccessPolicy(), row.role, row.isOwner),
+      permissions: effectivePermissions(
+        await this.getAccessPolicy(),
+        row.role,
+        row.isOwner,
+        row.accessRoleIds,
+      ),
+      accessRoleIds: row.accessRoleIds,
       sessionId: row.sessionId,
       role: row.role,
       displayName: row.displayName,
@@ -289,6 +337,8 @@ export class DrizzleStaffService implements StaffService {
   }
 
   async createStaffUser(input: CreateStaffUserInput): Promise<StaffUser> {
+    const accessRoleIds =
+      input.accessRoleIds != null ? await this.validateAccessRoleIds(input.accessRoleIds) : null;
     const lookupHash = await this.crypto.lookupHash(normalizeEmail(input.email));
     const passwordHash = await hashPassword(input.password);
     const [existing] = await this.db
@@ -306,6 +356,7 @@ export class DrizzleStaffService implements StaffService {
         displayName: input.displayName,
         role: normalizeEmail(input.email) === OWNER_EMAIL ? 'ADMIN' : input.role,
         isOwner: normalizeEmail(input.email) === OWNER_EMAIL,
+        accessRoleIds,
         status: 'active',
         passwordHash,
         passwordChangedAt: new Date(),
@@ -390,13 +441,19 @@ export class DrizzleStaffService implements StaffService {
       .from(staffUsers)
       .where(eq(staffUsers.id, userId))
       .limit(1);
-    if (target?.isOwner && (input.role !== undefined || input.status !== undefined)) {
+    if (
+      target?.isOwner &&
+      (input.role !== undefined || input.status !== undefined || input.accessRoleIds !== undefined)
+    ) {
       throw new ClaimConflictError('The Owner role and active status cannot be changed.');
     }
+    const accessRoleIds =
+      input.accessRoleIds != null ? await this.validateAccessRoleIds(input.accessRoleIds) : null;
     const updated = await this.db
       .update(staffUsers)
       .set({
-        ...(input.role !== undefined ? { role: input.role } : {}),
+        ...(input.role !== undefined ? { role: input.role, accessRoleIds: null } : {}),
+        ...(input.accessRoleIds !== undefined ? { accessRoleIds } : {}),
         ...(input.status !== undefined ? { status: input.status } : {}),
         ...(input.displayName !== undefined ? { displayName: input.displayName } : {}),
         ...(input.avatarDataUrl !== undefined ? { avatarDataUrl: input.avatarDataUrl } : {}),
@@ -407,7 +464,11 @@ export class DrizzleStaffService implements StaffService {
     if (!row) throw new ResourceNotFoundError('Staff user was not found.');
 
     // Role change or disable invalidates existing sessions (ADR-0004 §2.1).
-    if (input.role !== undefined || input.status === 'disabled') {
+    if (
+      input.role !== undefined ||
+      input.accessRoleIds !== undefined ||
+      input.status === 'disabled'
+    ) {
       await this.revokeAllSessions(userId);
     }
     return toStaffUser(row);
