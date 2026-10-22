@@ -124,3 +124,32 @@ Claim 的姓名、联系方式、地址、订单号、事故叙述和提交快�
 - `docs/phase-1/`：架构、数据库和 ToC 接口说明。
 
 带日期的 `docs/superpowers/specs/`、`docs/superpowers/plans/` 和带代码基线的优化计划保留其设计时点语境，不作为当前实现完成状态的证明。Claim/Case 口径以本节和 `CONTEXT.md` 为准。
+
+
+## Owner-managed staff permissions
+
+`admin@koi-platform.com` is the sole Owner. Migration `0028_configurable_access`
+promotes the matching existing account to active ADMIN + Owner, and installs a
+unique index and trigger that protect the Owner identity, role, and active status.
+It does not create an account or change its password. On a fresh database, run
+`pnpm staff:bootstrap` to provision this reserved address with an interactive password.
+
+Apply migrations with `pnpm db:migrate` before deploying the updated backend and admin.
+The admin page `/access/permissions` allows the Owner to edit the grants and display
+names of the existing ADMIN, MANAGER, and COMPLIANCE role slots, and rename every
+permission. Internal role and permission identifiers remain stable. This release
+does not add arbitrary new role slots or executable permission identifiers.
+
+`GET /admin/access` returns the current persisted policy, revision, and the caller's
+effective permissions. `PUT /admin/access` accepts `roles`, `permissionNames`, and
+`revision`, requires a real Owner session, and records before/after changes in the
+same transaction as the policy update. Stale saves return 409. The Owner always has
+all permissions independently of role grants; workflow overrides are Owner-only.
+Non-Owner staff managers cannot grant privileges beyond their own or manage a
+higher-privilege account. The legacy shared admin API key is rejected on the
+staff-backed deployment.
+
+Each protected request resolves permissions from the database, so revocations
+apply to existing sessions without another login. The frontend shares the server
+policy across controls and navigation, refreshes on focus and every 30 seconds,
+and immediately adopts a successful save.

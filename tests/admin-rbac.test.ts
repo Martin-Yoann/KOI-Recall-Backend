@@ -4,6 +4,14 @@ import { describe, expect, it } from 'vitest';
 import type { DisposalService } from '../src/modules/disposal/service.js';
 import { makeDisposalFake } from './helpers/disposal-fake.js';
 
+import {
+  accessPolicySchema,
+  defaultAccessPolicy,
+  effectivePermissions,
+  OWNER_EMAIL,
+  type AccessPolicySnapshot,
+} from '../src/modules/staff/access-policy.js';
+import { ClaimConflictError } from '../src/shared/errors.js';
 import { createApp } from '../src/app.js';
 import { createPlaceholderRegistry, type ApplicationRegistry } from '../src/composition.js';
 import { loadConfig } from '../src/config/env.js';
@@ -1411,5 +1419,193 @@ describe('B-end RBAC (ADR-0004)', () => {
     expect(recorded[0]!.actorUserId).toBe(compliance.id);
     expect(recorded[0]!.actorRole).toBe('COMPLIANCE');
     expect(recorded[0]!.outcome).toBe('success');
+  });
+});
+
+describe('Owner-managed configurable access', () => {
+  async function fixture() {
+    const staff = makeStaffFake();
+    const audit = makeAuditFake();
+    let policy: AccessPolicySnapshot = { ...defaultAccessPolicy(), revision: 1 };
+    staff.getAccessPolicy = () => Promise.resolve(structuredClone(policy));
+    staff.updateAccessPolicy = (next, revision) => {
+      if (revision !== policy.revision)
+        return Promise.reject(new ClaimConflictError('Reload before saving.'));
+      policy = { ...next, revision: revision + 1 };
+      return Promise.resolve(structuredClone(policy));
+    };
+    const resolve = staff.resolveSession.bind(staff);
+    staff.resolveSession = async (token) => {
+      const session = await resolve(token);
+      if (!session) return null;
+      const isOwner = session.email === OWNER_EMAIL;
+      return {
+        ...session,
+        isOwner,
+        permissions: effectivePermissions(policy, session.role, isOwner),
+      };
+    };
+    for (const [email, role] of [
+      [OWNER_EMAIL, 'ADMIN'],
+      ['other-admin@example.com', 'ADMIN'],
+      ['worker@example.com', 'MANAGER'],
+    ] as const) {
+      await staff.createStaffUser({ email, role, displayName: email, password: 'password1234' });
+    }
+    const headers = async (email: string) => ({
+      Authorization: `Bearer ${(await staff.login(email, 'password1234'))!.token}`,
+      'Content-Type': 'application/json',
+    });
+    return { app: appWith({ staff, audit, admin: makeAdminFake() }), staff, audit, headers };
+  }
+
+  it('changes actual authorization for an already-issued session and retains the Owner access', async () => {
+    const { app, headers } = await fixture();
+    const owner = await headers(OWNER_EMAIL);
+    const worker = await headers('worker@example.com');
+    const otherAdmin = await headers('other-admin@example.com');
+    expect((await app.request('/admin/cases', { headers: worker })).status).toBe(200);
+    const policy = (await (
+      await app.request('/admin/access', { headers: owner })
+    ).json()) as AccessPolicySnapshot;
+    policy.roles.MANAGER.permissions = [];
+    policy.roles.ADMIN.permissions = [];
+    policy.roles.MANAGER.name = '客服专员';
+    policy.permissionNames['case.assign'] = '分配工单';
+    const saved = await app.request('/admin/access', {
+      method: 'PUT',
+      headers: owner,
+      body: JSON.stringify(policy),
+    });
+    expect(saved.status).toBe(200);
+    expect(await saved.json()).toMatchObject({
+      revision: 2,
+      permissionNames: { 'case.assign': '分配工单' },
+    });
+    expect((await app.request('/admin/cases', { headers: worker })).status).toBe(403);
+    expect((await app.request('/admin/cases', { headers: otherAdmin })).status).toBe(403);
+    expect((await app.request('/admin/cases', { headers: owner })).status).toBe(200);
+  });
+
+  it('rejects policy edits by a non-Owner ADMIN and by the legacy shared key', async () => {
+    const { app, headers, audit } = await fixture();
+    const policy = { ...defaultAccessPolicy(), revision: 1 };
+    expect(
+      (await app.request('/admin/cases', { headers: { Authorization: `Bearer ${ADMIN_KEY}` } }))
+        .status,
+    ).toBe(401);
+    expect(
+      (
+        await app.request('/admin/access', {
+          method: 'PUT',
+          headers: await headers('other-admin@example.com'),
+          body: JSON.stringify(policy),
+        })
+      ).status,
+    ).toBe(403);
+    expect(audit.events).toContainEqual(
+      expect.objectContaining({ action: 'access.policy.update', outcome: 'denied' }),
+    );
+    expect(
+      (
+        await app.request('/admin/access', {
+          method: 'PUT',
+          headers: { Authorization: `Bearer ${ADMIN_KEY}` },
+          body: JSON.stringify(policy),
+        })
+      ).status,
+    ).toBe(401);
+  });
+
+  it('rejects invalid identifiers, blank names, missing names, and stale concurrent saves', async () => {
+    const { app, headers } = await fixture();
+    const owner = await headers(OWNER_EMAIL);
+    const put = (body: unknown) =>
+      app.request('/admin/access', { method: 'PUT', headers: owner, body: JSON.stringify(body) });
+    const policy = { ...defaultAccessPolicy(), revision: 1 };
+    expect(
+      (await put({ ...policy, permissionNames: { ...policy.permissionNames, unknown: 'Test' } }))
+        .status,
+    ).toBe(422);
+    expect(
+      accessPolicySchema.safeParse({ ...defaultAccessPolicy(), permissionNames: {} }).success,
+    ).toBe(false);
+    const blank = structuredClone(policy);
+    blank.permissionNames['case.assign'] = '   ';
+    expect((await put(blank)).status).toBe(422);
+    const invalid = structuredClone(policy);
+    invalid.roles.MANAGER.permissions.push('unknown' as never);
+    expect((await put(invalid)).status).toBe(422);
+    expect((await put(policy)).status).toBe(200);
+    expect((await put(policy)).status).toBe(409);
+  });
+
+  it('records before/after names and grants when updating the policy', async () => {
+    const { app, headers, audit } = await fixture();
+    const policy = { ...defaultAccessPolicy(), revision: 1 };
+    policy.roles.MANAGER.permissions = ['case.queue.read'];
+    policy.permissionNames['case.assign'] = '分配工单';
+    await app.request('/admin/access', {
+      method: 'PUT',
+      headers: await headers(OWNER_EMAIL),
+      body: JSON.stringify(policy),
+    });
+    expect(audit.events).toContainEqual(
+      expect.objectContaining({
+        action: 'access.role.update',
+        resourceId: 'MANAGER',
+        metadata: expect.objectContaining({ afterPermissions: ['case.queue.read'] }) as Record<
+          string,
+          unknown
+        >,
+      }),
+    );
+    expect(audit.events).toContainEqual(
+      expect.objectContaining({
+        action: 'access.permission.rename',
+        resourceId: 'case.assign',
+        metadata: { beforeName: 'Assign cases', afterName: '分配工单' },
+      }),
+    );
+  });
+
+  it('prevents delegated staff management from granting a stronger role or creating the reserved Owner', async () => {
+    const { app, headers } = await fixture();
+    const policy = { ...defaultAccessPolicy(), revision: 1 };
+    policy.roles.MANAGER.permissions = ['staff.manage'];
+    await app.request('/admin/access', {
+      method: 'PUT',
+      headers: await headers(OWNER_EMAIL),
+      body: JSON.stringify(policy),
+    });
+    const worker = await headers('worker@example.com');
+    expect(
+      (
+        await app.request('/admin/staff', {
+          method: 'POST',
+          headers: worker,
+          body: JSON.stringify({
+            email: 'new@example.com',
+            displayName: 'New',
+            role: 'ADMIN',
+            password: 'password1234',
+          }),
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      (
+        await app.request('/admin/staff', {
+          method: 'POST',
+          headers: worker,
+          body: JSON.stringify({
+            email: OWNER_EMAIL,
+            displayName: 'Owner',
+            role: 'ADMIN',
+            password: 'password1234',
+          }),
+        })
+      ).status,
+    ).toBe(422);
   });
 });

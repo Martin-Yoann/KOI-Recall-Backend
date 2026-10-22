@@ -1,6 +1,7 @@
 import 'dotenv/config';
 
 import { createInterface } from 'node:readline';
+import { OWNER_EMAIL } from '../src/modules/staff/access-policy.js';
 
 import { createDatabase } from '../src/db/client.js';
 import { loadConfig } from '../src/config/env.js';
@@ -9,12 +10,12 @@ import { promptSecret } from '../src/modules/staff/terminal-prompt.js';
 import { NodeSensitiveDataCrypto } from '../src/platform/crypto/node-sensitive-data-crypto.js';
 
 /**
- * Bootstraps the first `ADMIN` staff user. Run once per
+ * Bootstraps the sole Owner (admin@koi-platform.com). Run once per
  * fresh deployment before the B-end surface is usable:
  *
  *   pnpm staff:bootstrap
  *
- * Prompts interactively for email, display name, and password (password input
+ * Prompts interactively for display name and password (password input
  * is read from stdin — for CI, pipe via stdin). Idempotent: exits 0 if the
  * email already exists (no duplicate created).
  *
@@ -43,7 +44,8 @@ async function main() {
     );
   }
 
-  const email = await prompt('ADMIN email: ');
+  const email = OWNER_EMAIL;
+  process.stdout.write(`Provisioning sole Owner: ${email}\n`);
   if (!email.includes('@')) {
     throw new Error('That does not look like an email address.');
   }
@@ -71,7 +73,7 @@ async function main() {
     password,
   });
   process.stdout.write(
-    `Created ADMIN ${created.email} (id ${created.id}). You can now log in at /admin/sessions.\n`,
+    `Created Owner ${created.email} (id ${created.id}). You can now log in at /admin/sessions.\n`,
   );
   await handle.close();
 }

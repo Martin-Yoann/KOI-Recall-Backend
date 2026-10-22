@@ -418,6 +418,7 @@ export interface GetCaseDetailInput {
   caseReference: string;
   /** The resolved role of the viewer — gates `piiLevel: 'raw'` requests. */
   viewerRole: StaffRole;
+  viewerPermissions?: readonly string[];
   /**
    * Requested PII tier. Detail reads are masked unless the caller explicitly
    * asks for raw; a raw request is honored only when `viewerRole` holds the

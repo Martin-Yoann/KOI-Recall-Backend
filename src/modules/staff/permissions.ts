@@ -1,27 +1,4 @@
-/**
- * Fixed-role RBAC for the internal-operations (B-end) surface (ADR-0004 §2.2).
- *
- * Roles are a closed enum; the role→permission mapping is hardcoded and not
- * configurable at runtime. Permissions are `resource:action` verbs.
- *
- * Three roles, split by what they are accountable for rather than by seniority:
- *   ADMIN       — everything, plus staff administration.
- *   MANAGER     — business operations: queue, case work, status transitions.
- *   COMPLIANCE  — safety oversight: reads cases and closes reportability
- *                 reviews, but does NOT drive case status.
- *
- * `review.close` is deliberately held only by COMPLIANCE and ADMIN. It is the
- * regulatory sign-off on a safety incident, so it does not belong to the
- * operations role that also moves the case through its workflow — separating
- * the two keeps a single operator from both deciding a case and signing off the
- * safety review behind it.
- *
- * The three `disposal.*` permissions follow the same split. They decide whether
- * a consumer may be told to destroy a recalled product, which rests on
- * regulatory material and on photo evidence, so they belong to safety oversight
- * rather than to operations. MANAGER holds none of them: a new permission must
- * be granted explicitly, never inherited by the role that happens to work cases.
- */
+/** Permission identifiers and initial role grants. Runtime requests use the database access policy. */
 
 export type StaffRole = 'ADMIN' | 'MANAGER' | 'COMPLIANCE';
 

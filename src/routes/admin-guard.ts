@@ -61,7 +61,8 @@ export async function requirePermission(
     return unauthorized(context);
   }
   if (context.get('legacyAdminKey')) {
-    if (!options.allowLegacy) return unauthorized(context);
+    if (!options.allowLegacy || registry.services.staff?.getAccessPolicy)
+      return unauthorized(context);
     consoleSafeLogger.info('Deprecated legacy admin key used.', {
       requestId: context.get('requestId'),
       method: context.req.method,
@@ -69,7 +70,7 @@ export async function requirePermission(
     });
     return principal;
   }
-  if (!hasPermission(principal.role, permission)) {
+  if (!principalHasPermission(principal, permission)) {
     const audit = requireAuditService(registry);
     await audit.record({
       actorUserId: principal.userId,
@@ -97,4 +98,13 @@ export function requireAdminTransactions(registry: ApplicationRegistry): AdminTr
   const transactions = registry.services.adminTransactions;
   if (!transactions) throw new NotImplementedServiceError('Transactional admin operations');
   return transactions;
+}
+
+export function principalHasPermission(principal: StaffPrincipal, permission: Permission): boolean {
+  return (
+    principal.isOwner === true ||
+    (principal.permissions !== undefined
+      ? principal.permissions.includes(permission)
+      : hasPermission(principal.role, permission))
+  );
 }

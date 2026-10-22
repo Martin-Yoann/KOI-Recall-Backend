@@ -43,6 +43,8 @@ export function createStaffAuthMiddleware(deps: {
       if (session) {
         context.set('principal', {
           userId: session.userId,
+          ...(session.permissions ? { permissions: session.permissions } : {}),
+          isOwner: session.isOwner ?? false,
           sessionId: session.sessionId,
           role: session.role,
           displayName: session.displayName,

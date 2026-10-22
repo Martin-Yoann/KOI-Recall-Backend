@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm';
+import type { AccessPolicy } from '../../modules/staff/access-policy.js';
 import {
   check,
+  boolean,
   index,
   integer,
   jsonb,
@@ -18,11 +20,7 @@ const timestamps = {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
 };
 
-/**
- * Fixed staff roles (ADR-0004 §2.2). The role→permission mapping is hardcoded
- * in `src/modules/staff/permissions.ts`; the enum is deliberately not a
- * free-form string so the matrix stays closed.
- */
+/** Stable role identifiers; display names and permission grants live in staff_access_policy. */
 export const staffRoleEnum = pgEnum('staff_role', ['ADMIN', 'MANAGER', 'COMPLIANCE']);
 
 /**
@@ -60,6 +58,7 @@ export const staffUsers = pgTable(
     email: text('email').notNull(),
     displayName: varchar('display_name', { length: 160 }).notNull(),
     role: staffRoleEnum('role').notNull(),
+    isOwner: boolean('is_owner').notNull().default(false),
     status: staffUserStatusEnum('status').notNull().default('active'),
     /** Profile avatar as base64 data-URL (JPEG/PNG/WebP), max 512 KiB. Null = use initials fallback. */
     avatarDataUrl: text('avatar_data_url'),
@@ -71,7 +70,27 @@ export const staffUsers = pgTable(
     lockedUntil: timestamp('locked_until', { withTimezone: true, mode: 'date' }),
     ...timestamps,
   },
-  (table) => [uniqueIndex('staff_users_email_lookup_hash_uidx').on(table.emailLookupHash)],
+  (table) => [
+    uniqueIndex('staff_users_email_lookup_hash_uidx').on(table.emailLookupHash),
+    uniqueIndex('staff_users_single_owner_uidx')
+      .on(table.isOwner)
+      .where(sql`${table.isOwner} = true`),
+    check(
+      'staff_users_owner_identity_chk',
+      sql`NOT ${table.isOwner} OR (lower(trim(${table.email})) = 'admin@koi-platform.com' AND ${table.status} = 'active' AND ${table.role} = 'ADMIN')`,
+    ),
+  ],
+);
+
+export const staffAccessPolicy = pgTable(
+  'staff_access_policy',
+  {
+    id: integer('id').primaryKey().default(1),
+    policy: jsonb('policy').$type<AccessPolicy>().notNull(),
+    revision: integer('revision').notNull().default(1),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => [check('staff_access_policy_singleton_chk', sql`${table.id} = 1`)],
 );
 
 export const staffSessions = pgTable(

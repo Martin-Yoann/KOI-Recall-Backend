@@ -36,9 +36,13 @@
  *   word, not caller prose.
  */
 export const AUDIT_METADATA_KEYS = [
+  'afterName',
+  'afterPermissions',
   'assignee',
   'authorizationId',
   'authorizesConsumerDisposal',
+  'beforeName',
+  'beforePermissions',
   'campaignProductId',
   'campaignVersionId',
   'caseReference',

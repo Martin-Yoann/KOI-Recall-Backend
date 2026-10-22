@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, ne, sql } from 'drizzle-orm';
 
 import type { DatabaseExecutor } from '../../db/client.js';
 import {
@@ -6,6 +6,7 @@ import {
   caseResolutions,
   recallCases,
   refundExportBatches,
+  staffAccessPolicy,
   staffSessions,
   staffUsers,
 } from '../../db/schema/index.js';
@@ -15,6 +16,14 @@ import {
   ClaimValidationError,
   ResourceNotFoundError,
 } from '../../shared/errors.js';
+import {
+  accessPolicySchema,
+  defaultAccessPolicy,
+  effectivePermissions,
+  OWNER_EMAIL,
+  type AccessPolicy,
+  type AccessPolicySnapshot,
+} from './access-policy.js';
 import { hashPassword, verifyPassword } from './password.js';
 import {
   DEFAULT_SESSION_LIFETIME_MS,
@@ -33,6 +42,7 @@ import type {
 
 const toStaffUser = (row: typeof staffUsers.$inferSelect): StaffUser => ({
   id: row.id,
+  isOwner: row.isOwner,
   email: row.email,
   displayName: row.displayName,
   role: row.role,
@@ -54,6 +64,37 @@ export class DrizzleStaffService implements StaffService {
     private readonly db: DatabaseExecutor,
     private readonly crypto: SensitiveDataCryptoPort,
   ) {}
+
+  async getAccessPolicy(): Promise<AccessPolicySnapshot> {
+    let [row] = await this.db.select().from(staffAccessPolicy).where(eq(staffAccessPolicy.id, 1));
+    if (!row) {
+      await this.db
+        .insert(staffAccessPolicy)
+        .values({ id: 1, policy: defaultAccessPolicy() })
+        .onConflictDoNothing();
+      [row] = await this.db.select().from(staffAccessPolicy).where(eq(staffAccessPolicy.id, 1));
+    }
+    if (!row) throw new Error('Access policy is missing.');
+    return { ...accessPolicySchema.parse(row.policy), revision: row.revision };
+  }
+
+  async updateAccessPolicy(
+    policy: AccessPolicy,
+    expectedRevision: number,
+  ): Promise<AccessPolicySnapshot> {
+    const parsed = accessPolicySchema.parse(policy);
+    const [row] = await this.db
+      .update(staffAccessPolicy)
+      .set({
+        policy: parsed,
+        revision: sql`${staffAccessPolicy.revision} + 1`,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(staffAccessPolicy.id, 1), eq(staffAccessPolicy.revision, expectedRevision)))
+      .returning();
+    if (!row) throw new ClaimConflictError('The access policy changed. Reload before saving.');
+    return { ...parsed, revision: row.revision };
+  }
 
   async login(
     email: string,
@@ -120,6 +161,7 @@ export class DrizzleStaffService implements StaffService {
         sessionId: staffSessions.id,
         userId: staffUsers.id,
         role: staffUsers.role,
+        isOwner: staffUsers.isOwner,
         displayName: staffUsers.displayName,
         email: staffUsers.email,
         expiresAt: staffSessions.expiresAt,
@@ -135,6 +177,8 @@ export class DrizzleStaffService implements StaffService {
     if (row.expiresAt.getTime() <= Date.now()) return null;
     return {
       userId: row.userId,
+      isOwner: row.isOwner,
+      permissions: effectivePermissions(await this.getAccessPolicy(), row.role, row.isOwner),
       sessionId: row.sessionId,
       role: row.role,
       displayName: row.displayName,
@@ -260,7 +304,8 @@ export class DrizzleStaffService implements StaffService {
         email: normalizeEmail(input.email),
         emailLookupHash: lookupHash,
         displayName: input.displayName,
-        role: input.role,
+        role: normalizeEmail(input.email) === OWNER_EMAIL ? 'ADMIN' : input.role,
+        isOwner: normalizeEmail(input.email) === OWNER_EMAIL,
         status: 'active',
         passwordHash,
         passwordChangedAt: new Date(),
@@ -281,11 +326,13 @@ export class DrizzleStaffService implements StaffService {
     }
 
     const [target] = await this.db
-      .select({ id: staffUsers.id, role: staffUsers.role })
+      .select({ id: staffUsers.id, role: staffUsers.role, isOwner: staffUsers.isOwner })
       .from(staffUsers)
       .where(eq(staffUsers.id, userId))
       .limit(1);
     if (!target) throw new ResourceNotFoundError('Staff user was not found.');
+
+    if (target.isOwner) throw new ClaimConflictError('The Owner account cannot be deleted.');
 
     if (target.role === 'ADMIN') {
       const admins = await this.db
@@ -338,6 +385,14 @@ export class DrizzleStaffService implements StaffService {
   }
 
   async updateStaffUser(userId: string, input: UpdateStaffUserInput): Promise<StaffUser> {
+    const [target] = await this.db
+      .select({ isOwner: staffUsers.isOwner })
+      .from(staffUsers)
+      .where(eq(staffUsers.id, userId))
+      .limit(1);
+    if (target?.isOwner && (input.role !== undefined || input.status !== undefined)) {
+      throw new ClaimConflictError('The Owner role and active status cannot be changed.');
+    }
     const updated = await this.db
       .update(staffUsers)
       .set({

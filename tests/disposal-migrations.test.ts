@@ -20,6 +20,9 @@ import { describe, expect, it } from 'vitest';
 
 /** `0017_curvy_nehzno.sql` is the first migration of the disposal feature. */
 const FIRST_DISPOSAL_MIGRATION = 17;
+// This independent identity/access migration intentionally promotes the designated
+// staff Owner. D22 constrains disposal rollout data, not later staff administration.
+const NON_DISPOSAL_MIGRATIONS = new Set(['0028_configurable_access.sql']);
 
 interface Migration {
   file: string;
@@ -56,7 +59,12 @@ async function featureMigrations(): Promise<Migration[]> {
   const files = (await readdir('drizzle')).filter((file) => file.endsWith('.sql'));
   const selected = files
     .map((file) => ({ file, number: Number.parseInt(file.slice(0, 4), 10) }))
-    .filter(({ number }) => Number.isFinite(number) && number >= FIRST_DISPOSAL_MIGRATION)
+    .filter(
+      ({ file, number }) =>
+        Number.isFinite(number) &&
+        number >= FIRST_DISPOSAL_MIGRATION &&
+        !NON_DISPOSAL_MIGRATIONS.has(file),
+    )
     .sort((left, right) => left.file.localeCompare(right.file));
 
   const loaded = await Promise.all(

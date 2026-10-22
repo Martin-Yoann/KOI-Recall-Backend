@@ -644,7 +644,14 @@ export class DrizzleAdminService implements AdminService {
     // Fail closed: raw PII only on an explicit raw request from a role that
     // holds the raw-PII permission. Every honored raw read is audited by the
     // route as `pii.view_raw`.
-    const tier = input.piiLevel === 'raw' ? piiTierFor(input.viewerRole) : 'masked';
+    const tier =
+      input.piiLevel === 'raw'
+        ? input.viewerPermissions !== undefined
+          ? input.viewerPermissions.includes('case.detail.read_pii_raw')
+            ? 'raw'
+            : 'masked'
+          : piiTierFor(input.viewerRole)
+        : 'masked';
     const consumer = consumerRow
       ? await this.renderConsumer(consumerRow, tier)
       : ({ piiTier: tier } as CaseDetailConsumer);

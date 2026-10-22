@@ -1,4 +1,6 @@
 import type { StaffRole } from './permissions.js';
+import type { Permission } from './permissions.js';
+import type { AccessPolicy, AccessPolicySnapshot } from './access-policy.js';
 
 /**
  * The resolved staff principal attached to a request by staff-auth middleware
@@ -6,6 +8,8 @@ import type { StaffRole } from './permissions.js';
  * populated only after a valid session token resolves.
  */
 export interface StaffPrincipal {
+  isOwner?: boolean;
+  permissions?: Permission[];
   userId: string;
   sessionId: string;
   role: StaffRole;
@@ -14,6 +18,7 @@ export interface StaffPrincipal {
 }
 
 export interface StaffUser {
+  isOwner?: boolean;
   id: string;
   email: string;
   displayName: string;
@@ -46,6 +51,8 @@ export interface SessionIssueResult {
 
 /** A resolved, usable session (the plaintext token is NOT included). */
 export interface ResolvedSession {
+  isOwner?: boolean;
+  permissions?: Permission[];
   userId: string;
   sessionId: string;
   role: StaffRole;
@@ -61,6 +68,11 @@ export interface ResolvedSession {
  * hash is stored.
  */
 export interface StaffService {
+  getAccessPolicy?(): Promise<AccessPolicySnapshot>;
+  updateAccessPolicy?(
+    policy: AccessPolicy,
+    expectedRevision: number,
+  ): Promise<AccessPolicySnapshot>;
   /** Authenticate by email + password, issuing a new session. Returns null on bad credentials / disabled user. */
   login(
     email: string,

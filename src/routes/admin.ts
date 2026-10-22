@@ -8,9 +8,14 @@ import {
 } from '../modules/communications/case-status-emails.js';
 import type { AuditService } from '../modules/staff/audit-service.js';
 import type { CampaignApproval } from '../modules/campaigns/service.js';
+import {
+  accessPolicySchema,
+  effectivePermissions,
+  OWNER_EMAIL,
+} from '../modules/staff/access-policy.js';
 import { STAFF_ROLES } from '../modules/staff/permissions.js';
 import type { StaffRole } from '../modules/staff/permissions.js';
-import type { StaffService } from '../modules/staff/service.js';
+import type { StaffPrincipal, StaffService } from '../modules/staff/service.js';
 import type { SensitiveDataCryptoPort } from '../platform/crypto/port.js';
 import type { AppEnv } from '../middleware/request-context.js';
 import { requestIpHash, requestUserAgentHash } from '../middleware/staff-auth.js';
@@ -19,6 +24,7 @@ import { NotImplementedServiceError, problemType } from '../shared/errors.js';
 import { CASE_ESCALATION_CATEGORIES } from '../modules/admin/service.js';
 import {
   requireAdminTransactions,
+  principalHasPermission,
   requireAuditService,
   requirePermission,
   unauthorized,
@@ -162,6 +168,20 @@ export function registerAdminRoutes(
   registry: ApplicationRegistry,
   deps: AdminRouteDeps,
 ) {
+  async function canManageStaffTarget(actor: StaffPrincipal, userId: string) {
+    const staff = registry.services.staff;
+    if (actor.isOwner || !staff?.getAccessPolicy) return true;
+    const [policy, users] = await Promise.all([staff.getAccessPolicy(), staff.listStaff()]);
+    const target = users.find((user) => user.id === userId);
+    return (
+      !target ||
+      (!target.isOwner &&
+        policy.roles[target.role].permissions.every((permission) =>
+          principalHasPermission(actor, permission),
+        ))
+    );
+  }
+
   // Resolve the principal on every /admin/* request (staff session or legacy key).
   app.use(
     '/admin/*',
@@ -199,6 +219,16 @@ export function registerAdminRoutes(
         displayName: profile?.displayName ?? email,
         avatarDataUrl: profile?.avatarDataUrl ?? null,
         role: profile?.role ?? 'MANAGER',
+        isOwner: profile?.isOwner ?? false,
+        ...(profile && staff.getAccessPolicy
+          ? {
+              permissions: effectivePermissions(
+                await staff.getAccessPolicy(),
+                profile.role,
+                profile.isOwner ?? false,
+              ),
+            }
+          : {}),
       },
       201,
     );
@@ -343,9 +373,106 @@ export function registerAdminRoutes(
         staffUserId: principal.userId,
         displayName: principal.displayName,
         role: principal.role,
+        isOwner: principal.isOwner ?? false,
+        permissions: principal.permissions ?? [],
       },
       200,
     );
+  });
+
+  // Every session can read its current capabilities; policy changes require the Owner.
+  app.get('/admin/access', async (context) => {
+    const principal = context.get('principal');
+    if (!principal || context.get('legacyAdminKey')) return unauthorized(context);
+    const staff = registry.services.staff;
+    if (!staff?.getAccessPolicy) throw new NotImplementedServiceError('Access policy');
+    const policy = await staff.getAccessPolicy();
+    return context.json({
+      ...policy,
+      isOwner: principal.isOwner ?? false,
+      permissions: effectivePermissions(policy, principal.role, principal.isOwner ?? false),
+    });
+  });
+
+  app.put('/admin/access', async (context) => {
+    const principal = context.get('principal');
+    if (!principal || context.get('legacyAdminKey')) return unauthorized(context);
+    if (!principal.isOwner) {
+      await requireAuditService(registry).record({
+        actorUserId: principal.userId,
+        actorRole: principal.role,
+        action: 'access.policy.update',
+        resourceType: 'permission',
+        outcome: 'denied',
+        reasonCode: 'owner_required',
+      });
+      return json(context, 403, {
+        title: 'Forbidden',
+        status: 403,
+        detail: 'Only the Owner can configure access.',
+      });
+    }
+    const body = await bodyRecord(context);
+    const parsed = accessPolicySchema.safeParse({
+      roles: body.roles,
+      permissionNames: body.permissionNames,
+    });
+    if (!parsed.success || !Number.isSafeInteger(body.revision) || Number(body.revision) < 1) {
+      return validationError(
+        context,
+        'Supply all role policies, known permission names, and a positive revision.',
+      );
+    }
+    const result = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
+      if (!staff.getAccessPolicy || !staff.updateAccessPolicy)
+        throw new NotImplementedServiceError('Access policy');
+      const before = await staff.getAccessPolicy();
+      const updated = await staff.updateAccessPolicy(parsed.data, Number(body.revision));
+      // Keep each before/after value in a separate bounded audit field.
+      for (const role of STAFF_ROLES) {
+        if (JSON.stringify(before.roles[role]) !== JSON.stringify(updated.roles[role])) {
+          await audit.record({
+            actorUserId: principal.userId,
+            actorRole: principal.role,
+            action: 'access.role.update',
+            resourceType: 'permission',
+            resourceId: role,
+            outcome: 'success',
+            metadata: {
+              role,
+              beforeName: before.roles[role].name,
+              afterName: updated.roles[role].name,
+              beforePermissions: before.roles[role].permissions,
+              afterPermissions: updated.roles[role].permissions,
+            },
+          });
+        }
+      }
+      for (const key of Object.keys(updated.permissionNames) as Array<
+        keyof typeof updated.permissionNames
+      >) {
+        if (before.permissionNames[key] !== updated.permissionNames[key]) {
+          await audit.record({
+            actorUserId: principal.userId,
+            actorRole: principal.role,
+            action: 'access.permission.rename',
+            resourceType: 'permission',
+            resourceId: key,
+            outcome: 'success',
+            metadata: {
+              beforeName: before.permissionNames[key],
+              afterName: updated.permissionNames[key],
+            },
+          });
+        }
+      }
+      return updated;
+    });
+    return context.json({
+      ...result,
+      isOwner: true,
+      permissions: effectivePermissions(result, principal.role, true),
+    });
   });
 
   // ---- Staff management (staff.read for listing; staff.manage for mutations) ----
@@ -371,8 +498,28 @@ export function registerAdminRoutes(
       return validationError(context, 'email, displayName, role, and password are required.');
     }
     if (!isStaffRole(role)) return validationError(context, 'role is invalid.');
+    if (email.trim().toLowerCase() === OWNER_EMAIL)
+      return validationError(
+        context,
+        'The reserved Owner account must be provisioned with staff:bootstrap.',
+      );
     if (password.length < 12 || password.length > 1024) {
       return validationError(context, 'password must contain between 12 and 1024 characters.');
+    }
+    if (!guard.isOwner && registry.services.staff?.getAccessPolicy) {
+      const policy = await registry.services.staff.getAccessPolicy();
+      if (
+        role &&
+        policy.roles[role].permissions.some(
+          (permission) => !principalHasPermission(guard, permission),
+        )
+      ) {
+        return json(context, 403, {
+          title: 'Forbidden',
+          status: 403,
+          detail: 'You cannot grant permissions you do not hold.',
+        });
+      }
     }
     const created = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
       const user = await staff.createStaffUser({ email, displayName, role, password });
@@ -406,6 +553,28 @@ export function registerAdminRoutes(
     if (role === undefined && status === undefined && displayName === undefined) {
       return validationError(context, 'At least one staff field must be supplied.');
     }
+    if (!guard.isOwner && registry.services.staff?.getAccessPolicy) {
+      const policy = await registry.services.staff.getAccessPolicy();
+      const target = (await registry.services.staff.listStaff()).find((user) => user.id === userId);
+      if (
+        target?.isOwner ||
+        (target &&
+          policy.roles[target.role].permissions.some(
+            (permission) => !principalHasPermission(guard, permission),
+          )) ||
+        (role &&
+          policy.roles[role].permissions.some(
+            (permission) => !principalHasPermission(guard, permission),
+          ))
+      ) {
+        return json(context, 403, {
+          title: 'Forbidden',
+          status: 403,
+          detail:
+            'You cannot manage a higher-privilege account or grant permissions you do not hold.',
+        });
+      }
+    }
     const updated = await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
       const user = await staff.updateStaffUser(userId, {
         ...(role !== undefined ? { role } : {}),
@@ -430,6 +599,12 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'staff.manage');
     if (guard instanceof Response) return guard;
     const staffUserId = context.req.param('id');
+    if (!(await canManageStaffTarget(guard, staffUserId)))
+      return json(context, 403, {
+        title: 'Forbidden',
+        status: 403,
+        detail: 'You cannot manage a higher-privilege account.',
+      });
     await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
       await staff.deleteStaffUser(staffUserId, guard.userId);
       await audit.record({
@@ -448,6 +623,12 @@ export function registerAdminRoutes(
     const guard = await requirePermission(context, registry, 'staff.manage');
     if (guard instanceof Response) return guard;
     const userId = context.req.param('id');
+    if (!(await canManageStaffTarget(guard, userId)))
+      return json(context, 403, {
+        title: 'Forbidden',
+        status: 403,
+        detail: 'You cannot manage a higher-privilege account.',
+      });
     await requireAdminTransactions(registry).run(async ({ staff, audit }) => {
       await staff.revokeAllSessions(userId);
       await audit.record({
@@ -684,6 +865,7 @@ export function registerAdminRoutes(
     const detail = await registry.services.admin?.getCaseDetail({
       caseReference: caseRef,
       viewerRole: guard.role,
+      ...(guard.permissions ? { viewerPermissions: guard.permissions } : {}),
       piiLevel: rawPii,
     });
     if (!detail) {
@@ -808,7 +990,7 @@ export function registerAdminRoutes(
         nextStatus,
         guard.userId,
         trimmedNote,
-        guard.role === 'ADMIN',
+        guard.isOwner === true || (guard.permissions === undefined && guard.role === 'ADMIN'),
       );
       await audit.record({
         actorUserId: guard.userId,
@@ -822,7 +1004,9 @@ export function registerAdminRoutes(
           // until the whitelist above has accepted it, and the audit trail should say
           // what the case actually moved to.
           nextStatus,
-          ...(guard.role === 'ADMIN' ? { forced: true } : {}),
+          ...(guard.isOwner === true || (guard.permissions === undefined && guard.role === 'ADMIN')
+            ? { forced: true }
+            : {}),
           // The note itself is not repeated here. It is stored on the transition
           // record and appears in the consumer's email; `admin_audit_events` is
           // readable by every internal role, so a second copy there would be the one
@@ -988,7 +1172,8 @@ export function registerAdminRoutes(
       expectedVersion,
       actorUserId: guard.userId,
       actorRole: guard.role,
-      actorIsAdministrator: guard.role === 'ADMIN',
+      actorIsAdministrator:
+        guard.isOwner === true || (guard.permissions === undefined && guard.role === 'ADMIN'),
     });
     if (!result) throw new NotImplementedServiceError('Admin service');
     return context.json({ resolution: result }, 200);
