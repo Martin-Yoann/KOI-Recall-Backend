@@ -305,6 +305,8 @@ export interface DisposalService {
       caseId: string | null;
       campaignVersionId: string;
       productIds: string[];
+      /** Preferred instruction language; legacy callers default to English. */
+      locale?: string;
       /** Whether the claim reports a safety incident; drives the automatic pause. */
       hasIncident: boolean;
     },

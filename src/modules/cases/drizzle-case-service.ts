@@ -462,6 +462,7 @@ export class DrizzleCaseService implements CaseService {
         campaignVersionId: locked.campaignVersionId,
         productIds: command.body.products.map((product) => product.campaignProductId),
         hasIncident,
+        locale: command.body.locale,
       });
 
       const response: ClaimSubmissionResponse = {

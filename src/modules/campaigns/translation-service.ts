@@ -2,6 +2,8 @@ import { and, desc, eq } from 'drizzle-orm';
 import type { DatabaseHandle, DatabaseExecutor } from '../../db/client.js';
 import { campaignTranslationRevisions as revisions, campaignVersions, recallCampaigns } from '../../db/schema/index.js';
 import { DrizzleCampaignService } from './drizzle-campaign-service.js';
+import { DrizzleAuditService } from '../staff/drizzle-audit-service.js';
+import type { StaffRole } from '../staff/permissions.js';
 import type { CampaignCacheInvalidator } from '../../platform/cache-invalidation/port.js';
 import { CampaignValidationError, ClaimConflictError, ResourceNotFoundError } from '../../shared/errors.js';
 import { assertTranslationShape, contentHash, emptyTranslation, missingTranslationFields, sourceContent, type TranslationContent } from './translation-content.js';
@@ -16,8 +18,8 @@ export interface SaveTranslation { sourceVersionId: string; sourceHash: string; 
 export interface TransitionTranslation { revisionId: string; editVersion: number; action: 'submit' | 'approve' | 'request_changes' | 'publish'; note: string }
 export interface TranslationService {
   workspace(slug: string): Promise<TranslationWorkspace>;
-  save(slug: string, input: SaveTranslation, actor: string): Promise<TranslationWorkspace>;
-  transition(slug: string, input: TransitionTranslation, actor: string): Promise<TranslationWorkspace>;
+  save(slug: string, input: SaveTranslation, actor: string, actorRole: StaffRole): Promise<TranslationWorkspace>;
+  transition(slug: string, input: TransitionTranslation, actor: string, actorRole: StaffRole): Promise<TranslationWorkspace>;
 }
 
 export class DrizzleTranslationService implements TranslationService {
@@ -42,7 +44,7 @@ export class DrizzleTranslationService implements TranslationService {
       history: rows.map(({ content: _content, source: _source, ...row }) => { void _content; void _source; return row; }),
       needsUpdate: Boolean(latest && latest.sourceHash !== source.hash), missing: missingTranslationFields(source.content, latest?.content ?? emptyTranslation(source.content)) };
   }
-  async save(slug: string, input: SaveTranslation, actor: string): Promise<TranslationWorkspace> {
+  async save(slug: string, input: SaveTranslation, actor: string, actorRole: StaffRole): Promise<TranslationWorkspace> {
     await this.handle.transaction(async (tx) => {
       const [locked] = await tx.select({ versionId: recallCampaigns.publishedVersionId }).from(recallCampaigns).where(eq(recallCampaigns.slug, slug)).for('update');
       if (!locked?.versionId || locked.versionId !== input.sourceVersionId) throw new ClaimConflictError('The source campaign version changed. Reload before saving.');
@@ -50,6 +52,7 @@ export class DrizzleTranslationService implements TranslationService {
       if (source.hash !== input.sourceHash) throw new ClaimConflictError('The source text changed. Reload before saving. Your draft was not overwritten.');
       assertTranslationShape(source.content, input.content);
       const now = new Date();
+      let resourceId = input.revisionId;
       if (input.revisionId) {
         const [row] = await tx.select().from(revisions).where(and(eq(revisions.id, input.revisionId), eq(revisions.campaignVersionId, source.id), eq(revisions.locale, 'es-US'))).for('update');
         if (!row || row.status !== 'draft' || row.editVersion !== input.editVersion || row.sourceHash !== source.hash) throw new ClaimConflictError('This translation changed or is no longer an editable draft. Reload before saving.');
@@ -61,12 +64,15 @@ export class DrizzleTranslationService implements TranslationService {
           if (latest.sourceHash === source.hash) throw new ClaimConflictError('A working translation already exists. Reload it before editing.');
           await tx.update(revisions).set({ status: 'changes_requested', editVersion: latest.editVersion + 1, updatedAt: now, updatedBy: actor, history: [...latest.history, { action: 'source_changed', actor, at: now.toISOString() }] }).where(eq(revisions.id, latest.id));
         }
-        await tx.insert(revisions).values({ campaignVersionId: source.id, locale: 'es-US', revision: (latest?.revision ?? 0) + 1, sourceHash: source.hash, source: source.content, content: input.content, createdBy: actor, updatedBy: actor, history: [{ action: 'created', actor, at: now.toISOString() }] });
+        const [created] = await tx.insert(revisions).values({ campaignVersionId: source.id, locale: 'es-US', revision: (latest?.revision ?? 0) + 1, sourceHash: source.hash, source: source.content, content: input.content, createdBy: actor, updatedBy: actor, history: [{ action: 'created', actor, at: now.toISOString() }] }).returning({ id: revisions.id });
+        resourceId = created!.id;
       }
+      // The same executor is essential: audit failure rolls back the draft too.
+      await new DrizzleAuditService(tx).record({ actorUserId: actor, actorRole, action: 'campaign.translation.save', resourceType: 'campaign_translation', resourceId: resourceId!, outcome: 'success' });
     });
     return this.workspace(slug);
   }
-  async transition(slug: string, input: TransitionTranslation, actor: string): Promise<TranslationWorkspace> {
+  async transition(slug: string, input: TransitionTranslation, actor: string, actorRole: StaffRole): Promise<TranslationWorkspace> {
     await this.handle.transaction(async (tx) => {
       const [campaign] = await tx.select({ versionId: recallCampaigns.publishedVersionId }).from(recallCampaigns).where(eq(recallCampaigns.slug, slug)).for('update');
       if (!campaign?.versionId) throw new ResourceNotFoundError('Source campaign was not found.');
@@ -89,6 +95,7 @@ export class DrizzleTranslationService implements TranslationService {
         ...(input.action === 'approve' ? { reviewedBy: actor, reviewedAt: now, reviewReference: input.note.trim() } : {}),
         ...(input.action === 'publish' ? { publishedBy: actor, publishedAt: now } : {}),
         history: [...row.history, { action: input.action, actor, at: now.toISOString(), ...(input.note ? { note: input.note } : {}) }] }).where(eq(revisions.id, row.id));
+      await new DrizzleAuditService(tx).record({ actorUserId: actor, actorRole, action: `campaign.translation.${input.action}`, resourceType: 'campaign_translation', resourceId: row.id, outcome: 'success' });
     });
     if (input.action === 'publish') await this.invalidator.invalidateCampaign(slug).catch(() => ({ invalidated: false }));
     return this.workspace(slug);

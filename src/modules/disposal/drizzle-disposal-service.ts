@@ -26,6 +26,7 @@ import {
   recallCases,
 } from '../../db/schema/index.js';
 import { consoleSafeLogger } from '../../platform/observability/logger.js';
+import { defaultLocale } from '../../shared/locale.js';
 import {
   ClaimValidationError,
   ClaimConflictError,
@@ -198,6 +199,7 @@ export class DrizzleDisposalService implements DisposalService {
       campaignVersionId: string;
       productIds: string[];
       hasIncident: boolean;
+      locale?: string;
     },
   ): Promise<{ taskId: string; token: string } | null> {
     const now = new Date();
@@ -216,11 +218,15 @@ export class DrizzleDisposalService implements DisposalService {
         and(
           eq(disposalInstructionVersions.campaignVersionId, input.campaignVersionId),
           eq(disposalInstructionVersions.status, 'approved'),
+          inArray(disposalInstructionVersions.locale, [input.locale ?? defaultLocale, defaultLocale]),
           eq(disposalInstructionApprovals.authorizesConsumerDisposal, true),
           isNull(disposalInstructionApprovals.withdrawnAt),
         ),
       )
-      .orderBy(desc(disposalInstructionVersions.versionNumber));
+      .orderBy(
+        sql`case when ${disposalInstructionVersions.locale} = ${input.locale ?? defaultLocale} then 0 else 1 end`,
+        desc(disposalInstructionVersions.versionNumber),
+      );
     const version = candidates.find((candidate) => approvalWindowIncludes(candidate, now));
     if (!version) return null;
 
