@@ -1540,6 +1540,7 @@ export class DrizzleAdminService implements AdminService {
   }): Promise<void> {
     if (!this.emailTrigger) return;
     const email = resolveCaseStatusEmail(params.nextStatus, {
+      locale: params.locale,
       caseId: params.caseId,
       caseReference: params.caseReference,
       eventId: params.eventId,

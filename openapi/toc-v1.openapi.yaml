@@ -13,6 +13,21 @@ components:
               items:
                 $ref: "#/components/schemas/EvidenceRequirement"
               type: array
+            faq:
+              items:
+                properties:
+                  answer:
+                    type: string
+                  question:
+                    type: string
+                  topic:
+                    type: string
+                required:
+                  - topic
+                  - question
+                  - answer
+                type: object
+              type: array
             hazard:
               type: string
             immediateAction:
@@ -45,6 +60,8 @@ components:
                 properties:
                   code:
                     type: string
+                  description:
+                    type: string
                   displayName:
                     type: string
                 required:
@@ -74,6 +91,24 @@ components:
               type: object
             title:
               type: string
+            translation:
+              properties:
+                id:
+                  format: uuid
+                  type: string
+                revision:
+                  exclusiveMinimum: true
+                  minimum: 0
+                  type: integer
+                sourceVersion:
+                  exclusiveMinimum: true
+                  minimum: 0
+                  type: integer
+              required:
+                - id
+                - revision
+                - sourceVersion
+              type: object
             version:
               exclusiveMinimum: true
               minimum: 0
@@ -122,6 +157,13 @@ components:
           minLength: 1
           nullable: true
           type: string
+        approvedResolutionCode:
+          enum:
+            - replacement
+            - refund
+            - null
+          nullable: true
+          type: string
         campaignTitle:
           description: Title of the campaign the case belongs to.
           example: Music Lollipop Recall
@@ -153,7 +195,7 @@ components:
             - closed
           type: string
         publicStatusLabel:
-          description: English display copy produced by the API; render verbatim.
+          description: Legacy English display copy. Localized clients should use publicStatus as the message identifier.
           example: Under review
           minLength: 1
           type: string
@@ -161,6 +203,13 @@ components:
           description: Display name of the resolution the consumer requested; null when unavailable.
           example: Replacement
           minLength: 1
+          nullable: true
+          type: string
+        requestedResolutionCode:
+          enum:
+            - replacement
+            - refund
+            - null
           nullable: true
           type: string
       required:
@@ -238,6 +287,14 @@ components:
             - lastName
             - email
           type: object
+        contentLocale:
+          enum:
+            - en-US
+            - es-US
+          type: string
+        contentTranslationId:
+          format: uuid
+          type: string
         documentIds:
           items:
             format: uuid
@@ -261,6 +318,7 @@ components:
         locale:
           enum:
             - en-US
+            - es-US
           type: string
         products:
           items:
@@ -1071,6 +1129,8 @@ components:
             type: object
           type: array
         brand:
+          type: string
+        description:
           type: string
         flavors:
           items:
@@ -2067,6 +2127,7 @@ paths:
             default: en-US
             enum:
               - en-US
+              - es-US
             example: en-US
             type: string
       responses:

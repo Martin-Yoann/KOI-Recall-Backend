@@ -1,4 +1,5 @@
 import type { OpenAPIHono } from '@hono/zod-openapi';
+import { registerTranslationRoutes } from './translations.js';
 import type { Context } from 'hono';
 
 import type { ApplicationRegistry } from '../composition.js';
@@ -194,6 +195,8 @@ export function registerAdminRoutes(
   );
 
   // ---- Sessions (login/logout/refresh) 鈥?net-new, no legacy key ----
+
+  registerTranslationRoutes(app, registry);
 
   app.post('/admin/sessions', async (context) => {
     const staff = registry.services.staff;

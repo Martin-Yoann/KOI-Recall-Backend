@@ -13,6 +13,7 @@ export interface ClaimConfirmationInput {
   submittedAt: Date;
   campaignSlug: string;
   consumerWebBaseUrl: string;
+  locale?: string;
   /** The disposal task created for this submission, when the campaign carries an approved one. */
   disposal: { taskId: string; token: string } | null | undefined;
 }
@@ -35,7 +36,7 @@ export function claimConfirmationVariables(
   input: ClaimConfirmationInput,
 ): ClaimConfirmationVariables {
   const disposalResumeUrl = input.disposal
-    ? `${input.consumerWebBaseUrl}/recalls/${input.campaignSlug}/disposal/${input.disposal.taskId}#token=${input.disposal.token}`
+    ? `${input.consumerWebBaseUrl}/recalls/${input.campaignSlug}/disposal/${input.disposal.taskId}${input.locale === 'es-US' ? '?lang=es' : ''}#token=${input.disposal.token}`
     : '';
 
   return {
@@ -48,7 +49,11 @@ export function claimConfirmationVariables(
     // so the template drops this in as its own paragraph and both branches read correctly
     // without an empty href ever being emitted.
     disposalSection: input.disposal
-      ? `You can return to your product-disposal step at ${disposalResumeUrl}. Keep this email: the link is the only way back to it.`
-      : 'No product-disposal step applies to this claim.',
+      ? input.locale === 'es-US'
+        ? `Puede volver al paso de eliminación de su producto en ${disposalResumeUrl}. Conserve este correo: el enlace es necesario para volver a ese paso.`
+        : `You can return to your product-disposal step at ${disposalResumeUrl}. Keep this email: the link is the only way back to it.`
+      : input.locale === 'es-US'
+        ? 'Esta solicitud no requiere un paso de eliminación del producto.'
+        : 'No product-disposal step applies to this claim.',
   };
 }

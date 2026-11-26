@@ -1,8 +1,9 @@
 import type { CampaignView } from '../../contracts/toc.js';
+import type { SupportedLocale } from '../../shared/locale.js';
 
 export interface PublishedCampaignQuery {
   slug: string;
-  locale: 'en-US';
+  locale: SupportedLocale;
 }
 
 /** A structured approval recorded on a campaign version (T4.3/O4). */

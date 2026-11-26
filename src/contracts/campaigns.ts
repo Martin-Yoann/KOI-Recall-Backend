@@ -26,6 +26,7 @@ export const publicProductSchema = z
     upcs: z.array(z.string()),
     brand: z.string(),
     name: z.string(),
+    description: z.string().optional(),
     flavors: z.array(z.string()),
     shapes: z.array(z.string()),
     affectedLots: z.array(
@@ -56,9 +57,11 @@ export const campaignResponseSchema = z
       hazard: z.string(),
       immediateAction: z.string(),
       remedySummary: z.string(),
+      translation: z.object({ id: uuid, revision: z.number().int().positive(), sourceVersion: z.number().int().positive() }).optional(),
+      faq: z.array(z.object({ topic: z.string(), question: z.string(), answer: z.string() })).optional(),
       support: z.object({ email: z.string().email(), phone: z.string(), hours: z.string() }),
       products: z.array(publicProductSchema),
-      remedies: z.array(z.object({ code: z.string(), displayName: z.string() })),
+      remedies: z.array(z.object({ code: z.string(), displayName: z.string(), description: z.string().optional() })),
       evidenceRequirements: z.array(evidenceRequirementSchema),
     }),
   })

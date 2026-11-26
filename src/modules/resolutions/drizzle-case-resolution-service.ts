@@ -192,7 +192,8 @@ export class DrizzleCaseResolutionService implements CaseResolutionService {
         variables.refundAmount = (refundAmountMinor! / 100).toFixed(2);
         variables.refundCurrency = currency!;
       } else {
-        variables.replacementItem = 'Replacement Product';
+        variables.replacementItem =
+          caseInfo.locale === 'es-US' ? 'Producto de reemplazo' : 'Replacement Product';
       }
 
       await this.emailTrigger?.trigger(tx, {

@@ -1,5 +1,6 @@
 import { createDatabase, type DatabaseHandle } from './db/client.js';
 import { DrizzleCampaignService } from './modules/campaigns/drizzle-campaign-service.js';
+import { DrizzleTranslationService, type TranslationService } from './modules/campaigns/translation-service.js';
 import type { CampaignService } from './modules/campaigns/service.js';
 import { DrizzleCaseService } from './modules/cases/drizzle-case-service.js';
 import type { CaseService } from './modules/cases/service.js';
@@ -55,6 +56,7 @@ import type { TransactionalEmailPort } from './platform/email/port.js';
 import { NotImplementedServiceError } from './shared/errors.js';
 
 export interface ApplicationServices {
+  translations?: TranslationService;
   campaigns: CampaignService;
   productChecks: ProductCheckService;
   claimDrafts: ClaimDraftService;
@@ -190,10 +192,12 @@ export function createApplicationRegistry(
   // Built once so the case service and the registry share the same instance.
   const disposalService = createDisposalService(handle, evidenceRetentionDays, communicationQueue);
   const emailTrigger = new EmailTriggerService(communicationQueue);
+  const campaigns = new DrizzleCampaignService(handle, cacheInvalidator);
   return {
     services: {
       ...placeholder.services,
-      campaigns: new DrizzleCampaignService(handle, cacheInvalidator),
+      campaigns,
+      translations: new DrizzleTranslationService(handle, cacheInvalidator),
       productChecks: new DrizzleProductCheckService(handle.db),
       claimDrafts: new DrizzleClaimDraftService(handle.db),
       documents: new DrizzleDocumentService(

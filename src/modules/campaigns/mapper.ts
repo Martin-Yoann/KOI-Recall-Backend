@@ -30,6 +30,7 @@ export interface CampaignLocalizationRow {
   supportEmail: string;
   supportPhone: string;
   supportHours: string;
+  faq?: Array<{ topic: string; question: string; answer: string }>;
 }
 
 export interface CampaignProductRow {
@@ -114,6 +115,7 @@ export function mapToCampaignView(source: CampaignSource): CampaignView {
         upcs: [...new Set(product.unitUpcs ?? [])].sort(compareString),
         brand: product.brand,
         name: product.name,
+        description: typeof product.attributes.description === 'string' ? product.attributes.description : '',
         flavors: attributes.flavors ?? [],
         shapes: attributes.shapes ?? [],
         affectedLots,
@@ -150,6 +152,7 @@ export function mapToCampaignView(source: CampaignSource): CampaignView {
       phone: source.localization.supportPhone,
       hours: source.localization.supportHours,
     },
+    faq: source.localization.faq ?? [],
     products,
     remedies,
     evidenceRequirements,

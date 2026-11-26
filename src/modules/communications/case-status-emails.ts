@@ -23,6 +23,7 @@ export interface CaseStatusEmailContext {
   approvedType: ResolutionType | null;
   /** Consumer web app base URL, used to build the need_info CTA. */
   consumerWebBaseUrl: string;
+  locale?: string;
 }
 
 export interface CaseStatusEmail {
@@ -32,7 +33,13 @@ export interface CaseStatusEmail {
   eventType: string;
 }
 
-function resolvedResolutionLabel(approvedType: ResolutionType | null): string {
+function resolvedResolutionLabel(approvedType: ResolutionType | null, locale?: string): string {
+  if (locale === 'es-US')
+    return approvedType === 'refund'
+      ? 'Reembolso'
+      : approvedType === 'replacement'
+        ? 'Reemplazo'
+        : 'La medida seleccionada';
   if (approvedType === 'refund') return 'Refund';
   if (approvedType === 'replacement') return 'Replacement';
   return 'Your selected remedy';
@@ -63,7 +70,7 @@ export function resolveCaseStatusEmail(
         variables: {
           caseReference: context.caseReference,
           requestedInformation: instruction,
-          actionUrl: `${context.consumerWebBaseUrl}/dashboard/claims/${context.caseReference}`,
+          actionUrl: `${context.consumerWebBaseUrl}/dashboard/claims/${context.caseReference}${context.locale === 'es-US' ? '?lang=es' : ''}`,
         },
         deduplicationKey: `case-action-required:${context.caseId}:${context.eventId}`,
         eventType: 'case.action_required.requested',
@@ -88,7 +95,7 @@ export function resolveCaseStatusEmail(
           templateKey: 'case_completed',
           variables: {
             caseReference: context.caseReference,
-            completedResolutionLabel: resolvedResolutionLabel(context.approvedType),
+            completedResolutionLabel: resolvedResolutionLabel(context.approvedType, context.locale),
           },
           deduplicationKey: `case-completed:${context.caseId}:${context.eventId}`,
           eventType: 'case.completed.requested',

@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -17,6 +18,7 @@ import {
 
 import { campaignProducts, campaignVersions, recallCampaigns } from './campaigns.js';
 import { staffUsers } from './staff.js';
+import { campaignTranslationRevisions } from './translations.js';
 
 const timestamps = {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
@@ -86,6 +88,8 @@ export const recallCases = pgTable(
       .notNull()
       .references(() => campaignVersions.id, { onDelete: 'restrict' }),
     locale: varchar('locale', { length: 16 }).notNull().default('en-US'),
+    contentLocale: varchar('content_locale', { length: 16 }),
+    contentTranslationId: uuid('content_translation_id'),
     subtype: recallCaseSubtypeEnum('subtype').notNull().default('standard'),
     status: recallCaseStatusEnum('status').notNull().default('submitted'),
     duplicateFlag: boolean('duplicate_flag').notNull().default(false),
@@ -106,6 +110,8 @@ export const recallCases = pgTable(
   },
   (table) => [
     uniqueIndex('recall_cases_public_reference_uidx').on(table.publicReference),
+    foreignKey({ columns: [table.contentTranslationId, table.campaignVersionId, table.contentLocale], foreignColumns: [campaignTranslationRevisions.id, campaignTranslationRevisions.campaignVersionId, campaignTranslationRevisions.locale], name: 'recall_cases_translation_fk' }).onDelete('restrict'),
+    check('recall_cases_content_language_chk', sql`${table.contentTranslationId} is null or ${table.contentLocale} is not null`),
     index('recall_cases_campaign_submitted_idx').on(table.campaignId, table.submittedAt),
     index('recall_cases_campaign_status_idx').on(table.campaignId, table.status),
     index('recall_cases_assignee_idx').on(table.assignedToStaffUserId, table.status),

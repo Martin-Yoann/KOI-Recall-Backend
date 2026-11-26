@@ -6,6 +6,7 @@
  * generated solely by Drizzle.
  */
 export * from './campaigns.js';
+export * from './translations.js';
 export * from './claims.js';
 export * from './consumers.js';
 export * from './documents.js';

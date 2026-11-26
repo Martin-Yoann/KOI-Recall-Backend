@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi';
+import { supportedLocales } from '../shared/locale.js';
 
 import { addressSchema, isoDate, isoDateTime, uuid } from './common.js';
 import { productIdentifierSchema, purchaseEvidenceSchema } from './product-checks.js';
@@ -85,7 +86,9 @@ export const incidentDetailsSchema = z
 const claimSubmissionRequestObject = z.object({
   draftId: uuid,
   draftToken: z.string().min(32),
-  locale: z.literal('en-US'),
+  locale: z.enum(supportedLocales),
+  contentLocale: z.enum(supportedLocales).optional(),
+  contentTranslationId: z.string().uuid().optional(),
   consumer: z.object({
     firstName: z.string().trim().min(1).max(100),
     lastName: z.string().trim().min(1).max(100),

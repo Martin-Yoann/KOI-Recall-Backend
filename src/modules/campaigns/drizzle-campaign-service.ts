@@ -11,6 +11,7 @@ import {
   campaignProducts,
   campaignRemedyOptions,
   campaignVersions,
+  campaignTranslationRevisions,
   recallCampaigns,
 } from '../../db/schema/index.js';
 import type { CampaignView } from '../../contracts/toc.js';
@@ -25,6 +26,8 @@ import type {
   PublishedCampaignQuery,
 } from './service.js';
 import { mapToCampaignView } from './mapper.js';
+import { validatePublicationContent } from './publication-content.js';
+import { applyTranslation, contentHash, sourceContent } from './translation-content.js';
 
 export function buildPublishedVersionQuery(
   db: DatabaseExecutor,
@@ -51,7 +54,7 @@ export function buildPublishedVersionQuery(
  */
 export class DrizzleCampaignService implements CampaignService {
   constructor(
-    private readonly handle: Pick<DatabaseHandle, 'db' | 'transaction'>,
+    private readonly handle: { db: DatabaseExecutor; transaction: DatabaseHandle['transaction'] },
     /** Expires the web app's cached copy of a campaign after it is published. */
     private readonly cacheInvalidator: CampaignCacheInvalidator = new NotConfiguredCacheInvalidator(),
     private readonly logger: SafeLogger = consoleSafeLogger,
@@ -93,6 +96,21 @@ export class DrizzleCampaignService implements CampaignService {
       .limit(1);
     if (!version) return null;
 
+    if (query.locale !== campaign.defaultLocale) {
+      if (campaign.defaultLocale !== 'en-US' && campaign.defaultLocale !== 'es-US') return null;
+      const source = await this.getPublishedCampaign({ slug: query.slug, locale: campaign.defaultLocale });
+      if (!source) return null;
+      const [translation] = await db.select().from(campaignTranslationRevisions).where(and(
+        eq(campaignTranslationRevisions.campaignVersionId, versionId),
+        eq(campaignTranslationRevisions.locale, query.locale),
+        eq(campaignTranslationRevisions.status, 'published'),
+      )).limit(1);
+      if (translation) {
+        if (translation.sourceHash !== contentHash(sourceContent(source))) return null;
+        return applyTranslation(source, translation.content, { id: translation.id, revision: translation.revision, sourceVersion: version.versionNumber });
+      }
+    }
+
     const [localization] = await db
       .select({
         locale: campaignLocalizations.locale,
@@ -104,6 +122,7 @@ export class DrizzleCampaignService implements CampaignService {
         supportEmail: campaignLocalizations.supportEmail,
         supportPhone: campaignLocalizations.supportPhone,
         supportHours: campaignLocalizations.supportHours,
+        faq: campaignLocalizations.faq,
       })
       .from(campaignLocalizations)
       .where(
@@ -232,7 +251,7 @@ export class DrizzleCampaignService implements CampaignService {
   }> {
     const published = await this.handle.transaction(async (db) => {
       const [campaign] = await db
-        .select({ id: recallCampaigns.id })
+        .select({ id: recallCampaigns.id, defaultLocale: recallCampaigns.defaultLocale })
         .from(recallCampaigns)
         .where(eq(recallCampaigns.slug, input.campaignSlug))
         .limit(1);
@@ -256,7 +275,7 @@ export class DrizzleCampaignService implements CampaignService {
         throw new CampaignValidationError('Only a draft Campaign Version can be published.');
       }
 
-      await this.assertPublishGate(db, input, version.id);
+      await this.assertPublishGate(db, input, version.id, campaign.defaultLocale);
 
       const publishedAt = new Date();
       const [published] = await db
@@ -316,6 +335,7 @@ export class DrizzleCampaignService implements CampaignService {
     db: DatabaseExecutor,
     input: PublishVersionInput,
     versionId: string,
+    defaultLocale: string,
   ): Promise<void> {
     const [products] = await db
       .select({ count: sql<number>`count(*)::int` })
@@ -333,9 +353,16 @@ export class DrizzleCampaignService implements CampaignService {
         immediateAction: campaignLocalizations.immediateAction,
         remedySummary: campaignLocalizations.remedySummary,
         supportEmail: campaignLocalizations.supportEmail,
+        supportPhone: campaignLocalizations.supportPhone,
+        supportHours: campaignLocalizations.supportHours,
       })
       .from(campaignLocalizations)
-      .where(eq(campaignLocalizations.campaignVersionId, versionId))
+      .where(
+        and(
+          eq(campaignLocalizations.campaignVersionId, versionId),
+          eq(campaignLocalizations.locale, defaultLocale),
+        ),
+      )
       .limit(1);
     if (
       !localization ||
@@ -348,6 +375,8 @@ export class DrizzleCampaignService implements CampaignService {
         'A published version must include localized consumer copy: title, hazard, immediateAction, and support contact.',
       );
     }
+
+    validatePublicationContent(localization);
 
     const [approvedRemedy] = await db
       .select({ id: campaignRemedyOptions.id })

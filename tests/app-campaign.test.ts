@@ -74,6 +74,26 @@ function mockCampaignService(
 }
 
 describe('GET /v1/recall-campaigns/{slug}', () => {
+  it('keeps Spanish content, language headers and cache validators separate from English', async () => {
+    const seen: string[] = [];
+    const service = mockCampaignService(({ locale }) => {
+      seen.push(locale);
+      return Promise.resolve({
+        ...campaign,
+        locale,
+        title: locale === 'es-US' ? 'Aviso de retirada' : campaign.title,
+      });
+    });
+    const response = await appWith(service).request(
+      '/v1/recall-campaigns/music-lollipop-demo-2026?locale=es-US',
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Content-Language')).toBe('es-US');
+    expect(response.headers.get('ETag')).toBe('"v1:es-US"');
+    expect(seen).toEqual(['es-US']);
+    const body = (await response.json()) as { campaign: CampaignView };
+    expect(body.campaign.title).toBe('Aviso de retirada');
+  });
   it('returns 200 with a version-derived ETag and Content-Language when found', async () => {
     const service = mockCampaignService(() => Promise.resolve(campaign));
     const response = await appWith(service).request(

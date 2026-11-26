@@ -76,7 +76,7 @@ export const caseStatusLookupResponseSchema = z
       description: 'Coarse public status derived server-side from the internal lifecycle.',
     }),
     publicStatusLabel: z.string().min(1).openapi({
-      description: 'English display copy produced by the API; render verbatim.',
+      description: 'Legacy English display copy. Localized clients should use publicStatus as the message identifier.',
       example: 'Under review',
     }),
     consumerNextAction: z.string().min(1).openapi({
@@ -86,6 +86,8 @@ export const caseStatusLookupResponseSchema = z
       description: 'Display name of the resolution the consumer requested; null when unavailable.',
       example: 'Replacement',
     }),
+    requestedResolutionCode: z.enum(['replacement', 'refund']).nullable().optional(),
+    approvedResolutionCode: z.enum(['replacement', 'refund']).nullable().optional(),
     approvedResolution: z.string().min(1).nullable().openapi({
       description:
         'Display name of the operationally approved resolution; populated only once that fact is consumer-visible.',

@@ -16,6 +16,7 @@ import {
   campaignProducts,
   campaignRemedyOptions,
   campaignVersions,
+  campaignTranslationRevisions,
   caseConsents,
   caseConsumers,
   caseEvents,
@@ -283,6 +284,15 @@ export class DrizzleCaseService implements CaseService {
         .returning({ id: idempotencyRecords.id });
 
       this.validateConsents(command.body, locked.privacyNoticeVersion);
+      if (command.body.contentTranslationId) {
+        const [translation] = await tx.select({ id: campaignTranslationRevisions.id }).from(campaignTranslationRevisions).where(and(
+          eq(campaignTranslationRevisions.id, command.body.contentTranslationId),
+          eq(campaignTranslationRevisions.campaignVersionId, locked.campaignVersionId),
+          eq(campaignTranslationRevisions.locale, command.body.contentLocale ?? ''),
+          inArray(campaignTranslationRevisions.status, ['published', 'superseded']),
+        )).limit(1);
+        if (!translation) throw new ClaimValidationError('The displayed translation does not belong to this claim version or was not published.');
+      }
       if (new Set(command.body.documentIds).size !== command.body.documentIds.length) {
         throw new ClaimValidationError('Document IDs must be unique.');
       }
@@ -426,6 +436,8 @@ export class DrizzleCaseService implements CaseService {
             campaignId: locked.campaignId,
             campaignVersionId: locked.campaignVersionId,
             locale: command.body.locale,
+            contentLocale: command.body.contentLocale ?? null,
+            contentTranslationId: command.body.contentTranslationId ?? null,
             subtype,
             status: caseStatus,
             incidentFlag: hasIncident,
@@ -624,6 +636,7 @@ export class DrizzleCaseService implements CaseService {
         deduplicationKey: `claim-confirmation:${caseReference}`,
         eventType: 'claim.confirmation.requested',
         variables: claimConfirmationVariables({
+          locale: command.body.locale,
           caseReference,
           submittedAt,
           campaignSlug: command.campaignSlug,

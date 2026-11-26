@@ -96,6 +96,8 @@ export class DrizzleCaseStatusLookupService implements CaseStatusLookupService {
       publicStatusLabel: publicStatusLabel(mapped.publicStatus),
       consumerNextAction: consumerNextAction(mapped.publicStatus),
       requestedResolution: resolutionDisplayName(row.requestedType ?? null),
+      requestedResolutionCode: row.requestedType ?? null,
+      approvedResolutionCode: mapped.approvedVisible ? row.approvedType : null,
       approvedResolution: mapped.approvedVisible
         ? resolutionDisplayName(row.approvedType ?? null)
         : null,

@@ -48,7 +48,7 @@ export function registerCampaignRoutes(app: OpenAPIHono<AppEnv>, registry: Appli
     const response = campaignResponseSchema.parse({ campaign });
     const headers = {
       'Content-Language': response.campaign.locale,
-      ETag: `"v${response.campaign.version}:${response.campaign.locale}"`,
+      ETag: `"v${response.campaign.version}:${response.campaign.locale}${response.campaign.translation ? `:t${response.campaign.translation.revision}` : ''}"`,
       'Cache-Control': CAMPAIGN_CACHE_CONTROL,
     };
     // Revalidation necessarily happens after the DB read — the current

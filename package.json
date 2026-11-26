@@ -27,6 +27,7 @@
     "db:seed:refund-exports": "tsx scripts/seed-refund-exports.ts",
     "db:benchmark": "tsx scripts/capacity-benchmark.ts",
     "email:test": "tsx src/scripts/send-test-email.ts",
+    "email:setup:spanish": "tsx src/scripts/setup-spanish-templates.ts",
     "staff:bootstrap": "tsx scripts/bootstrap-staff.ts",
     "revalidate:check": "tsx src/scripts/check-revalidate.ts"
   },
@@ -45,6 +46,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.6.0",
     "@esbuild/win32-x64": "0.28.2",
     "@eslint/js": "^10.0.1",
     "@hono/node-server": "^2.1.0",

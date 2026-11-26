@@ -1,4 +1,5 @@
 import { z } from '@hono/zod-openapi';
+import { supportedLocales } from '../shared/locale.js';
 
 export const uuid = z.string().uuid();
 export const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD.');
@@ -47,7 +48,7 @@ export const commonProblemResponses = {
 } as const;
 
 export const localeQuerySchema = z.object({
-  locale: z.enum(['en-US']).default('en-US').openapi({ example: 'en-US' }),
+  locale: z.enum(supportedLocales).default('en-US').openapi({ example: 'en-US' }),
 });
 
 export const campaignPathSchema = z.object({
