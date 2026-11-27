@@ -16,6 +16,7 @@ import {
   caseEscalations,
   caseEvents,
   recallCases,
+  reportabilityReviews,
   staffUsers,
 } from '../src/db/schema/index.js';
 import { DrizzleAdminService } from '../src/modules/admin/drizzle-admin-service.js';
@@ -148,15 +149,38 @@ describe.skipIf(!enabled)(
           () => null,
           (error: unknown) => (error instanceof Error ? error.message : String(error)),
         );
-      // The differential: with the escalation open the same call is refused; with it
-      // closed the same call goes through. So the gate is about open escalations, not
-      // about a case having had one.
-      expect(refusal).toBeNull();
+      // A regulator escalation still owes the independent A16 safety review after
+      // it closes. Removing one gate must never bypass the other gate.
+      expect(refusal).toMatch(/safety reportability review is missing/i);
+      const [review] = await handle!.db
+        .insert(reportabilityReviews)
+        .values({ caseId, status: 'pending' })
+        .returning({ id: reportabilityReviews.id });
+      await admin.closeReportabilityReview(review!.id, {
+        outcome: 'documented_non_reportable',
+        reviewerId: staffUserId,
+        rationale: 'Isolated fixture: completed assessment after regulator escalation closure.',
+      });
+      await expect(
+        admin.transitionCaseStatus(
+          publicReference,
+          'closed',
+          staffUserId,
+          'Closing after both independent gates have been completed.',
+          true,
+        ),
+      ).resolves.toBeUndefined();
+      const [closedCase] = await handle!.db
+        .select({ status: recallCases.status })
+        .from(recallCases)
+        .where(eq(recallCases.id, caseId));
+      expect(closedCase!.status).toBe('closed');
 
       // The transition wrote a case event, which is why the case cannot simply be
       // deleted — the same ordering the claim fixtures use.
       await handle!.db.delete(caseEvents).where(eq(caseEvents.caseId, caseId));
       await handle!.db.delete(caseEscalations).where(eq(caseEscalations.id, escalationId));
+      await handle!.db.delete(reportabilityReviews).where(eq(reportabilityReviews.caseId, caseId));
       await handle!.db.delete(recallCases).where(eq(recallCases.id, caseId));
     });
   },

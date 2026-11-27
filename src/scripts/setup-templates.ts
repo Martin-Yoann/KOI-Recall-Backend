@@ -181,7 +181,6 @@ function text(parts: { title: string; lines: string[]; ctaUrl?: string }): strin
 async function setupTemplates() {
   console.log('--- Start: initialize template version library ---');
   const config = loadConfig();
-  const { db } = createDatabase(config.DATABASE_URL!);
 
   const templates = [
     {
@@ -568,18 +567,27 @@ async function setupTemplates() {
   ];
 
   console.log('Upserting templates...');
-  await db
-    .insert(templateVersions)
-    .values(templates)
-    .onConflictDoUpdate({
-      target: [templateVersions.templateKey, templateVersions.locale, templateVersions.version],
-      set: {
-        subject: sql`excluded.subject`,
-        htmlBody: sql`excluded.html_body`,
-        textBody: sql`excluded.text_body`,
-      },
-    });
-  console.log('--- Template library initialized ---');
+  const handle = createDatabase(config.DATABASE_URL!);
+  const { db } = handle;
+  try {
+    await db
+      .insert(templateVersions)
+      .values(templates)
+      .onConflictDoUpdate({
+        target: [templateVersions.templateKey, templateVersions.locale, templateVersions.version],
+        set: {
+          subject: sql`excluded.subject`,
+          htmlBody: sql`excluded.html_body`,
+          textBody: sql`excluded.text_body`,
+        },
+      });
+    console.log('--- Template library initialized ---');
+  } finally {
+    await handle.close();
+  }
 }
 
-setupTemplates().catch(console.error);
+setupTemplates().catch((error: unknown) => {
+  console.error(error);
+  process.exitCode = 1;
+});
