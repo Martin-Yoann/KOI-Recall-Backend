@@ -218,6 +218,13 @@
       "when": 1795683228438,
       "tag": "0031_translation_case_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795744743763,
+      "tag": "0032_consumer_session_email_verification",
+      "breakpoints": true
     }
   ]
 }

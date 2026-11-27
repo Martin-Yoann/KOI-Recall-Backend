@@ -68,10 +68,29 @@ export const consumerSessions = pgTable(
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
     lastUsedAt: timestamp('last_used_at', { withTimezone: true, mode: 'date' }),
     revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+    /** Historical claims require mailbox proof in this exact login session. */
+    emailVerifiedAt: timestamp('email_verified_at', { withTimezone: true, mode: 'date' }),
     ...timestamps,
   },
   (table) => [
     uniqueIndex('consumer_sessions_token_hash_uidx').on(table.tokenHash),
     index('consumer_sessions_user_status_idx').on(table.userId, table.status),
+  ],
+);
+
+export const consumerEmailVerifications = pgTable(
+  'consumer_email_verifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id').notNull().references(() => consumerUsers.id, { onDelete: 'cascade' }),
+    sessionId: uuid('session_id').notNull().references(() => consumerSessions.id, { onDelete: 'cascade' }),
+    tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
+  },
+  (table) => [
+    uniqueIndex('consumer_email_verifications_token_uidx').on(table.tokenHash),
+    index('consumer_email_verifications_user_created_idx').on(table.userId, table.createdAt),
   ],
 );

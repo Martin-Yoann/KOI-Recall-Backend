@@ -6,7 +6,7 @@
 // ============================================================
 
 import { createHash, randomBytes } from 'node:crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull } from 'drizzle-orm';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import type { AppEnv } from '../middleware/request-context.js';
@@ -19,6 +19,7 @@ import {
   caseResolutions,
   claimedProducts,
   consumerSessions,
+  consumerEmailVerifications,
   consumerUsers,
   recallCases,
   recallCampaigns,
@@ -34,6 +35,8 @@ import { legacyConsumerAuthLookupRoute } from '../contracts/routes.js';
 import { caseStatusLookupResponseSchema, type CaseStatusLookupResponse } from '../contracts/toc.js';
 import { NodeSensitiveDataCrypto } from '../platform/crypto/node-sensitive-data-crypto.js';
 import { problemType } from '../shared/errors.js';
+import type { TransactionalEmailPort } from '../platform/email/port.js';
+import { consumerVerificationEmail } from '../modules/communications/consumer-verification-email.js';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 const AVATAR_MAX_BYTES = 512 * 1024; // 512 KiB data-URL ceiling (matches staff)
@@ -89,19 +92,22 @@ interface ConsumerPublic {
   displayName: string;
   avatarDataUrl: string | null;
   createdAt: string;
+  claimsAccessVerified: boolean;
 }
 
-function toPublic(row: typeof consumerUsers.$inferSelect): ConsumerPublic {
+function toPublic(row: typeof consumerUsers.$inferSelect, claimsAccessVerified = false): ConsumerPublic {
   return {
     consumerUserId: row.id,
     email: row.email,
     displayName: row.displayName,
     avatarDataUrl: row.avatarDataUrl ?? null,
     createdAt: row.createdAt.toISOString(),
+    claimsAccessVerified,
   };
 }
 
 type ConsumerUserRow = typeof consumerUsers.$inferSelect;
+type ConsumerIdentity = ConsumerUserRow & { sessionId: string; claimsAccessVerified: boolean };
 
 type ConsumerClaimStatus =
   | 'submitted'
@@ -155,7 +161,7 @@ async function issueSession(
   return { token, sessionId: session.id, expiresAt: expiresAt.toISOString() };
 }
 
-async function resolveBearer(authHeader: string | undefined): Promise<ConsumerUserRow | null> {
+async function resolveBearer(authHeader: string | undefined): Promise<ConsumerIdentity | null> {
   if (!authHeader?.startsWith('Bearer ')) return null;
   const token = authHeader.slice('Bearer '.length).trim();
   if (!token) return null;
@@ -172,7 +178,7 @@ async function resolveBearer(authHeader: string | undefined): Promise<ConsumerUs
     .update(consumerSessions)
     .set({ lastUsedAt: new Date() })
     .where(eq(consumerSessions.id, row.session.id));
-  return row.user;
+  return { ...row.user, sessionId: row.session.id, claimsAccessVerified: Boolean(row.session.emailVerifiedAt) };
 }
 
 function problem(
@@ -423,7 +429,67 @@ async function lookupLegacyClaimView(
   };
 }
 
-export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
+export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>, verification: { email?: TransactionalEmailPort; consumerWebBaseUrl?: string } = {}) {
+  app.use('/v1/consumer-auth/*', async (c, next) => {
+    c.header('Cache-Control', 'no-store');
+    await next();
+  });
+  const verificationRequired = (c: Context<AppEnv>) => c.json({
+    type: problemType('email-verification-required'), title: 'Email Verification Required', status: 403,
+    detail: 'Confirm ownership of your email in this login session before viewing account-linked claims.', requestId: c.get('requestId'),
+  }, 403, { 'Content-Type': 'application/problem+json' });
+
+  app.post('/v1/consumer-auth/email-verification', async (c) => {
+    const user = await resolveBearer(c.req.header('Authorization'));
+    if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
+    if (user.claimsAccessVerified) return c.json({ status: 'verified' });
+    if (!verification.email || !verification.consumerWebBaseUrl) return problem(c, 503, 'Service Unavailable', 'Email verification is temporarily unavailable.');
+    const body = await c.req.json<unknown>().catch(() => null);
+    if (!isRecord(body) || (body.locale !== undefined && body.locale !== 'en-US' && body.locale !== 'es-US'))
+      return problem(c, 400, 'Invalid Request', 'A supported verification language is required.');
+    const token = newToken();
+    const issued = await db().transaction(async (tx) => {
+      // Serialize across every session of this account: changing sessions cannot bypass the cooldown.
+      await tx.select({ id: consumerUsers.id }).from(consumerUsers).where(eq(consumerUsers.id, user.id)).for('update');
+      const [recent] = await tx.select({ createdAt: consumerEmailVerifications.createdAt }).from(consumerEmailVerifications)
+        .where(eq(consumerEmailVerifications.userId, user.id)).orderBy(desc(consumerEmailVerifications.createdAt)).limit(1);
+      if (recent && Date.now() - recent.createdAt.getTime() < 60_000) return null;
+      await tx.update(consumerEmailVerifications).set({ consumedAt: new Date() }).where(and(eq(consumerEmailVerifications.sessionId, user.sessionId), isNull(consumerEmailVerifications.consumedAt)));
+      const expiresAt = new Date(Date.now() + 20 * 60_000);
+      const [row] = await tx.insert(consumerEmailVerifications).values({ userId: user.id, sessionId: user.sessionId, tokenHash: sha256hex(token), expiresAt }).returning({ id: consumerEmailVerifications.id });
+      return { id: row!.id, expiresAt };
+    });
+    if (!issued) return c.json({ type: problemType('too-many-requests'), title: 'Too Many Requests', status: 429, detail: 'Wait one minute before requesting another verification email.' }, 429, { 'Retry-After': '60', 'Content-Type': 'application/problem+json' });
+    try {
+      await verification.email.send(consumerVerificationEmail({ id: issued.id, email: user.email, token, baseUrl: verification.consumerWebBaseUrl, locale: body.locale === 'es-US' ? 'es-US' : 'en-US' }));
+    } catch {
+      // Never expose provider details or include the token in an API response.
+      return problem(c, 503, 'Service Unavailable', 'The verification email could not be sent. Please try again shortly.');
+    }
+    return c.json({ status: 'sent', expiresAt: issued.expiresAt.toISOString() }, 202);
+  });
+
+  app.post('/v1/consumer-auth/email-verification/confirm', async (c) => {
+    const user = await resolveBearer(c.req.header('Authorization'));
+    if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
+    const body = await c.req.json<unknown>().catch(() => null);
+    if (!isRecord(body) || typeof body.token !== 'string' || !/^[A-Za-z0-9_-]{43}$/.test(body.token))
+      return problem(c, 400, 'Invalid Request', 'The verification link is invalid or expired.');
+    const tokenHash = sha256hex(body.token);
+    const accepted = await db().transaction(async (tx) => {
+      const now = new Date();
+      // Lock the session first so a concurrent logout cannot be undone by confirmation.
+      const [session] = await tx.select({ id: consumerSessions.id }).from(consumerSessions).where(and(eq(consumerSessions.id, user.sessionId), eq(consumerSessions.userId, user.id), eq(consumerSessions.status, 'active'), gt(consumerSessions.expiresAt, now))).for('update');
+      if (!session) return false;
+      const [proof] = await tx.select({ id: consumerEmailVerifications.id }).from(consumerEmailVerifications).where(and(eq(consumerEmailVerifications.tokenHash, tokenHash), eq(consumerEmailVerifications.userId, user.id), eq(consumerEmailVerifications.sessionId, user.sessionId), isNull(consumerEmailVerifications.consumedAt), gt(consumerEmailVerifications.expiresAt, now))).for('update');
+      if (!proof) return false;
+      await tx.update(consumerEmailVerifications).set({ consumedAt: now }).where(eq(consumerEmailVerifications.id, proof.id));
+      await tx.update(consumerSessions).set({ emailVerifiedAt: now, updatedAt: now }).where(eq(consumerSessions.id, session.id));
+      return true;
+    });
+    if (!accepted) return problem(c, 400, 'Invalid Request', 'The verification link is invalid, expired, already used, or belongs to another login session.');
+    return c.json({ status: 'verified' });
+  });
   // ── POST /v1/consumer-auth/register ──
   app.post('/v1/consumer-auth/register', async (c) => {
     let body: Record<string, unknown>;
@@ -552,7 +618,7 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   app.get('/v1/consumer-auth/me', async (c) => {
     const user = await resolveBearer(c.req.header('Authorization'));
     if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
-    return c.json({ user: toPublic(user) });
+    return c.json({ user: toPublic(user, user.claimsAccessVerified) });
   });
 
   // ── PATCH /v1/consumer-auth/me ──
@@ -600,7 +666,7 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
         .where(eq(consumerUsers.id, user.id))
         .returning();
       if (!updated) return problem(c, 404, 'Not Found', 'Consumer account was not found.');
-      return c.json({ user: toPublic(updated) });
+      return c.json({ user: toPublic(updated, user.claimsAccessVerified) });
     } catch (err) {
       return problem(
         c,
@@ -614,6 +680,7 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   app.get('/v1/consumer-auth/claims', async (c) => {
     const user = await resolveBearer(c.req.header('Authorization'));
     if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
+    if (!user.claimsAccessVerified) return verificationRequired(c);
 
     try {
       const crypto = cryptoPort();
@@ -640,6 +707,7 @@ export function registerConsumerAuthRoutes(app: OpenAPIHono<AppEnv>) {
   app.get('/v1/consumer-auth/claims/:claimNumber', async (c) => {
     const user = await resolveBearer(c.req.header('Authorization'));
     if (!user) return problem(c, 401, 'Unauthorized', 'A valid session token is required.');
+    if (!user.claimsAccessVerified) return verificationRequired(c);
 
     try {
       const claimNumber = c.req.param('claimNumber').trim().toUpperCase();

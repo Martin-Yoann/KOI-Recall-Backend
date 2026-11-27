@@ -176,7 +176,7 @@ export function createApp(dependencies: AppDependencies = {}) {
   registerProductCheckRoutes(app, registry);
   registerDocumentRoutes(app, registry);
   registerClaimRoutes(app, registry);
-  registerConsumerAuthRoutes(app);
+  registerConsumerAuthRoutes(app, { email: registry.platform.email, consumerWebBaseUrl: config.CONSUMER_WEB_BASE_URL });
   registerCaseStatusLookupRoutes(app, registry);
   registerDisposalRoutes(app, registry);
   // Registers itself only when the filesystem adapter is the configured store.

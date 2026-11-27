@@ -41,6 +41,7 @@ export function deriveRateLimitKey(
 
 /** Maps a request path onto its quota category (T6.1: per-endpoint quotas). */
 export function routeCategoryForPath(pathname: string): string {
+  if (pathname.startsWith('/v1/consumer-auth/email-verification')) return 'consumer-email-verification';
   if (pathname.startsWith('/v1/case-status-lookups')) {
     // Public brute-forceable surface: its own tight, IP-scoped quota so
     // probing case references is throttled independently of browsing traffic.
@@ -75,6 +76,7 @@ export const RATE_LIMIT_QUOTAS: Record<string, number> = {
   'case-status-lookups': 10,
   webhooks: 200,
   'admin-login': 5,
+  'consumer-email-verification': 10,
   other: 60,
 };
 
