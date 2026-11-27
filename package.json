@@ -17,6 +17,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run --no-file-parallelism",
     "test:db:local": "node scripts/test-local-database.mjs",
+    "test:blob:cloud": "tsx scripts/verify-isolated-blob.mts",
     "openapi:generate": "tsx scripts/generate-openapi.ts",
     "openapi:check": "tsx scripts/check-openapi.ts",
     "types:frontend": "openapi-typescript openapi/toc-v1.openapi.yaml -o src/generated/toc-v1.d.ts",
